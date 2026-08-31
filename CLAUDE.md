@@ -21,7 +21,7 @@ install.
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite compiles; ~15s cold
-cargo test                       # all 491 tests
+cargo test                       # all 495 tests
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # run before finishing; the gate runs `cargo fmt --check`
 ./tools/verify.sh                # every gate check in one command, ~30s after a change (D70)
@@ -43,7 +43,10 @@ M29 were both found that way and nothing else could have found either (M32).
 
 **Turn the gate on once per clone:** `git config core.hooksPath .githooks`. It runs before every
 commit, collects every failure rather than stopping at the first, and `AMB_VERIFY_SKIP=1` bypasses
-one commit loudly. There is a `.github/workflows/ci.yml` and **it has never run** — no git remote.
+one commit loudly. `.github/workflows/ci.yml` **ran for the first time on 2026-08-31**, when the
+repository was published — Linux and macOS, both green. It is a second net, not the gate: CI fires
+after a push, the hook fires before a commit exists. Anything added to one belongs in the other,
+and they had already diverged once (D70).
 
 ```bash
 amb doctor                       # stale hook binary, schema drift, whether each lane is firing

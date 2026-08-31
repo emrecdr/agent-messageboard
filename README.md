@@ -12,7 +12,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 491 tests, including multi-process concurrency and hook-safety
+**Status: built and working.** 495 tests, including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -823,7 +823,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 491 tests
+cargo test                       # all 495 tests
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -844,10 +844,14 @@ git config core.hooksPath .githooks
 scripts, collecting every failure rather than stopping at the first. `AMB_VERIFY_SKIP=1 git commit`
 bypasses it for one commit and says so on stderr.
 
-**There is a `.github/workflows/ci.yml` and it has never run** — this repository has no git remote,
-so nothing executes it. It is committed so that adding a remote turns CI on rather than starting a
-design task, and its first line says as much. Until then the pre-commit hook is the gate that
-actually fires (D70).
+**`.github/workflows/ci.yml` ran for the first time on 2026-08-31**, when the repository was
+published — `ubuntu-latest` and `macos-latest`, both green. It said "never run" until then, and
+that was true: Actions executes on a remote and there was none.
+
+**`tools/verify.sh` is still the gate.** CI fires after a commit is pushed; the hook fires before
+one is written, and only the second stops a bad commit existing. What the first CI run bought is
+**Linux** — every check here had only ever run on macOS, while liveness is `libc::kill` and
+`db::guard_location` compiles a different branch per OS (D70).
 
 Running one test:
 
@@ -924,22 +928,9 @@ fixed. These are all intentional, and each is argued in
 - **No enforcement** (D52, D64). Memory ranks notes under the injection cap and reports a missed
   rule; it never denies an edit or fails a build. The blocking mechanism was designed and refused.
 - **No outbox** (D10). `amb send` is the only write path; an outbox needs a relay daemon.
-- **No CI that runs** (D70). There is a workflow file and it has never executed, because this
-  repository has no git remote. The gate that fires is `tools/verify.sh`, run from a committed
-  pre-commit hook. A workflow that cannot run while looking exactly like coverage is worse than
-  none, so it says so in its first line.
-- **No retention, pruning or `vacuum`.** The board is append-only and nothing expires rows. At the
-  observed rate that is a few thousand rows a year, which SQLite does not notice; listed so the
-  absence reads as a decision rather than an oversight. D83 sets the trigger for building it: 50 MB,
-  or `amb inbox` exceeding the hook budget. **D96's horizon is not an exception** — it expires a
-  broadcast from *delivery*, never from the table, and `amb inbox` is unaffected.
-- **`amb` never writes inside a repository on its own initiative** (D11). No `.msgboard/`, no
-  rendered inbox, and `amb snapshot` refuses a path inside one. The single exception is
-  `amb memory export`, which a person runs deliberately and which is one-way (D49) — the rule was
-  always about initiative rather than about bytes.
-- **No findings-inbox** (D16). ~~And no `propose` / `promote`.~~ **Revised by D49**: `amb memory
-  promote` exists behind a human gate — one candidate per offer, derivations shown, and it never
-  writes without `--yes`. Batching approval was D16's actual defect.
+- **CI is a second net, not the gate** (D70). `.github/workflows/ci.yml` ran for the first time on
+  2026-08-31 and passes on Linux and macOS. It still is not the primary check: it fires after a
+  commit is pushed, while `tools/verify.sh` fires before one is written, run from a committed
 
 ### The queue is not what fixed the problem that started this
 

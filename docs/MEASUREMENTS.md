@@ -1777,6 +1777,22 @@ either** — injections inherit the same key, so that relocates the problem rath
 
 ## M25 · The promotion pipeline was tested for what it prints, not for what it does
 
+> **Re-run 2026-08-31 against the tests `b75d150` added: 47 mutants, 40 caught, 7 unviable,
+> and 0 missed.** 24 of 40 viable becomes **40 of 40**. Same mutant count and same unviable count,
+> so the comparison is like-for-like rather than two different populations — which is the only form
+> in which a mutation score means anything (`tools/mutants.sh` says so in its own last paragraph).
+> **All sixteen survivors were real and all sixteen are closed.**
+>
+> Conditions recorded with the result, because M27's residual hole is that the timeout ceiling is
+> measured once at the start: baseline 5 s build + 11 s test, `Auto-set test timeout to 120s` — the
+> `--minimum-test-timeout` floor, which is what a *quiet* baseline produces — and **no TIMEOUT
+> rows**, so there are no unanswered questions folded into the count. Load average 6.65 at the
+> start and 7.76 at the end, with zero other `cargo` processes for the whole run.
+>
+> This was the confirming pass the original run never got. It is worth noting that it was
+> outstanding for a day while a plan described the whole item as not yet started: the run had
+> happened, the fixes had landed, and the *evidence that the fixes worked* was the part missing.
+
 **2026-08-30.** `tools/mutants.sh src/memory/promote.rs`, the third module of the hardening item
 and the one whose pipeline **has never run once** — mutation is the only pressure it has ever been
 under, and the survivor rate says so.
@@ -2858,3 +2874,81 @@ tests without being bound to a variable, so it was skipped — and `render_inbox
 surface D90 found unguarded for the same structural reason. **A mechanical sweep inherits the shape
 of what it scans for**, and the outermost surface is the one least likely to look like the pattern.
 It is covered now through the enumeration rather than through a binding.
+
+---
+
+## M34 · Every threshold a decision names, and the one that was worse than absent
+
+**2026-08-31.** D95 established that a decision naming a numeric threshold needs something able to
+say whether that threshold is *reachable*, because a dead condition is trusted while an absent one
+is questioned. This is the audit of the rest of them. It was expected to produce a list and it
+produced one hit, one surprise, and a defect in the tool built to close them.
+
+### The list
+
+| Decision | Threshold | Could anything report reachability? |
+|---|---|---|
+| D59 | 30 sessions / 50 injections / cited ratio below 0.10 | **Yes** — `verdict: too early — needs 27 more session(s) and 32 more injection(s)`. D95's own fix, working |
+| D13 | a claim expires at 4 h | **Yes** — `amb claims --all` shows lapsed rows and how long ago |
+| D49 | a candidate expires after 30 days without a derivation | **Yes** — `amb memory candidates` reports how close each is |
+| D96 | a broadcast leaves the delivery path at 24 h | **Partly** — the expiry works; nothing counts how many are past it |
+| **D83** | **prune when the board passes 50 MB** | **No.** `doctor` printed the board's *path* and never its size |
+| **D83** | **prune when `amb inbox` passes the 5 s hook budget** | **Worse than no** — see below |
+
+One genuine hit out of six, which is what the audit predicted. The surprise is that D83's two halves
+failed in *different* ways, and the second is the one worth the entry.
+
+### The size half was absent. The latency half was answered by the wrong input
+
+`bench/bench_startup.py` has timed `amb inbox` all along — it is where README's published 3.0 ms
+comes from. But it points `AMB_DB` at an **empty scratch board**, deliberately and correctly, so
+that a benchmark never touches the real one. The consequence is that the number it produces is
+**structurally incapable of crossing a threshold that is about the real board growing**. It will
+read ~3 ms at 50 MB and at 5 GB.
+
+That is D95's shape with an extra step. An absent instrument makes the next reader go and look; an
+instrument that reports a healthy number against input the condition cannot reach makes them
+trust. It is also question 1 of the ratio rule — one unit of what was measured is "an inbox render
+over zero messages", and the claim standing beside it is about a board with sixty-eight.
+
+Both halves are readable now. `doctor` gained a `size` row; the latency moved to
+`tools/eyeball.sh`, which is the one place in the tree where `amb inbox` runs over real accumulated
+content with no side effects:
+
+```
+ok    size            0.5 MB of the 50 MB at which D83 builds pruning
+  amb inbox   5 ms of the 5000 ms hook budget (D83), over 68 messages
+```
+
+**The footprint is three files.** `page_count * page_size` gives the main database exactly, but in
+WAL mode the `-wal` sidecar holds committed transactions the main file does not yet contain, so
+summing one file understates a busy board. Disk footprint is what "the board passes 50 MB" means to
+a person, so `-wal` and `-shm` are added.
+
+### And the tool built to close the gap had the same class of defect inside it
+
+`eyeball.sh` snapshots the board before and after to show that it wrote nothing. Reading those
+snapshots with `sqlite3 -readonly` **fails on a `.backup` copy**:
+
+```console
+$ sqlite3 -readonly copy.db "SELECT count(*) FROM messages"
+Error: in prepare, unable to open database file (14)
+$ sqlite3           copy.db "SELECT count(*) FROM messages"
+68
+```
+
+The copy is WAL-mode with no `-shm`, and a read-only connection cannot create one. On the *live*
+board the same command succeeds — but only while some other session happens to hold that shared
+memory open, so it is non-deterministic on a machine whose whole premise is concurrent sessions.
+
+**The failure mode is the part to keep.** `sqlite3` returned an empty string, and the check was
+`[ "$board_after" = "$board_before" ]` — so **two failed reads compared equal and rendered
+`unchanged` on a board that had changed.** A comparison of two failures is indistinguishable from
+a match, and it fails in the flattering direction every time: the tool reports that it touched
+nothing precisely when it has lost the ability to tell. That is D88's shape — an instrument that
+only writes on the happy path reports a broken mechanism as an idle one — arriving in a comparison
+rather than in a ledger.
+
+Both sides are now counted through a `.backup` copy opened normally, and an empty snapshot is
+reported as *"could not count the board"* rather than as agreement. **When a check compares two
+reads, ask what it prints when both reads fail.**

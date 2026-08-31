@@ -303,6 +303,55 @@ pub fn location_check(path: &std::path::Path) -> Check {
     }
 }
 
+/// How big the board is, against the size D83 says to build pruning at.
+///
+/// **Three files, not one, and that is not pedantry.** In WAL mode the `-wal` sidecar holds
+/// committed transactions the main file does not yet contain, so `metadata(path)` alone understates
+/// a busy board. This project measured the consequence from the other side: the main file's own
+/// bytes change under concurrent *readers*, because a read updates `-shm` and can trigger a
+/// checkpoint (M32). Disk footprint is what "the board passes 50 MB" means to a person, so the
+/// sidecars are summed rather than ignored.
+///
+/// Fires **at** the threshold and not one byte past it. A strict `>` would make the number D83
+/// actually names the last value that does *not* trigger, which reads wrong to everyone who has
+/// only read the decision.
+pub fn size_check(bytes: u64) -> Check {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    let limit = db::PRUNE_AT_BYTES as f64 / (1024.0 * 1024.0);
+    if bytes >= db::PRUNE_AT_BYTES {
+        Check::new(
+            "size",
+            Health::Warn,
+            format!(
+                "{mb:.1} MB — past D83's {limit:.0} MB. Build pruning, and prune `messages` \
+                 bodies before the ledger: the ledger is the only record that a session was \
+                 shown a note"
+            ),
+        )
+    } else {
+        Check::new(
+            "size",
+            Health::Ok,
+            format!("{mb:.1} MB of the {limit:.0} MB at which D83 builds pruning"),
+        )
+    }
+}
+
+/// Every byte the board occupies, including the WAL sidecars. Unreadable files count as zero,
+/// because a doctor that refuses to report a number it partly knows is less useful than one that
+/// under-reports and keeps going.
+fn board_bytes(path: &std::path::Path) -> u64 {
+    let mut total = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    for suffix in ["-wal", "-shm"] {
+        let mut side = path.as_os_str().to_os_string();
+        side.push(suffix);
+        total += std::fs::metadata(std::path::PathBuf::from(side))
+            .map(|m| m.len())
+            .unwrap_or(0);
+    }
+    total
+}
+
 /// Read the world, then hand it to the pure functions above.
 ///
 /// Every fallible read degrades to a `Warn` rather than aborting: a doctor that stops at the first
@@ -377,6 +426,9 @@ pub fn gather(now: f64) -> Report {
                 None
             };
             checks.push(schema_check(on_disk, db::SCHEMA_VERSION));
+            if path.exists() {
+                checks.push(size_check(board_bytes(&path)));
+            }
         }
     }
 
@@ -422,6 +474,68 @@ pub fn gather(now: f64) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A truth table, because the guard is a comparison and comparisons relax silently.**
+    ///
+    /// M27 found thirty-seven of forty survivors in one renderer sitting on the `if` that decides
+    /// whether a line renders at all, ten of them the literal edit `x > 0` -> `x >= 0`. A
+    /// presence-only test cannot see that relaxation. A row on each side of the boundary fails in
+    /// both directions, and the `at` row is the one that pins which operator this is.
+    #[test]
+    fn the_size_row_fires_at_the_threshold_and_not_before() {
+        let at = db::PRUNE_AT_BYTES;
+        for (bytes, expected, why) in [
+            (0u64, Health::Ok, "an empty board"),
+            (at - 1, Health::Ok, "one byte below the threshold"),
+            (at, Health::Warn, "exactly the number D83 names"),
+            (at * 2, Health::Warn, "well past it"),
+        ] {
+            assert_eq!(size_check(bytes).health, expected, "{why}");
+        }
+    }
+
+    /// **The row must state both numbers, or D83 is still unreadable.**
+    ///
+    /// D95's rule is that a stated threshold needs something able to say whether it is *reachable*,
+    /// not merely something that reports a size. A row printing `0.5 MB` alone would leave the
+    /// reader to go and look 50 MB up, which is the work this row exists to remove.
+    #[test]
+    fn the_size_row_names_the_threshold_as_well_as_the_size() {
+        let d = size_check(0).detail;
+        assert!(d.contains("50 MB"), "the threshold is missing: {d}");
+        assert!(d.contains("0.0 MB"), "the current size is missing: {d}");
+        assert!(d.contains("D83"), "nothing points at the decision: {d}");
+    }
+
+    /// **The sidecars are part of the board, and a fixture with only a main file cannot see it.**
+    ///
+    /// In WAL mode the `-wal` file holds committed transactions the main file does not yet contain,
+    /// so summing one file understates a busy board. The second half of this test is the fixture
+    /// that reaches the branch — M17's rule, applied before rather than after: without those two
+    /// `write`s the loop over the suffixes could be deleted and the first assertion would still
+    /// pass.
+    #[test]
+    fn the_board_size_includes_the_wal_sidecars() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("board.db");
+        std::fs::write(&db, vec![0u8; 100]).expect("main");
+        assert_eq!(board_bytes(&db), 100, "the main file alone");
+
+        std::fs::write(dir.path().join("board.db-wal"), vec![0u8; 250]).expect("wal");
+        std::fs::write(dir.path().join("board.db-shm"), vec![0u8; 30]).expect("shm");
+        assert_eq!(
+            board_bytes(&db),
+            380,
+            "a WAL board's committed bytes were not counted"
+        );
+    }
+
+    /// A board that is not there is zero bytes, not a panic — `gather` reports every failure it
+    /// can survive rather than aborting on the first.
+    #[test]
+    fn a_missing_board_is_zero_rather_than_an_error() {
+        assert_eq!(board_bytes(std::path::Path::new("/no/such/board.db")), 0);
+    }
 
     /// The three levels reach a reader as three distinct markers.
     ///

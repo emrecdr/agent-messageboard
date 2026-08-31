@@ -301,6 +301,16 @@ pub fn counter(conn: &Connection, name: &str) -> i64 {
     .unwrap_or(0)
 }
 
+/// The board size at which D83 says pruning gets built.
+///
+/// **D83 wrote the number down so it would be a threshold rather than an intention.** It was
+/// unreadable for two days regardless: `doctor` printed the board's *path* and never its size, so
+/// nothing on this machine could say whether 50 MB was near or far. That is exactly D95's shape,
+/// and D95's rule is that a stated condition nothing can evaluate is **worse** than no condition —
+/// an absent threshold makes the next reader check, a dead one makes them trust.
+/// [`crate::doctor::size_check`] is what evaluates it now (M34).
+pub const PRUNE_AT_BYTES: u64 = 50 * 1024 * 1024;
+
 /// The schema version this binary expects.
 ///
 /// Equal to `MIGRATIONS.len()`, asserted by a test rather than computed, so that bumping one

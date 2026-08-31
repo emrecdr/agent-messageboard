@@ -11,6 +11,47 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **The `promote.rs` mutation pass got its confirming re-run: 40 of 40 viable mutants caught, up
+  from 24 of 40** (M25). Same 47 mutants and same 7 unviable, so it is a like-for-like comparison.
+  All sixteen survivors M25 found were real and the tests in `b75d150` closed every one — the
+  pipeline that has still never executed once now has the only pressure it can get, and passes it.
+
+  Conditions recorded with the number: quiet baseline (5 s build, 11 s test, timeout at its 120 s
+  floor), **no TIMEOUT rows**, zero other `cargo` processes, load 6.65 → 7.76. M27's residual hole
+  is that the ceiling is measured once at the start, so the run's own conditions belong beside its
+  result.
+
+- **D83's threshold can be read now, and one half of it was worse than absent** (M34, D95's rule).
+  `amb doctor` gained a `size` row and `tools/eyeball.sh` times `amb inbox` over a copy of the real
+  board:
+
+  ```
+  ok    size            0.5 MB of the 50 MB at which D83 builds pruning
+    amb inbox   5 ms of the 5000 ms hook budget (D83), over 68 messages
+  ```
+
+  The size half had no instrument at all — `doctor` printed the board's *path*. The latency half is
+  the interesting one: `bench/bench_startup.py` has timed `amb inbox` all along, which is where
+  README's 3.0 ms comes from, but against an **empty scratch board** — so its number is
+  structurally incapable of crossing a threshold that is about the real board growing. It would read
+  ~3 ms at 50 MB and at 5 GB. An absent instrument makes the next reader look; one reporting a
+  healthy number against input the condition cannot reach makes them trust.
+
+  The footprint sums `-wal` and `-shm` as well as the main file, because in WAL mode the sidecar
+  holds committed transactions the main file does not yet contain.
+
+  An audit of every other decision naming a numeric threshold is in M34: D59, D13 and D49 are
+  readable, D96 is partly, and D83 was the only real gap — which is the size the audit predicted.
+
+- **`eyeball.sh` reported `unchanged` on a board that had changed**, because `sqlite3 -readonly`
+  fails on a `.backup` copy (`unable to open database file (14)`: WAL-mode, no `-shm`, and a
+  read-only connection cannot create one) and succeeds on the live board only while another session
+  holds that file open. Two failed reads returned empty strings, and `[ "$after" = "$before" ]`
+  compared them equal. **A comparison of two failures is indistinguishable from a match, and it
+  fails in the flattering direction**: the tool claims it touched nothing exactly when it has lost
+  the ability to tell. Both sides now count through a copy, and an empty snapshot is reported as
+  "could not count the board" rather than as agreement.
+
 - **A shared shape assertion for rendered output, and the fixture that makes it mean something**
   (M33). `assert_rendered_shape` asserts what held with zero violations over 274 lines of real
   output — no tabs, no blank line made of spaces, no trailing whitespace — and is wired into

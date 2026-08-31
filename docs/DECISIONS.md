@@ -3020,11 +3020,45 @@ a peer committing in the window, and a failure that never reproduced directly �
 confident and completely wrong story. The warning stays because the hazard it names is real and
 documented independently; it is simply not what happened here.
 
-**The workflow is committed anyway, and its first line says it has never run.** Adding a remote
-should turn CI on rather than start a design task. What it will add on that day is **Linux**: every
-check here has only ever run on macOS, and `libc::kill`, the three `HOME` reads and D71's `statfs`
-guard are all platform-specific. Until then the file is documentation of an intent, and is labelled
-as such at the top rather than left to look like a guarantee.
+**The workflow is committed anyway, and ~~its first line says it has never run~~ its first line now
+records the run.** Adding a remote should turn CI on rather than start a design task. What it will
+add on that day is **Linux**: every check here has only ever run on macOS, and `libc::kill`, the
+three `HOME` reads and D71's `statfs` guard are all platform-specific. ~~Until then the file is
+documentation of an intent, and is labelled as such at the top rather than left to look like a
+guarantee.~~
+
+> **That day was 2026-08-31 and the prediction held exactly.** The remote was added, CI ran, and
+> Linux passed for the first time — see the amendment below. The struck clauses are struck rather
+> than deleted because this paragraph *predicted* the thing that then happened, and a reader who
+> only sees the corrected text loses the evidence that the reasoning was right.
+
+### Amended 2026-08-31. The remote exists, CI has run, and this decision's premise is gone
+
+**The conclusion stands; the reason given for it does not.** This decision is titled *"because
+there is no remote"*, and on 2026-08-31 the repository was published to
+`github.com/emrecdr/agent-messageboard`. The workflow that had never run executed on the first
+push — run 33388877601, 1m6s, `ubuntu-latest` and `macos-latest` both green.
+
+Recorded in place rather than rewritten, per D27's convention: a decision that quietly acquires a
+true premise teaches nobody, and the next reader would otherwise find a title arguing from a fact
+that stopped being one.
+
+**Why `tools/verify.sh` is still the gate.** CI fires *after* a commit is pushed; the hook fires
+*before* one is written. Only the second can stop a bad commit from existing, and this project's
+whole argument for the hook — that a guarantee enforced by memory is not enforced — is unaffected
+by a remote appearing. CI is now a second, later net rather than a replacement.
+
+**What the first run actually bought, and it was not redundancy.** Linux. Every check in this
+project had only ever executed on macOS, while liveness is `libc::kill`, `db::guard_location`
+compiles a different branch per OS, and `HOME` is read in three places. The `cfg`-gated half of
+this codebase was unbuilt and unlinted until that run, and M22 records a macOS-only guard that
+could be deleted with nothing going red. **That half now has evidence rather than an intention.**
+
+**A divergence the remote exposed.** The workflow duplicates the gate's checks so the two cannot
+disagree about what "verified" means — and they had. `tools/check_secret_literals.py` was added to
+the gate on the same day (D100) and was not in the workflow, so CI would have passed a commit the
+gate rejects. Added. **Anything added to one now belongs in the other**, and this sentence is the
+only thing enforcing that.
 
 **Not adopted, and why:** a `pre-push` hook instead of `pre-commit` — with no remote, nothing is
 ever pushed, so it would fire exactly as often as the workflow would. Splitting fast checks into
@@ -3887,6 +3921,14 @@ in this session are multi-kilobyte. Nobody predicted that, and the sheet named t
 **Still not worth building.** 260 KB total. The trigger is written down so it is a threshold rather
 than an intention: **build pruning when the board passes 50 MB, or when `amb inbox` takes longer
 than the 5-second hook budget on a warm cache** — whichever comes first, and neither is close.
+
+> **The threshold became readable on 2026-08-31 (M34).** For two days it was written down and
+> unevaluable: `doctor` printed the board's *path* and never its size, and the only thing timing
+> `amb inbox` was `bench_startup.py` against an **empty scratch board**, which can never cross a
+> budget that is about the real board growing. D95's rule is that a dead condition is worse than an
+> absent one. `doctor` now carries a `size` row and `tools/eyeball.sh` times `amb inbox` over a copy
+> of the real board — 0.5 MB and 5 ms as of that date, so "neither is close" is now a reading rather
+> than a belief.
 
 **What to prune first, when that day comes, is `messages` bodies and not the ledger.** The ledger is
 the only record that a session was shown a note (D81 had to migrate it row by row for exactly that

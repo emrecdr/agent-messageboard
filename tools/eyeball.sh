@@ -111,13 +111,29 @@ sqlite3 "$REAL_DB" ".backup '$COPY'" || { echo "could not copy the board" >&2; e
 # and can trigger a checkpoint that rewrites the main file. The digest version printed "THE REAL
 # BOARD CHANGED" on a run that had not written a single row. A digest of a live WAL database is
 # not a modification signal.
-snap_board() { sqlite3 -readonly "$1" \
-  "SELECT (SELECT count(*) FROM messages)||' msg / '||(SELECT count(*) FROM reads)||' read / '||(SELECT count(*) FROM claims)||' claim / '||(SELECT count(*) FROM note_events)||' inject'" 2>/dev/null; }
+#
+# **And `-readonly` is not the way to read it, which took a failing run to learn.** The first
+# version used `sqlite3 -readonly`, which works on the live board and fails on a `.backup` copy with
+# `unable to open database file (14)`: the copy is WAL-mode with no `-shm`, and a read-only
+# connection cannot create one. Worse, it works on the *real* board only while some other session
+# happens to hold that shared-memory file open — so the same command succeeds or fails depending on
+# who else is running, and a failure returns an empty string that compares equal to another empty
+# string. That renders as "unchanged" on a board that changed.
+#
+# So both sides are counted the same way: through a `.backup` copy, opened normally because a copy
+# is disposable. `.backup` is already how this script reads the board, so nothing new is touched.
+SNAP_SQL="SELECT (SELECT count(*) FROM messages)||' msg / '||(SELECT count(*) FROM reads)||' read / '||(SELECT count(*) FROM claims)||' claim / '||(SELECT count(*) FROM note_events)||' inject'"
+snap_file() { sqlite3 "$1" "$SNAP_SQL" 2>/dev/null; }
+snap_live() {                      # the real board, through a throwaway copy
+  local tmp="$WORK/snap-$1.db"
+  sqlite3 "$REAL_DB" ".backup '$tmp'" 2>/dev/null || return 1
+  snap_file "$tmp"
+}
 snap_vault() { [ -n "$VAULT" ] && [ -d "$VAULT" ] && (cd "$VAULT" && find . -type f -name '*.md' | sort | tr '\n' ' ' | shasum -a 256 | cut -d' ' -f1); }
 
 # Baselined from the COPY, not from the real board: the copy IS the board as of copy time, so a
 # concurrent write landing between the two reads cannot show up as a difference this script made.
-board_before="$(snap_board "$COPY")"
+board_before="$(snap_file "$COPY")"
 vault_before="$(snap_vault)"
 
 export AMB_DB="$COPY"
@@ -204,6 +220,35 @@ else:
 XCHK
 
 rule
+bold "thresholds a decision names, and whether they are near"
+
+# **D83's second half was being measured on input that could never trigger it.** It says to build
+# pruning "when the board passes 50 MB, or when `amb inbox` takes longer than the 5-second hook
+# budget on a warm cache". `doctor` now reports the size half. The latency half had an instrument
+# all along — `bench/bench_startup.py` times `amb inbox` — but deliberately against an *empty
+# scratch board*, so the number it produces is structurally incapable of crossing a threshold that
+# is about the real board growing. A number that exists and cannot fire is D95's shape exactly: the
+# reader assumes something is watching. Timed here instead, against the copy, which is the only
+# place in the tree where `amb inbox` runs over real accumulated content with no side effects.
+inbox_ms="$(AMB_DB="$COPY" python3 - "$BIN" <<'TIMEIT'
+import os, subprocess, sys, time
+# One warm-up, then the measured run: the first spawn pays page faults the hook would not.
+for _ in range(2):
+    start = time.perf_counter()
+    subprocess.run([sys.argv[1], "inbox"], capture_output=True, env=os.environ)
+    ms = (time.perf_counter() - start) * 1000
+print(f"{ms:.0f}")
+TIMEIT
+)"
+budget_ms=5000
+printf '  amb inbox   %s ms of the %s ms hook budget (D83), over %s messages\n' \
+  "$inbox_ms" "$budget_ms" "$(sqlite3 "$COPY" 'SELECT count(*) FROM messages' 2>/dev/null)"
+if [ "${inbox_ms:-0}" -ge "$budget_ms" ] 2>/dev/null; then
+  warn "amb inbox is past D83's budget — build pruning, messages bodies before the ledger"
+fi
+printf '  board size  see the `size` row under `amb doctor` above\n'
+
+rule
 bold "did this script touch anything"
 rc=0
 
@@ -215,7 +260,7 @@ if [ "$AMB_DB" != "$COPY" ]; then warn "AMB_DB is not the copy — everything ab
 
 # The positive check. If the copy is untouched, the hooks did nothing and the output above is not
 # the picture it claims to be — an empty result that looks identical to a quiet board (D89).
-board_copy_after="$(snap_board "$COPY")"
+board_copy_after="$(snap_file "$COPY")"
 if [ "$board_copy_after" != "$board_before" ]; then
   printf '  copy      %s  (the writes landed here)\n' "$board_copy_after"
 else
@@ -224,8 +269,10 @@ fi
 
 # Informational, and deliberately NOT a failure. See the note on WAL above: this board has other
 # sessions on it by design, so a difference here is not attributable to this script.
-board_after="$(snap_board "$REAL_DB")"
-if [ "$board_after" = "$board_before" ]; then
+board_after="$(snap_live after)"
+if [ -z "$board_before" ] || [ -z "$board_after" ]; then
+  warn "could not count the board — reporting nothing rather than 'unchanged', which is what an empty comparison used to print"
+elif [ "$board_after" = "$board_before" ]; then
   printf '  board     %s  (unchanged)\n' "$board_after"
 else
   printf '  board     %s  ->  %s\n' "$board_before" "$board_after"
