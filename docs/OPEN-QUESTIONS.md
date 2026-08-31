@@ -34,20 +34,11 @@ data).
 > `tools/check_docs.py` now does the arithmetic instead of trusting the sentence, and found both on
 > its first run (M38).
 
----
-
-## Q8 · Do we support non-Claude agent tools, and when?
-
-`agmsg` covers Claude Code, Codex, Copilot CLI, Gemini CLI and OpenCode by shipping a **different
-hook configuration per vendor**, since each has a different hook system and none has all four of
-our delivery modes. `hcom` covers eleven.
-
-Nothing in `BRIEF.md` asks for this — every session that motivated the project is Claude Code. But
-D11 rejected the rendered-file fallback partly *because* per-vendor hooks are how the market
-solves this, so if cross-vendor is never built, that argument was academic.
-
-**The choice:** stay Claude-Code-only and accept the ceiling, or budget for a per-vendor hook
-matrix later. Not urgent; it is listed so the D11 reasoning is not mistaken for a promise.
+**Q8 was settled on 2026-08-31** and deleted per that convention — on a check, not on the cost
+argument it framed itself as. It is now D101: the one cross-vendor mechanism that would have made
+breadth cheap cannot push into a running session, and the request to make it was closed
+`NOT_PLANNED` twice. What Q8 called "the choice" was already foreclosed. The distribution half of
+its market argument is split off as Q14 rather than settled with it.
 
 ---
 
@@ -275,3 +266,44 @@ question closes with D27 and the messaging half of the project with it. If the m
 to be laptops that sleep with no always-on host among them, the hub degrades into a merge problem
 and the replication argument deserves re-opening on its merits rather than being inherited from
 here.
+
+---
+
+## Q14 · How does anyone who is not us install `amb`?
+
+**Raised 2026-08-31, split off from Q8 rather than settled with it.** They are different questions
+and pairing them hides the cheaper one: vendor breadth costs a delivery contract per vendor and buys
+vendors on which D9's guarantee is weaker (D101), while distribution costs a release pipeline and
+touches no invariant.
+
+**The gap, measured against the field the same day.** `hcom` installs with
+`brew install aannoo/hcom/hcom`, and also offers `uv tool install hcom`, a shell installer and a
+PowerShell one. `amb` installs by cloning the repository and running `cargo install --path .` — or,
+since that does not update the binary the hooks actually invoke, `./tools/install.sh`. The
+repository was published on 2026-08-31 and CI ran for the first time the same day. Nothing has ever
+been released from it.
+
+**What the field does.** `dist` — formerly `cargo-dist`, 2.1k★, used by Zed, rustfmt and starship —
+generates the GitHub Actions workflow: macOS x86_64 and aarch64, Linux glibc and musl, Windows, then
+a Release with signed artifacts, a Homebrew tap and a shell installer. `cargo-binstall` consumes
+those releases. crates.io is a separate axis and orthogonal to all of it.
+
+**Two things here are not generic packaging questions, and they are why this is filed rather than
+just done.**
+
+- **`publish = false` is a decision, not a default** (D56). The version covers four contract
+  surfaces and the Rust API is deliberately not one of them, because nothing links against `amb`.
+  Publishing does not overturn that reasoning, but it makes the manifest's claim visible to
+  strangers, so D56 is what to read before the flag is flipped.
+- **A package manager upgrading the binary is the stale-hook hazard with a new cause.** The
+  condition D94 records has recurred five times: `~/.claude/settings.json` invokes a binary at a
+  fixed path and `cargo install` writes a different one, so manual commands work perfectly while
+  every hook on the machine fails silently. `brew upgrade` has the same shape and a worse trigger,
+  because it fires without anyone thinking about `amb` at all. Whatever ships has to answer what
+  `amb doctor` reports the morning after an unattended upgrade — and D73 built `doctor`'s
+  fingerprint comparison for exactly this question, so the detector already exists.
+
+**Not urgent and deliberately undecided.** Nobody has tried to install it. This is filed because
+publication made the gap real and because the answer is cheap, not because there is evidence of
+demand — and Q10's lesson is that shipping a mechanism before anything can evaluate it is how this
+project wastes work.

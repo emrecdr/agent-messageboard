@@ -11,6 +11,33 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **Q8 settled: `amb` stays Claude-Code-only** (D101). Q8 framed this as breadth against the cost of
+  a per-vendor hook matrix. The prior question is whether a cross-vendor mechanism exists that could
+  be integrated *once*, and that was checkable rather than arguable: MCP cannot push into a running
+  session, and the request was closed `NOT_PLANNED` twice — `anthropics/claude-code#36665`,
+  consolidated into `#35072`, which is itself closed and labelled `stale`. The MCP roadmap has
+  server-initiated events as **planned, not shipped**.
+
+  The cross-vendor standard that did arrive in 2026 standardises the wrong half: `SKILL.md` is read
+  by sixteen agents, and a skill is invoked when the agent decides to — D9's rejected shape and MCP
+  Agent Mail's conceded failure. And the matrix is priced from `agmsg`'s own: only its Claude Code
+  lane gets real-time delivery, every other vendor degrades to checking between turns. So breadth
+  buys vendors on which D9's guarantee is *weaker than it is today*, plus a hook-runner contract
+  each — D97 is what one of those costs when it goes wrong.
+
+  Two reopening conditions, both publicly checkable and both able to fire (D95): `#35072` reopening
+  or server-initiated events shipping and being surfaced; and a second agent tool actually in use
+  here. Q8's own competitor figures had rotted — `agmsg` is at 1.5k★ and nine vendors, not five —
+  and D101 records that `hcom` is a single Rust binary with no local daemon, correcting a Q11
+  sentence that reads as general and is only true of the cross-machine case.
+
+- **Q14 filed: how anyone who is not us installs `amb`.** Split off from Q8 rather than settled with
+  it, because pairing them hides the cheaper one. `hcom` is `brew install aannoo/hcom/hcom`; `amb`
+  is a clone plus `./tools/install.sh`. Two things make it more than packaging: `publish = false` is
+  a decision (D56), and **a package manager upgrading the binary is D94's stale-hook hazard with a
+  worse trigger** — `brew upgrade` fires without anyone thinking about `amb` at all. Undecided;
+  nobody has tried to install it.
+
 - **`check_docs.py` enforces `OPEN-QUESTIONS.md`'s deletion convention** (M38). That file retires a
   settled question by deleting it, and `git log` was the net under that until the history was reset
   to publish the repository. The file says so and draws the right conclusion — a deleted question

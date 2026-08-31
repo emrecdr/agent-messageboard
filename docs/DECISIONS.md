@@ -5216,3 +5216,111 @@ so the list is concrete, and the tests have to exercise that list.
 
 **Checking output rather than source.** `tools/check_secret_literals.py` scans tracked files, not
 what a script prints. A fixture reaching stdout is not what blocks a push.
+
+---
+
+## D101 · `amb` stays Claude-Code-only, because the cross-vendor path that would be cheap was declined twice
+
+**Decided 2026-08-31, closing Q8.** No per-vendor hook matrix, now or on a schedule. The ceiling is
+accepted and written down — Q8 was filed so D11's reasoning would not be mistaken for a promise,
+and leaving it open indefinitely makes the same mistake more slowly.
+
+**Q8 framed this as a cost question: breadth against a hook matrix.** That framing is what took a
+year to answer and did not need to. The prior question is whether a cross-vendor mechanism exists
+that `amb` could integrate *once* instead of once per vendor, and that is checkable rather than
+arguable.
+
+### The cheap path does not exist, and it was refused rather than overlooked
+
+MCP is the one extension point every CLI in this field implements. It cannot push into a running
+session, and the request has been declined twice:
+
+| Issue | Status, read 2026-08-31 |
+|---|---|
+| `anthropics/claude-code#36665` — *"MCP server push notifications (unsolicited messages to client)"* | opened 2026-03-20, **closed `NOT_PLANNED`** 2026-05-23, consolidated into #35072 |
+| `anthropics/claude-code#35072` — *"reliable interrupt/notification mechanism for inter-agent messaging"* | opened 2026-03-16, **closed `NOT_PLANNED`**, labelled `stale`, no assignee |
+
+The consolidation target is itself closed, which is the part worth noticing: the thread was not
+left open pending design. A comment after the closure states the mechanism precisely — *"Inbound
+notifications are received by the Claude Code CLI client today but never injected into the model's
+context — a truly-idle agent stays deaf until its next user turn."*
+
+The MCP roadmap does commit to *"server-initiated events (webhooks and channels, so clients aren't
+left polling for results)"*, and it is **planned, not shipped**. `subscriptions/listen` and progress
+notifications are in the 2026-07-28 spec; the push half is the next frontier rather than a current
+capability. Building on it today would be building on an intention.
+
+**What the field does instead is a daemon.** The workarounds in that thread are a `wait_for_messages`
+tool blocking 55 s driven by a one-minute cron, and an out-of-process "bridge daemon". Both are the
+resident process D3 and D7 rejected. That is confirming evidence for the core design and the reason
+this decision is not a retreat.
+
+### The cross-vendor standard that *did* arrive standardises the half we do not need
+
+Agent Skills became a genuine cross-vendor standard in 2026 — the `SKILL.md` folder format is read
+by sixteen agents, with `agentskills.io` launched in August. `agmsg` ships one, read by Claude Code
+and Codex, and it is used for **command discovery**.
+
+A skill is invoked when the agent decides to invoke it. That is D9's rejected shape and MCP Agent
+Mail's conceded failure — *"agents must remember to check their inbox"* — wearing this year's
+clothes. So the standardisation wave landed on **addressing**, which `amb` gets for free from four
+nullable-column cases in one query, and left **delivery**, which is the half that costs and the
+half D9 calls the whole point.
+
+### The expensive path, priced from a competitor's own matrix
+
+`agmsg` implements the thing Q8 contemplates, and its per-vendor delivery is not uniform:
+
+| Vendor | How it is delivered | Modes |
+|---|---|---|
+| Claude Code | `SessionStart` hook into a Monitor tool over a blocking SQLite stream, ~5 s | `monitor`, `turn`, `both`, `off` |
+| Codex | app-server bridge plus stop-hook polling between turns | `turn`, `off`; `monitor` needs a shim |
+| GitHub Copilot CLI | per-project `<project>/.github/hooks/agmsg.json`, checked after a response | `turn`, `off` |
+| Gemini CLI, Antigravity, OpenCode | the same stop-hook pattern as Codex | `turn`, `off` |
+
+**Only the Claude Code lane gets real-time delivery. Every other vendor degrades to checking between
+turns.** So the matrix does not buy `amb` five more vendors on today's terms; it buys five vendors on
+which D9's guarantee is *weaker than it is now*, and adds a hook runner contract to each. D97 is what
+that costs when it goes wrong on one runner: clap's default exit `2` is read as *blocking* by Claude
+Code's, so an unparseable argument stopped a session from stopping — inside the one guarantee
+`hook_main` is written to keep. Five runners is five of those, each an unmeasured path.
+
+### What this decision does not claim
+
+**Not that the competitors are small, and Q8's own figures had rotted.** Read 2026-08-31: `agmsg` is
+at 1.5k stars and nine vendors, not the five Q8 recorded; `hcom` is at 469 stars and names eleven,
+which is the one number Q8 got right. Both are larger than this project and the gap is widening.
+
+**Not that no-daemon is a differentiator against `hcom`.** `hcom` is *"Single Rust binary, no
+background services"* and charges a broker only for cross-device, via an optional MQTT relay. Q11
+records that *"every competitor charges a resident process, which is the thing D3 can still beat"* —
+true of the cross-machine case it was written about, and false if read generally. Corrected here
+rather than in Q11, which stays deferred.
+
+**Not that breadth is worthless.** It is that breadth is not what distinguishes `amb`. Durable log
+semantics (D96 — reaching an agent that is not running, and one that registered *after* a
+broadcast), place-addressing, advisory claims and the memory surface are all vendor-independent, and
+none of them gets better by adding a vendor.
+
+### What reopens it
+
+Two conditions, and both can fire — which D95 records as the property a stated threshold most often
+lacks:
+
+1. **Push into a running session becomes reachable from a cross-vendor mechanism.** `#35072`
+   reopening, or the MCP roadmap's server-initiated events shipping *and* a client surfacing them.
+   Publicly observable by anyone, at any time.
+2. **A second agent tool is actually in use on this machine.** The demand side. Today every session
+   that has ever motivated this project is Claude Code.
+
+Either one makes the arithmetic above different rather than merely inconvenient. Absent both, this
+is settled.
+
+### Rejected
+
+**"Budget for it later."** A budgeted matrix is a promise with no date, which is what Q8 already was.
+
+**Shipping a `SKILL.md` for breadth.** Cheap, cross-vendor, and it would make `amb` a tool sixteen
+agents can be *told to call* — pull, which D9 rejected on the strongest negative evidence available.
+It would also make the receipt uninterpretable, since a citation from a pull-only vendor and one from
+a pushed injection are not the same event.

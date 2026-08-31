@@ -953,7 +953,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D100, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D101, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

@@ -3246,3 +3246,27 @@ rule 4 by deleting the paragraph that records Q12 and Q13. Removing every retire
 fires the `checks_can_still_fail` canary *and* rule 4 on all ten retired questions at once —
 three quarters of the check goes vacuous with no population, and the quarter that does not is the
 quarter that matters.
+
+### The check found a defect in its own author's prose, an hour after it was written
+
+The paragraph retiring Q8 closes by pointing at Q14, which is open and stays open. Extraction was
+paragraph-scoped, so every `Qn` in the paragraph counted as retired *by* it, and rule 3 duly
+reported Q14 as settled-and-still-open. **A cross-reference is not a claim.**
+
+This is M17's shape arriving inside a check written days after M17 was recorded — the input reaches
+a branch the author did not intend, and everything about the code is right except what it was
+pointed at. It is worth noting which direction it failed in: a false *positive*, loud and on the
+first real use, rather than a question silently going unaccounted.
+
+Scoped now to the regex's own match span, which runs from the first `Qn` to `settled` and is
+therefore the subject phrase by construction: `Q1–Q6 and Q9 were settled` yields exactly those
+seven. Decisions stay paragraph-scoped, because that is where they are written — the subject phrase
+names the questions and the sentence after it names what they became. `finditer` rather than
+`search`, so a paragraph retiring two questions in two sentences counts both.
+
+**The false positive is now a control row in the break-test**, and that is the part worth keeping.
+Rule 3 must fire when a still-open question sits in the subject phrase *and* must not fire when one
+is merely cited in the same paragraph. Four perturbations proving the rules can fail would have
+passed identically before and after the fix; only the row asserting the rule stays quiet
+distinguishes them. An absence needs its own row, which M23 and M27 both record from the other
+side.

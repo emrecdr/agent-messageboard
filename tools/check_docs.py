@@ -352,7 +352,16 @@ def retired_questions_name_their_decision():
     for para in re.split(r"\n\s*\n", OPEN_QUESTIONS):
         if not RETIREMENT.search(para):
             continue
-        claimed = _question_numbers(para)
+        # **Scoped to the match, not to the paragraph, and the difference is not pedantic.** The
+        # regex spans from the first `Qn` to `settled`, so its match *is* the subject phrase:
+        # "Q1-Q6 and Q9 were settled" yields exactly those seven. Reading the whole paragraph
+        # instead swept up every cross-reference in it — the paragraph retiring Q8 closes by
+        # pointing at Q14, which is open, and rule 3 duly reported Q14 as settled-and-still-open.
+        # Found by this check on its own author's prose, an hour after it was written. `finditer`
+        # rather than `search` so a paragraph retiring two questions in two sentences counts both.
+        claimed = set().union(*(_question_numbers(m.group(0)) for m in RETIREMENT.finditer(para)))
+        # Decisions stay paragraph-scoped, because that is where they are written: the subject
+        # phrase names questions and the sentence after it names the decisions they became.
         named = {int(n) for n in re.findall(r"\bD(\d+)\b", para)}
         retired |= claimed
         label = ", ".join(f"Q{n}" for n in sorted(claimed))
