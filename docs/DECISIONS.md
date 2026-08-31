@@ -5257,9 +5257,21 @@ this decision is not a retreat.
 
 ### The cross-vendor standard that *did* arrive standardises the half we do not need
 
-Agent Skills became a genuine cross-vendor standard in 2026 — the `SKILL.md` folder format is read
-by sixteen agents, with `agentskills.io` launched in August. `agmsg` ships one, read by Claude Code
-and Codex, and it is used for **command discovery**.
+Agent Skills became a genuine cross-vendor standard in 2026. `SKILL.md` is an open format
+originally developed by Anthropic and released as a standard; `agentskills.io` publishes a **client
+showcase rather than a count**, and on 2026-08-31 it carried well over forty products — Claude Code,
+Codex, Gemini CLI, Cursor, Copilot CLI, OpenCode, Goose and Kiro among them, which is every vendor
+Q8 contemplated. `agmsg` ships one, read by Claude Code and Codex, and it is used for **command
+discovery**.
+
+> **Amended within the hour, and the amendment belongs here rather than in a tidier draft.** This
+> paragraph first said "read by sixteen agents", taken from a secondary blog. The primary source
+> states no count at all and its showcase is several times that. The figure was on its way into the
+> same record that faults Q8 for quoting five vendors when there are nine — and **the argument never
+> depended on it**, because a skill is pull whether sixteen or a hundred agents read it. An
+> unnecessary number is the easiest kind to get wrong and the hardest to notice, since nothing
+> downstream breaks when it is off. The showcase-not-a-count form is the honest one for a figure
+> that changes weekly, which is why the site uses it and why this record now does too.
 
 A skill is invoked when the agent decides to invoke it. That is D9's rejected shape and MCP Agent
 Mail's conceded failure — *"agents must remember to check their inbox"* — wearing this year's

@@ -18,9 +18,11 @@ and why the on-disk schema is deliberately not one of them.
   consolidated into `#35072`, which is itself closed and labelled `stale`. The MCP roadmap has
   server-initiated events as **planned, not shipped**.
 
-  The cross-vendor standard that did arrive in 2026 standardises the wrong half: `SKILL.md` is read
-  by sixteen agents, and a skill is invoked when the agent decides to — D9's rejected shape and MCP
-  Agent Mail's conceded failure. And the matrix is priced from `agmsg`'s own: only its Claude Code
+  The cross-vendor standard that did arrive in 2026 standardises the wrong half: `SKILL.md` is an
+  open format whose client showcase covers every vendor Q8 contemplated, and a skill is invoked when
+  the agent decides to — D9's rejected shape and MCP Agent Mail's conceded failure. (The record first
+  quoted a vendor count from a secondary source; the primary one states none, and the argument never
+  needed it.) And the matrix is priced from `agmsg`'s own: only its Claude Code
   lane gets real-time delivery, every other vendor degrades to checking between turns. So breadth
   buys vendors on which D9's guarantee is *weaker than it is today*, plus a hook-runner contract
   each — D97 is what one of those costs when it goes wrong.
