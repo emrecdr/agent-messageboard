@@ -342,12 +342,8 @@ pub fn size_check(bytes: u64) -> Check {
 /// under-reports and keeps going.
 fn board_bytes(path: &std::path::Path) -> u64 {
     let mut total = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-    for suffix in ["-wal", "-shm"] {
-        let mut side = path.as_os_str().to_os_string();
-        side.push(suffix);
-        total += std::fs::metadata(std::path::PathBuf::from(side))
-            .map(|m| m.len())
-            .unwrap_or(0);
+    for side in db::sidecars(path) {
+        total += std::fs::metadata(side).map(|m| m.len()).unwrap_or(0);
     }
     total
 }
@@ -417,7 +413,9 @@ pub fn gather(now: f64) -> Report {
         Err(e) => checks.push(Check::new("board", Health::Warn, e.to_string())),
         Ok(path) => {
             checks.push(location_check(&path));
-            let on_disk = if path.exists() {
+            // Once: the schema check and the size check ask the same question of the same path.
+            let exists = path.exists();
+            let on_disk = if exists {
                 db::open_at(&path).ok().and_then(|c| {
                     c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                         .ok()
@@ -426,7 +424,7 @@ pub fn gather(now: f64) -> Report {
                 None
             };
             checks.push(schema_check(on_disk, db::SCHEMA_VERSION));
-            if path.exists() {
+            if exists {
                 checks.push(size_check(board_bytes(&path)));
             }
         }

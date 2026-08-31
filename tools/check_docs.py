@@ -161,13 +161,25 @@ def unreleased_is_honest():
         ["git", "rev-list", "--count", rev], capture_output=True, text=True, cwd=ROOT
     ).stdout.strip()
     section = CHANGELOG.partition("## [Unreleased]")[2].partition("\n## ")[0]
-    # An *empty* section makes exactly the claim the words "Nothing yet" make, and the literal-only
-    # test could not see it — the same shape as the rest of M36, one level in: the check existed,
-    # ran, and could not fail on half the cases it is for.
-    silent = "Nothing yet" in section or not section.strip()
+    # An *empty* section makes exactly the claim the placeholder makes, and the literal-only test
+    # could not see it — the same shape as the rest of M36, one level in: the check existed, ran,
+    # and could not fail on half the cases it is for.
+    #
+    # **Matched as the section's whole content, not as a substring, and that distinction is not
+    # theoretical.** `"Nothing yet" in section` fired on the changelog entry *describing this very
+    # fix*, because that entry quotes the sentinel in its prose — a check made unfailable in one
+    # direction and unpassable in the other by the same commit. A sentinel searched for anywhere
+    # cannot survive being written about, and a `CHANGELOG` is exactly where it gets written about.
+    body = "\n".join(
+        line
+        for line in section.splitlines()
+        if line.strip() and not line.lstrip().startswith("###")
+    ).strip()
+    placeholder = re.fullmatch(r"[-*]?\s*Nothing yet\.?", body, re.I) is not None
+    silent = placeholder or not body
     if n.isdigit() and int(n) > 0 and silent:
         since = f"since {tag}" if tag else "in a history with no tag"
-        how = "says 'Nothing yet'" if "Nothing yet" in section else "is empty"
+        how = "says 'Nothing yet'" if placeholder else "is empty"
         return [f"CHANGELOG [Unreleased] {how} with {n} commit(s) {since}"]
     return []
 

@@ -740,6 +740,24 @@ fn check_not_newer(found: i64, path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The `-wal` and `-shm` files SQLite keeps beside a board in WAL mode.
+///
+/// **One place that knows this naming, because two grew independently.** `restrict` built these
+/// paths to `chmod` them and `doctor::board_bytes` built them again to `stat` them — the same
+/// `OsString`-append written twice, so the suffix list was asserted in two places and a third
+/// caller would have made a third copy. The engine creates both files itself, after `open`, which
+/// is why anything reasoning about the board's footprint or its permissions has to name them.
+///
+/// Returned rather than iterated so a caller decides what to do with each: the two existing
+/// callers want different things from the same two paths.
+pub fn sidecars(path: &Path) -> [PathBuf; 2] {
+    ["-wal", "-shm"].map(|suffix| {
+        let mut side = path.as_os_str().to_os_string();
+        side.push(suffix);
+        PathBuf::from(side)
+    })
+}
+
 /// Restrict the board to the user who owns it. Best-effort: never fails an open.
 ///
 /// Created under the ambient umask, `board.db` lands at 0644 — every message between every
@@ -783,10 +801,8 @@ fn restrict(path: &Path, own_dir: bool) {
         tighten(parent, 0o700);
     }
     tighten(path, 0o600);
-    for suffix in ["-wal", "-shm"] {
-        let mut sibling = path.as_os_str().to_owned();
-        sibling.push(suffix);
-        tighten(Path::new(&sibling), 0o600);
+    for sibling in sidecars(path) {
+        tighten(&sibling, 0o600);
     }
 }
 
