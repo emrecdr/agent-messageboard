@@ -571,6 +571,100 @@ pub fn plan_uninstall(existing: &Value) -> Plan {
 }
 
 /// The settings file the hooks are installed into.
+/// Every settings file whose hooks Claude Code merges, in precedence order, that a CLI can find.
+///
+/// **Hooks are list-valued, and the platform combines lists rather than overriding them** —
+/// *"when you set the same list key in more than one file, Claude Code combines the lists instead
+/// of picking one"*. So every scope below contributes hooks that all run, which is the mechanism
+/// behind D77: the memory hooks were registered in `~/.claude/settings.json` *and* in this
+/// repository's `.claude/settings.local.json`, and both fired.
+///
+/// **`claude --settings` is deliberately absent and that is a stated hole, not an oversight.** It
+/// is a per-session flag with no on-disk trace a later process can find, so nothing invoked from a
+/// shell can enumerate it. A duplicate introduced that way is invisible here.
+pub fn settings_sources(home: &Path, cwd: &Path) -> Vec<(String, PathBuf)> {
+    vec![
+        // Managed settings first, matching the platform's own precedence listing. macOS path;
+        // other platforms differ, and a missing file is simply skipped by the caller.
+        (
+            "managed".into(),
+            PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json"),
+        ),
+        (
+            "project local".into(),
+            cwd.join(".claude").join("settings.local.json"),
+        ),
+        ("project".into(), cwd.join(".claude").join("settings.json")),
+        ("user".into(), home.join(".claude").join("settings.json")),
+    ]
+}
+
+/// One `amb` hook command that will run more than once per event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateHook {
+    pub event: String,
+    pub command: String,
+    /// The scope labels it was found in, in the order given. Repeats when one file lists it twice.
+    pub sources: Vec<String>,
+}
+
+/// `amb` hook entries that the platform will run more than once for a single event.
+///
+/// **Pure, over already-parsed settings, because the finding has to be testable without four
+/// files on disk** — and because D77's instance spanned two scopes, so a fixture has to be able
+/// to express "the same command in two documents".
+///
+/// **Why this is worth a check at all, and it is not tidiness** (D77). Duplicated hooks make every
+/// injection *happen* twice and *count* once: `note_events` is keyed
+/// `(session, kind, scope, slug, event)`, so a note injected twice into one session records one
+/// row. The cost doubles, the denominator does not, and the citation ratio D59 retires the
+/// injection layer on improves for free. **The error is invisible and in the flattering
+/// direction**, which is the only kind this project treats as urgent.
+///
+/// Keyed on `(event, command)` rather than on the executable: two entries naming the same binary
+/// with different modes are two different jobs, and only an identical command line is a repeat.
+pub fn duplicate_hooks(sources: &[(String, Value)]) -> Vec<DuplicateHook> {
+    let mut seen: Vec<(String, String, Vec<String>)> = Vec::new();
+    for (label, settings) in sources {
+        let Some(hooks) = settings.get("hooks").and_then(Value::as_object) else {
+            continue;
+        };
+        for (event, list) in hooks {
+            let Some(matchers) = list.as_array() else {
+                continue;
+            };
+            for m in matchers {
+                let Some(inner) = m.get("hooks").and_then(Value::as_array) else {
+                    continue;
+                };
+                for entry in inner {
+                    if !is_ours(entry) {
+                        continue;
+                    }
+                    let Some(cmd) = entry.get("command").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    match seen.iter_mut().find(|(e, c, _)| e == event && c == cmd) {
+                        Some((_, _, labels)) => labels.push(label.clone()),
+                        None => seen.push((event.clone(), cmd.to_string(), vec![label.clone()])),
+                    }
+                }
+            }
+        }
+    }
+    let mut out: Vec<DuplicateHook> = seen
+        .into_iter()
+        .filter(|(_, _, labels)| labels.len() > 1)
+        .map(|(event, command, sources)| DuplicateHook {
+            event,
+            command,
+            sources,
+        })
+        .collect();
+    out.sort_by(|a, b| (&a.event, &a.command).cmp(&(&b.event, &b.command)));
+    out
+}
+
 pub fn settings_path() -> Result<PathBuf> {
     let home = std::env::var("HOME").map_err(|_| Error::NoIdentity)?;
     Ok(PathBuf::from(home).join(".claude").join("settings.json"))
@@ -1535,5 +1629,119 @@ mod tests {
 
         let leftovers = scratch_beside(dir.path());
         assert!(leftovers.is_empty(), "scratch left behind: {leftovers:?}");
+    }
+
+    /// Helper: a settings document with one `amb` hook on `event`.
+    fn with_hook(event: &str, command: &str) -> Value {
+        json!({"hooks": {event: [{"hooks": [{"type": "command", "command": command}]}]}})
+    }
+
+    /// D77's actual shape: the same entry in the user file and a project-local file.
+    ///
+    /// **A truth table, because the two halves fail differently.** A detector that reported every
+    /// entry would satisfy any single positive row, and one that reported none would satisfy the
+    /// negative rows — only having both proves it discriminates.
+    #[test]
+    fn a_hook_in_two_scopes_is_a_duplicate_and_one_in_one_scope_is_not() {
+        let cmd = "/usr/local/bin/amb hook memory";
+
+        // The defect: merged, so it fires twice per SessionStart.
+        let dupes = duplicate_hooks(&[
+            ("user".into(), with_hook("SessionStart", cmd)),
+            ("project local".into(), with_hook("SessionStart", cmd)),
+        ]);
+        assert_eq!(dupes.len(), 1, "got {dupes:?}");
+        assert_eq!(dupes[0].event, "SessionStart");
+        assert_eq!(
+            dupes[0].sources,
+            vec!["user".to_string(), "project local".to_string()],
+            "both scopes must be named, or the reader cannot know which file to edit"
+        );
+
+        // The healthy case, which is the row that stops this passing vacuously.
+        assert!(
+            duplicate_hooks(&[("user".into(), with_hook("SessionStart", cmd))]).is_empty(),
+            "one scope is not a duplicate"
+        );
+    }
+
+    /// Two `amb` entries that differ only in mode are two jobs, not one repeated.
+    ///
+    /// `amb hook turn` and `amb hook memory` are registered on the same event on purpose — D41
+    /// requires memory to carry its own entry so its timeout is its own. Keying on the executable
+    /// rather than the whole command line would report that deliberate arrangement as a fault.
+    #[test]
+    fn two_modes_on_one_event_are_not_a_duplicate() {
+        let dupes = duplicate_hooks(&[(
+            "user".into(),
+            json!({"hooks": {"SessionStart": [
+                {"hooks": [{"type": "command", "command": "/bin/amb hook turn"}]},
+                {"hooks": [{"type": "command", "command": "/bin/amb hook memory"}]}
+            ]}}),
+        )]);
+        assert!(
+            dupes.is_empty(),
+            "different modes are different jobs: {dupes:?}"
+        );
+    }
+
+    /// The same command on two different events is not a duplicate either.
+    #[test]
+    fn one_command_on_two_events_is_not_a_duplicate() {
+        let cmd = "/bin/amb hook turn";
+        let dupes = duplicate_hooks(&[(
+            "user".into(),
+            json!({"hooks": {
+                "SessionStart": [{"hooks": [{"type": "command", "command": cmd}]}],
+                "Stop":         [{"hooks": [{"type": "command", "command": cmd}]}]
+            }}),
+        )]);
+        assert!(dupes.is_empty(), "per-event, not per-command: {dupes:?}");
+    }
+
+    /// One file listing the same entry twice is a duplicate too — merging is not the only cause.
+    #[test]
+    fn one_scope_listing_an_entry_twice_is_a_duplicate() {
+        let cmd = "/bin/amb hook turn";
+        let dupes = duplicate_hooks(&[(
+            "user".into(),
+            json!({"hooks": {"Stop": [
+                {"hooks": [{"type": "command", "command": cmd}]},
+                {"hooks": [{"type": "command", "command": cmd}]}
+            ]}}),
+        )]);
+        assert_eq!(dupes.len(), 1, "got {dupes:?}");
+        assert_eq!(
+            dupes[0].sources,
+            vec!["user".to_string(), "user".to_string()]
+        );
+    }
+
+    /// A stranger's duplicated hook is not ours to report (D28).
+    #[test]
+    fn a_foreign_hook_registered_twice_is_not_reported() {
+        let cmd = "/opt/othertool/tool hook start";
+        let dupes = duplicate_hooks(&[
+            ("user".into(), with_hook("Stop", cmd)),
+            ("project".into(), with_hook("Stop", cmd)),
+        ]);
+        assert!(dupes.is_empty(), "only amb's own entries: {dupes:?}");
+    }
+
+    /// The sources list covers every scope the platform merges that a CLI can find.
+    #[test]
+    fn the_scope_list_covers_what_the_platform_merges() {
+        let got = settings_sources(Path::new("/home/u"), Path::new("/repo"));
+        let labels: Vec<&str> = got.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, ["managed", "project local", "project", "user"]);
+        assert!(
+            got.iter()
+                .any(|(_, p)| p.ends_with(".claude/settings.local.json"))
+        );
+        assert!(
+            got.iter()
+                .any(|(_, p)| p == Path::new("/home/u/.claude/settings.json")),
+            "the user file must be rooted at the HOME passed in, not the ambient one: {got:?}"
+        );
     }
 }

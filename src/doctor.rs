@@ -204,6 +204,46 @@ pub fn schema_check(board: Option<i64>, binary: i64) -> Check {
     }
 }
 
+/// `amb` hooks the platform will run more than once per event.
+///
+/// **The row D77 could have used and did not have.** Duplicated hooks make every injection happen
+/// twice and count once — `note_events` is keyed so a second injection into one session writes no
+/// row — so the cost doubles while the denominator does not, and D59's citation ratio improves for
+/// free. Invisible, and in the flattering direction.
+///
+/// Pure, over what [`crate::hooks::duplicate_hooks`] found, so both halves are testable apart.
+pub fn duplicate_check(dupes: &[hooks::DuplicateHook]) -> Check {
+    if dupes.is_empty() {
+        return Check::new(
+            "hook dupes",
+            Health::Ok,
+            "no amb hook is registered in more than one settings scope",
+        );
+    }
+    // `Bad`, not `Warn`: this one silently corrupts the number D59's withdrawal is read off, and
+    // a stale binary — the other `Bad` here — is no worse.
+    let detail = dupes
+        .iter()
+        .map(|d| {
+            format!(
+                "{} runs {}x ({})",
+                d.event,
+                d.sources.len(),
+                d.sources.join(" + ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    Check::new(
+        "hook dupes",
+        Health::Bad,
+        format!(
+            "{detail} — each fires every time, so injections cost double and count once, \
+             flattering D59's ratio (D77). Remove the entry from all but one scope"
+        ),
+    )
+}
+
 /// The storage engine this build carries, and whether it is past the fix that matters.
 ///
 /// **Pure, and takes the version rather than reading it, so the boundary cases are testable.**
@@ -383,6 +423,19 @@ pub fn gather(now: f64) -> Report {
                 })
                 .collect();
             checks.push(build_check(running, &entries));
+
+            // Every scope the platform merges, not just this one: D77's duplicate spanned
+            // `~/.claude/settings.json` and a project `.claude/settings.local.json`, so a check
+            // reading one file could not have seen the defect it exists for.
+            let home = std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default();
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let loaded: Vec<(String, Value)> = hooks::settings_sources(&home, &cwd)
+                .into_iter()
+                .filter_map(|(label, path)| hooks::read_settings(&path).ok().map(|v| (label, v)))
+                .collect();
+            checks.push(duplicate_check(&hooks::duplicate_hooks(&loaded)));
 
             let (installed, missing) = hooks::memory_hooks(v);
             checks.push(if missing.is_empty() {
@@ -628,6 +681,40 @@ mod tests {
         let none = schema_check(None, 12);
         assert_eq!(none.health, Health::Ok);
         assert!(none.detail.contains("no board yet"), "{}", none.detail);
+    }
+
+    /// `duplicate_check`'s verdict, both directions.
+    ///
+    /// **Written because mutating it to `if true` — always Ok — survived every other test here.**
+    /// `duplicate_hooks` has a full truth table, but that covers the *detector*; nothing covered
+    /// the *decision*, so a check that had stopped escalating would have reported a healthy
+    /// machine while D77's defect ran. M27's shape: presence-only coverage cannot see a guard that
+    /// silently stopped firing.
+    #[test]
+    fn duplicate_hooks_escalate_and_an_empty_list_does_not() {
+        let ok = duplicate_check(&[]);
+        assert_eq!(ok.health, Health::Ok);
+        assert!(ok.detail.contains("no amb hook"), "{}", ok.detail);
+
+        let bad = duplicate_check(&[hooks::DuplicateHook {
+            event: "SessionStart".into(),
+            command: "/bin/amb hook memory".into(),
+            sources: vec!["user".into(), "project local".into()],
+        }]);
+        assert_eq!(
+            bad.health,
+            Health::Bad,
+            "a duplicate corrupts D59's ratio silently; it is not a warning"
+        );
+        // The reader has to know which files to edit, so both scopes must be named.
+        assert!(bad.detail.contains("user"), "{}", bad.detail);
+        assert!(bad.detail.contains("project local"), "{}", bad.detail);
+        assert!(bad.detail.contains("SessionStart"), "{}", bad.detail);
+        assert!(
+            bad.detail.contains("2x"),
+            "the multiplier is the point: {}",
+            bad.detail
+        );
     }
 
     /// A truth table across the 3.51.3 boundary, not a list of needles.

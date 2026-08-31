@@ -3449,6 +3449,44 @@ window and it restarts; a repair that does not, does not. The distinction is che
 time and expensive to reconstruct on 2026-09-11, which is the whole reason it is written down
 before anything has broken.
 
+
+### Amended 2026-08-31. The duplicate now has a detector, and it had to read four files to get one
+
+**This decision fixed a duplicate and said outright that nothing would catch the next one.** It
+was found by hand, and the reasoning it left behind — that duplicated hooks make an injection
+*cost twice and count once*, because `note_events` is keyed so the second write is a no-op — is
+exactly the kind of error this project treats as urgent: invisible, and in the flattering
+direction, on the number D59's withdrawal is read off.
+
+`amb doctor` now carries a `hook dupes` row. `hooks::duplicate_hooks` is pure over parsed
+settings; `doctor::duplicate_check` turns the finding into a verdict. Both are truth-tabled, and
+five mutations were run against them.
+
+**The design point is which files it reads, and getting that wrong would have reproduced the
+defect in the detector.** The obvious implementation reads `~/.claude/settings.json`, which is
+the only file `amb install` writes and the only one `doctor` had ever opened. **It could not have
+seen D77's own instance**, which spanned that file *and* this repository's
+`.claude/settings.local.json`. The platform is explicit that this is not an override:
+
+> *"When you set the same list key in more than one file, Claude Code combines the lists instead
+> of picking one."*
+
+So `hooks::settings_sources` enumerates managed, project-local, project and user, and the check
+reads all of them. A mutation dropping the project-local scope reddens a test, because that is the
+scope the original defect needed.
+
+**One hole, stated rather than left to be discovered.** `claude --settings` is a per-session flag
+with no on-disk trace, so a duplicate introduced that way is invisible here. Nothing invoked from
+a shell can enumerate it.
+
+**Verified against a reconstruction of the original**, not only against fixtures: the two settings
+files D77 describes, rebuilt under a scratch `HOME`, produce
+`BAD hook dupes  PreToolUse runs 2x (project local + user); SessionStart runs 2x …`, and removing
+the project-local file returns it to `ok`.
+
+**Bad rather than Warn**, deliberately. The other `Bad` here is a stale hook binary; a silently
+doubled injection count corrupts the evidence a feature is retired on, which is not lesser.
+
 ---
 
 ## D78 · The hook-path decisions move into the library, and the injection output is proved unchanged

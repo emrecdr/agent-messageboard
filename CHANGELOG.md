@@ -9,6 +9,29 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Added
+
+- **`amb doctor` detects `amb` hooks registered in more than one settings scope** (D77 amended).
+  D77 fixed a duplicate by hand and said plainly that nothing would catch the next one. The hazard
+  is not tidiness: duplicated hooks make an injection **cost twice and count once**, because
+  `note_events` is keyed so the second write into one session is a no-op — so the numerator of
+  D59's citation ratio is unaffected while the denominator is understated. Invisible, and in the
+  flattering direction, on the number the injection layer would be retired on.
+
+  **Which files it reads is the whole design, and the obvious version would have missed D77's own
+  instance.** Reading `~/.claude/settings.json` — the only file `amb install` writes, and the only
+  one `doctor` had ever opened — cannot see a duplicate that spans the user file and a project
+  `.claude/settings.local.json`, which is exactly what D77 found. The platform is explicit that
+  scopes *combine* rather than override for list-valued keys, so `hooks::settings_sources`
+  enumerates managed, project-local, project and user. A mutation dropping the project-local scope
+  reddens a test.
+
+  Verified against a reconstruction of D77's two files under a scratch `HOME`, not only against
+  fixtures. Five mutations run; the fifth — `duplicate_check` always returning `Ok` — survived
+  everything until a truth table was written for the *decision* as well as the detector, which is
+  M27's shape. `claude --settings` remains a stated hole: a per-session flag leaves no trace a
+  later process can enumerate.
+
 ### Fixed
 
 - **`amb memory derive` redacted credentials in silence** (M37). It called `redact(...).text` at
