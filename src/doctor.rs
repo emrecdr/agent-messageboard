@@ -558,6 +558,43 @@ mod tests {
         assert!(d.contains("D83"), "nothing points at the decision: {d}");
     }
 
+    /// The size the row prints is the size the board is, at a value where being wrong shows.
+    ///
+    /// **Two tests covered half of this each and the halves did not overlap** (M42). All four
+    /// arithmetic mutants on `let mb = bytes as f64 / (1024.0 * 1024.0)` survived the whole suite.
+    /// The test above *does* assert the rendered size — at `size_check(0)`, and **zero is the
+    /// fixed point of every one of them**: `0/x`, `0*x` and `0%x` all render `0.0`. Its sibling
+    /// uses `at - 1`, `at` and `at * 2`, which do discriminate, and asserts only `.health`.
+    ///
+    /// Neither test is wrong and neither name oversells what it does. This is M17's fixture
+    /// problem arriving through a *pair* of tests rather than one: the input that reaches the
+    /// branch and the assertion that inspects it were in different functions.
+    ///
+    /// `limit` on the next line is identical arithmetic and its mutants were **caught**, because
+    /// it is computed from a constant and the test above asserts `"50 MB"` appears. Same
+    /// expression, same file, one guarded and one not, decided entirely by which operand the
+    /// fixture made interesting.
+    #[test]
+    fn the_size_row_prints_the_size_and_not_merely_a_number() {
+        let mb = 1024 * 1024;
+        for (bytes, expected, why) in [
+            // Kept deliberately, and it proves nothing about the arithmetic — every mutation of
+            // that line agrees at zero. Deleting it would lose the empty-board case the rest of
+            // this table does not cover; leaving it unlabelled is how it came to stand in for
+            // coverage it never had.
+            (0, "0.0 MB", "an empty board — degenerate, see above"),
+            (3 * mb, "3.0 MB", "a plain size below the threshold"),
+            (
+                db::PRUNE_AT_BYTES,
+                "50.0 MB",
+                "exactly the threshold, on the Warn branch",
+            ),
+        ] {
+            let d = size_check(bytes).detail;
+            assert!(d.contains(expected), "{why}: expected {expected} in {d}");
+        }
+    }
+
     /// **The sidecars are part of the board, and a fixture with only a main file cannot see it.**
     ///
     /// In WAL mode the `-wal` file holds committed transactions the main file does not yet contain,

@@ -2316,7 +2316,9 @@ Everything else has not been, and `src/hooks.rs` is the one that edits
 `~/.claude/settings.json` for every project on the machine.
 
 > **`hooks.rs` was done on 2026-08-31 and this paragraph picked the right module** — M39.
-> 83.5%, and one of its survivors was a `pub fn` with no caller anywhere.
+> 83.5%, and one of its survivors was a `pub fn` with no caller anywhere. `doctor.rs`
+> followed the same day at 93.0% (M42), the highest here, which is the second refutation
+> of the renderer hypothesis after `delivery.rs`.
 
 
 ## M28 · Two artefacts described themselves with a constant, and both constants had rotted
@@ -3462,3 +3464,74 @@ worse one.
 explained away; a surviving mutation is equally consistent with a live but untested function. Only
 together do they decide it, which is the argument for running both rather than trusting whichever
 one is cheaper.
+
+---
+
+## M42 · The highest score in the project, and its four survivors were one line that two tests each half-covered
+
+**2026-08-31.** `tools/mutants.sh src/doctor.rs`, following M39 — `doctor` is the *reader* that
+`our_hook_exes` feeds, and M39 found that producer untested.
+
+**68 mutants in 7m: 53 caught, 4 missed, 11 unviable, 0 timeout — 93.0% of viable**, the highest
+recorded in this project (`delivery.rs` 88%, `hooks.rs` 83.5%, `status.rs` 56%).
+
+Conditions: private `CARGO_TARGET_DIR`, `--jobs 1`, load 4.29 at the start and 8.59 at the end,
+which is the run's own; no `cargo` build and no commit appeared in the window, and the tree was
+clean throughout. Zero TIMEOUT rows. A peer was asked over the board to hold builds for ten
+minutes, which is the coordination `amb` exists for and the first time this project has used it
+to protect a measurement.
+
+### All four survivors were one line, and the arithmetic beside it was caught
+
+```rust
+let mb    = bytes as f64 / (1024.0 * 1024.0);              // 4 survivors
+let limit = db::PRUNE_AT_BYTES as f64 / (1024.0 * 1024.0); // caught
+```
+
+Identical expressions, one line apart. `limit` is computed from a constant and
+`the_size_row_names_the_threshold_as_well_as_the_size` asserts `"50 MB"` appears, so every mutation
+of it reddens. Nothing asserted the other one at a value where being wrong shows.
+
+### Two tests covered half of this each, and the halves did not overlap
+
+Neither test is wrong, and neither name oversells what it does:
+
+| Test | Inputs | Asserts |
+|---|---|---|
+| `..._names_the_threshold_as_well_as_the_size` | `size_check(0)` | `.detail` contains `"0.0 MB"` |
+| `..._fires_at_the_threshold_and_not_before` | `at - 1`, `at`, `at * 2` | `.health` only |
+
+The first *does* inspect the rendered size — at the one input where every mutation agrees.
+**Zero is the fixed point of all four**: `0/x`, `0*x` and `0%x` all render `0.0`. The second uses
+inputs that discriminate perfectly and never looks at the number.
+
+This is M17's fixture problem arriving through a **pair** of tests rather than one. M17's form is a
+single test whose comment names a branch its fixture cannot reach; here the input that reaches the
+interesting case and the assertion that would have seen it were in different functions, each
+complete on its own terms. Neither would be found by re-reading either test, which is why mutation
+is the only thing that could see it.
+
+**The generalisable part is that the fixture decided it, not the code.** Same expression, same
+file, one line apart, one guarded and one not — and what separated them was which operand a
+fixture happened to make interesting. When a value is rendered from a computation, ask what the
+test would print if the computation were wrong, and pick an input where that answer differs.
+
+What it cost: `amb doctor` reporting `1536.0 MB`, `3145728.0 MB`, `3298534883328.0 MB` or
+`0.0 MB` for a 3 MB board — a wrong number on the page while the verdict stayed correct. That is
+M27's third instrument-failure mode with the halves swapped: there the arithmetic was right and the
+rendering wrong, here the rendering is right and the arithmetic wrong, and both reach the reader
+identically.
+
+Closed with a truth table over the *rendered* size at three inputs, all four mutations confirmed
+red. The zero row is kept with a comment saying it proves nothing about the arithmetic, because
+deleting it would lose the empty-board case and leaving it unlabelled is how it came to stand in
+for coverage it never had.
+
+### The renderer hypothesis is refuted a second time
+
+M27 read `status.rs` at 56% and asked whether renderers are inherently harder to guard.
+`delivery.rs` came back at 88% and refuted it once. `doctor.rs` is the most verdict-rendering
+module in the project — every line is a health judgement someone reads to decide whether to
+reinstall — and it is the highest-scoring. **What predicts a low score is not what a module
+produces but whether it has ever been under this pressure**, which is the question M27 said to ask
+and this is now the second module to answer it the same way.

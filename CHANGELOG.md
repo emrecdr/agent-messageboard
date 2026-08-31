@@ -11,6 +11,20 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`src/doctor.rs` mutation-tested — 93.0%, the highest in the project** (M42). 68 mutants, 4
+  missed, 0 timeout. All four sat on `let mb = bytes as f64 / (1024.0 * 1024.0)`, while the
+  identical expression one line below was caught because a test asserts the threshold it renders.
+
+  Two tests covered half of it each and the halves did not overlap: one asserts the rendered size
+  but at `size_check(0)`, and **zero is the fixed point of all four mutations**; the other uses
+  inputs that discriminate perfectly and asserts only `.health`. M17's fixture problem arriving
+  through a pair of tests rather than one — neither is wrong, and re-reading either would not find
+  it. It cost `amb doctor` printing `1536.0 MB` or `3298534883328.0 MB` for a 3 MB board with the
+  verdict still correct. Closed with a truth table over the rendered size, all four confirmed red.
+
+  Also the second refutation of the renderer hypothesis after `delivery.rs`: what predicts a low
+  score is not what a module produces but whether it has ever been mutated.
+
 - **`find_unread_fields.py` counted rustdoc links as by-reference uses** (M41), which is why it
   filed `hooks::write_settings` under *"passed by reference, so it looks uncalled"* — the
   reassuring arm — every run for days, while the function was dead. ``[`write_settings`]`` is a
