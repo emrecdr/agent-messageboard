@@ -738,6 +738,91 @@ mod tests {
         );
     }
 
+    /// The same rule as the test above, asserted at the two call sites that test names.
+    ///
+    /// **That test was itself found by mutation, and it guarded the predicate only** (M43). Its
+    /// docstring says exactly what would go wrong — *"its two call sites use it as a match guard
+    /// … treating an unrelated failure as a name clash would rename an agent in response to
+    /// something that has nothing to do with its name"* — and then checks `is_unique_violation`
+    /// against a synthetic table. Forcing either guard to `true` reddened nothing.
+    ///
+    /// M20's arithmetic, on a rule whose predicate layer was already guarded: count the layers a
+    /// rule passes through, count the layers that assert it. A comment naming a call site is not
+    /// a test of that call site, however precisely it describes the failure.
+    ///
+    /// A missing table is `SQLITE_ERROR`, not `SQLITE_CONSTRAINT`, which is the distinction the
+    /// predicate draws and the one these guards have to preserve.
+    #[test]
+    fn a_broken_board_fails_rather_than_reporting_a_name_as_taken() {
+        for explicit in [None, Some("alice")] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+            let who = Identity {
+                id: "uuid-alice".into(),
+                name: "alice".into(),
+                project: "nest".into(),
+                root: dir.path().to_string_lossy().into_owned(),
+            };
+            conn.execute_batch("DROP TABLE agents;")
+                .expect("break the board");
+
+            let err = register(&conn, &who, explicit)
+                .expect_err("a board with no roster table cannot be registered into");
+            match err {
+                Error::Sqlite { ref context, .. } => assert_eq!(
+                    context, "recording the agent row",
+                    "it must fail where it actually failed, explicit={explicit:?}"
+                ),
+                other => panic!(
+                    "a broken board must surface as a failure, not a name clash                      (explicit={explicit:?}): {other:?}"
+                ),
+            }
+        }
+    }
+
+    /// Reclamation must not swallow a real failure as "this name is not available".
+    ///
+    /// The sibling of the test above, at the other call site. `reclaim` returning `Ok(None)` means
+    /// *the name stays taken*, and `register` then reports `NameTaken` — so a board that cannot be
+    /// written reads to the agent as a naming problem it could fix by choosing another name.
+    ///
+    /// The trigger is how a failure is induced on the `UPDATE` while the `SELECT` above it still
+    /// succeeds: its body names a table that does not exist, so it raises `SQLITE_ERROR` rather
+    /// than a constraint violation. `RAISE(ABORT)` would not work here — that *is* a constraint
+    /// violation, and `is_unique_violation` matches any of them, which is worth knowing given the
+    /// function's name says unique.
+    #[test]
+    fn a_failed_reclamation_is_an_error_and_not_a_name_that_stays_taken() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let at = 1_000_000.0;
+        conn.execute(
+            "INSERT INTO agents (id, name, project, cwd, pid, first_seen, last_seen)
+             VALUES ('uuid-dead', 'shared', 'nest', '/tmp', 999999999, ?1, ?1)",
+            params![at - 10.0],
+        )
+        .expect("seed a holder whose session has ended");
+        conn.execute_batch(
+            "CREATE TRIGGER break_update BEFORE UPDATE ON agents BEGIN
+               INSERT INTO no_such_table VALUES (1);
+             END;",
+        )
+        .expect("arm the failing update");
+
+        let who = Identity {
+            id: "uuid-me".into(),
+            name: "shared".into(),
+            project: "nest".into(),
+            root: dir.path().to_string_lossy().into_owned(),
+        };
+        let err = reclaim(&conn, &who, "shared", at)
+            .expect_err("the rename failed, so the reclamation did not happen");
+        assert!(
+            matches!(err, Error::Sqlite { .. }),
+            "a failed rename is a failure, not an unavailable name: {err:?}"
+        );
+    }
+
     /// The roster comes back, most recently active first.
     ///
     /// **Found by mutation: `list` could return an empty vector.** `amb agents` is how one session

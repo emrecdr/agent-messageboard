@@ -11,6 +11,28 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`src/identity.rs` mutation-tested — 97.7%, a new high** (M43). 92 mutants, 2 missed, 0 timeout.
+  Both survivors were one rule at its two call sites: forcing `is_unique_violation` to `true` in
+  `reclaim` and in `register` reddened nothing.
+
+  **The test guarding that rule names those exact call sites in its own docstring** — it was itself
+  found by mutation, and says that treating an unrelated failure as a name clash "would rename an
+  agent in response to something that has nothing to do with its name". It asserts the predicate
+  against a synthetic table and touches neither caller. So mutation found the predicate, the fix
+  guarded the predicate, the comment named the call sites, and the call sites stayed unguarded
+  until mutation was pointed one layer out. A comment naming a call site is not a test of it.
+
+  Cost: a board that cannot be written reports `NameTaken`, telling an agent to pick a different
+  name for a condition no name can fix. Closed at both sites, both mutations confirmed red.
+
+  Noted while writing the test: `is_unique_violation` matches *any* `ConstraintViolation` despite
+  its name. Correct by the current schema, and the reason the fixture induces failure with a
+  trigger naming a missing table rather than `RAISE(ABORT)`, which is itself a constraint.
+
+  M42's claim that "never mutated" predicts a low score is withdrawn — `identity.rs` had never been
+  mutated and scored highest. Nothing available predicts it, which argues for running it everywhere
+  rather than triaging.
+
 - **`src/doctor.rs` mutation-tested — 93.0%, the highest in the project** (M42). 68 mutants, 4
   missed, 0 timeout. All four sat on `let mb = bytes as f64 / (1024.0 * 1024.0)`, while the
   identical expression one line below was caught because a test asserts the threshold it renders.

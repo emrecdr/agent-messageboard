@@ -2317,8 +2317,9 @@ Everything else has not been, and `src/hooks.rs` is the one that edits
 
 > **`hooks.rs` was done on 2026-08-31 and this paragraph picked the right module** — M39.
 > 83.5%, and one of its survivors was a `pub fn` with no caller anywhere. `doctor.rs`
-> followed the same day at 93.0% (M42), the highest here, which is the second refutation
-> of the renderer hypothesis after `delivery.rs`.
+> followed the same day at 93.0% (M42), then `identity.rs` at 97.7% (M43). `delivery.rs`
+> and both of those refute the renderer hypothesis, and M43 refutes the replacement
+> hypothesis M42 offered for it.
 
 
 ## M28 · Two artefacts described themselves with a constant, and both constants had rotted
@@ -3535,3 +3536,75 @@ module in the project — every line is a health judgement someone reads to deci
 reinstall — and it is the highest-scoring. **What predicts a low score is not what a module
 produces but whether it has ever been under this pressure**, which is the question M27 said to ask
 and this is now the second module to answer it the same way.
+
+> **The second half of that sentence is too strong, and `identity.rs` refuted it the same
+> afternoon** (M43). It had never been mutated either and came back at 97.7%. "Never mutated"
+> predicts *unknown*, not *low* — which is a weaker claim and a better argument for running it
+> everywhere rather than triaging by guesswork.
+
+---
+
+## M43 · Both survivors were one rule at the two call sites a test's own docstring names
+
+**2026-08-31.** `tools/mutants.sh src/identity.rs` — liveness and session identity, feeding every
+other surface, and never previously mutated.
+
+**92 mutants in 13m: 85 caught, 2 missed, 5 unviable, 0 timeout — 97.7% of viable**, the highest
+recorded here. Conditions: private `CARGO_TARGET_DIR`, `--jobs 1`, load 4.07 at the start and 7.95
+at the end, no `cargo` build and no commit in the window, tree clean. A peer held builds again on
+request.
+
+### The two survivors
+
+```
+src/identity.rs:254  replace match guard is_unique_violation(&e) with true in reclaim
+src/identity.rs:287  replace match guard is_unique_violation(&e) with true in register
+```
+
+One rule at both of its call sites, and **the test guarding that rule names those exact call sites
+in its own docstring**:
+
+> *"Found by mutation: `is_unique_violation` could return `true` for every error. **Its two call
+> sites use it as a match guard** to decide whether to retry under a different name, so treating an
+> unrelated failure — a missing table, a locked board — as a name clash would rename an agent in
+> response to something that has nothing to do with its name."*
+
+That test builds a synthetic table and asserts the predicate directly. It is correct, its comment
+is correct, and it describes the consequence precisely. It does not touch either call site.
+
+**So the sequence is worth stating plainly**: mutation found the predicate; the fix guarded the
+predicate; the docstring named the call sites and the exact failure; and the call sites stayed
+unguarded until mutation was pointed one layer further out. This is M20's arithmetic — count the
+layers a rule passes through, count the layers that assert it — arriving on a rule whose inner
+layer had already been fixed *by this same technique*. **A comment naming a call site is not a test
+of that call site, however precisely it describes the failure.**
+
+What it costs: a board that cannot be written reports `NameTaken`. The agent is told to pick a
+different name for a condition no name can fix, which is this project's signature shape — not an
+error, a plausible wrong answer.
+
+### The predicate is broader than its name, and that shaped the test
+
+`is_unique_violation` matches **any** `ErrorCode::ConstraintViolation`, not specifically a unique
+one. Correct by the current schema — the primary key is absorbed by `ON CONFLICT(id) DO UPDATE`
+and the only other constraint is the unique name index — but the name asserts more than the code
+checks, and a future `NOT NULL` or `CHECK` would be silently read as a name clash.
+
+It is also why the test induces failure with a trigger whose body names a missing table rather than
+with `RAISE(ABORT)`: `RAISE` *is* a constraint violation, so it would have satisfied the mutated
+guard and the real one alike. A missing table is `SQLITE_ERROR`, which is the distinction the
+predicate actually draws.
+
+### Verified by applying both mutations
+
+`reclaim` reddens returning `None` — the swallowed error, read by `register` as "the name stays
+taken". `register` reddens returning `NameTaken` where an `Error::Sqlite` belongs. The first
+attempt used a wrong indentation for one anchor and reported *anchor appears 0x* rather than
+silently mutating nothing, which is the reason to count anchors instead of trusting a replace.
+
+### Three modules, three scores, and the tidy explanation did not survive the afternoon
+
+`hooks.rs` 83.5%, `doctor.rs` 93.0%, `identity.rs` 97.7% — all three previously unmutated. M42
+proposed that having never been mutated is what predicts a low score. `identity.rs` refutes it.
+The honest version is that **nothing available so far predicts the score**, which is a weaker claim
+and a better argument for running it on every module than any triage heuristic would be.
