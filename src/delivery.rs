@@ -32,7 +32,10 @@ Add --json to any command for structured output.";
 /// Sender, subject and body are written by whoever sent the message, so their length is theirs to
 /// choose. Without a cap a single message can consume the whole injection budget D24 exists to
 /// protect — denial of context rather than injection, but the same defect.
-const QUOTED_MAX: usize = 240;
+///
+/// `pub` so a test can assert against the cap rather than transcribe it. M28 records two constants
+/// that rotted because a second copy existed to drift from.
+pub const QUOTED_MAX: usize = 240;
 
 /// Render one attacker-controlled field so it cannot escape the line it belongs on.
 ///

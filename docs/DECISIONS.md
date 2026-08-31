@@ -5336,3 +5336,73 @@ is settled.
 agents can be *told to call* — pull, which D9 rejected on the strongest negative evidence available.
 It would also make the receipt uninterpretable, since a citation from a pull-only vendor and one from
 a pushed injection are not the same event.
+
+---
+
+## D102 · Properties are tested without a crate, because the generator is the hard part and a framework does not supply it
+
+**Decided 2026-08-31.** `tests/properties.rs` asserts eight properties of the pure core over
+20,000 generated inputs, using a seeded xorshift in the test file. **`proptest` and `insta` were
+both evaluated against real defects in this repository and both declined.**
+
+### The case that was made for them, and what measuring it found
+
+A review argued that property testing is the structural answer to M17 — a fixture that never
+reached the branch its own comment named — and that snapshot testing is the general form of M24, a
+substring assertion that could not see the damage between its needles. Both arguments are sound in
+the abstract. Neither survived being checked.
+
+**Both target defects are already closed.** `nearest`'s tie guard now has two fixtures that reach
+the two-candidate arm — `nearest("api-v3", &["api-v1", "api-v2"])` is a genuine tie and
+`("api-v1x", &["api-v1", "spi-v1"])` a strict winner — so both M17 mutations die. M24's lesson
+shipped as `assert_rendered_shape`, an invariant over every rendered line, with 21 call sites
+across ten modules.
+
+**Eight properties over 200,000 generated inputs found zero violations.** The case for a crate
+therefore rested on future value, not a present defect.
+
+### The finding that decided it
+
+**The generator is the hard part, and a framework does not supply one.** The first version of this
+file used a uniform character generator and left two of its eight properties *vacuous*: `redact`
+fired **zero** times in 200,000 runs, and not one generated string parsed as a duration. Both
+properties reported green while asserting nothing.
+
+`proptest`'s default strategies have exactly that problem. `any::<String>()` does not produce
+`ghp_…` or `30m` either, so the custom strategies would be the same work in a different notation.
+What the crate adds over this file is **shrinking**, which matters when a counter-example is hard
+to read — and with zero failures in 200,000 cases there is nothing to shrink.
+
+Against that: a dev-dependency on a crate in passive maintenance, and a `proptest-regressions/`
+corpus that becomes another artefact to keep true. This project's recorded failure mode is an
+artefact drifting from what it claims; a seeded generator reproduces from the seed alone and adds
+no such file.
+
+### Why the coverage floors are the substance, not the properties
+
+`the_pure_core_holds_its_properties_over_generated_input` ends by asserting how often each branch
+was *reached*, with floors an order of magnitude under what was measured. Without them a generator
+that stops producing redactable strings reports success — **M17's defect inside the test written to
+catch it.**
+
+That is not hypothetical. It happened twice while writing this file. Mutating the generator to stop
+emitting durations reddens the floor, as intended. And mutating `quoted` to pass control characters
+straight through **survived**, because the alphabet contained none — so the containment property
+that exists for D90's forgery attack was asserting nothing. Control characters are now generated and
+counted separately, and that mutation reddens with a readable counter-example.
+
+### What was rejected
+
+**`proptest`.** Above. Revisit if a property here fails and the counter-example is unreadable;
+shrinking is the one thing worth paying for and there is nothing yet to shrink.
+
+**`insta`.** `assert_rendered_shape` already covers M24's class as an *invariant*, and `CLAUDE.md`
+prefers the invariant to the enumeration wherever the artefact has a marker to key on. A snapshot
+pins exact bytes, which is the enumeration, and it rots the moment `cargo insta accept` becomes
+reflexive — D49's rubber-stamp failure in a new place.
+
+**Randomising the seed per run.** A failure would then be reproducible only from a logged seed
+nobody reads. Deterministic means a red run is red again on the next one.
+
+**More iterations.** 200,000 costs 6.7 s against a 3.3 s suite; 20,000 costs 0.25 s and reaches
+every branch with an order of magnitude of margin. Measured, not assumed.

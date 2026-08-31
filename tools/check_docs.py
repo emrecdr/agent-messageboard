@@ -94,10 +94,45 @@ def counts_are_current():
             if int(quoted) != highest:
                 problems.append(f"{name} says D1–D{quoted}; DECISIONS.md reaches D{highest}")
 
+    # **Tracked test targets only, because a bare `cargo test` counts a peer's scratch file.**
+    # Other sessions work this tree concurrently; an untracked `tests/props_probe.rs` appeared
+    # mid-commit and moved the count by one, so the number the docs are required to quote came
+    # partly from a file that is not in the repository and would rot the moment its author
+    # renamed it. `every_bench_script_is_named`, twenty lines below, was already repaired for
+    # exactly this and the sibling was left with the hole — the third instance in this file of
+    # the rule that fixing one case trains attention on the case rather than on its siblings.
+    #
+    # **A pathspec `*` matches across `/`, which this got wrong on the first attempt.**
+    # `git ls-files "tests/*.rs"` also returns `tests/common/mod.rs`, so `--test mod` went on the
+    # command line, cargo exited 101 with an empty stdout, and the count came back 0 — see below
+    # for why that was silent. Only files directly under `tests/` are integration targets.
+    tracked = sorted(
+        pathlib.Path(f).stem
+        for f in subprocess.run(
+            ["git", "ls-files", "tests/*.rs"], capture_output=True, text=True, cwd=ROOT
+        ).stdout.split()
+        if f.count("/") == 1
+    )
+    if not tracked:
+        # An inability to answer, not a clean result — `checks_can_still_fail`'s rule, applied to
+        # the input rather than to the output.
+        return problems + ["git lists no tracked integration tests — the count examined nothing"]
+    targets = [a for stem in tracked for a in ("--test", stem)]
     out = subprocess.run(
-        ["cargo", "test", "--no-fail-fast"], capture_output=True, text=True, cwd=ROOT
+        ["cargo", "test", "--no-fail-fast", "--lib", *targets],
+        capture_output=True, text=True, cwd=ROOT,
     ).stdout
     actual = sum(int(m) for m in re.findall(r"^test result: ok\. (\d+) passed", out, re.M))
+    # **`if actual:` was here and it made the bug above invisible** (M39). A cargo invocation that
+    # never ran produces no `test result:` lines, so `actual` is 0, so the comparison was skipped
+    # and the check printed success — the same sentence as `unreleased_is_honest`'s
+    # `if not tag: return []`, in the function directly above the one repaired for it. Zero tests
+    # is not a repository state worth tolerating; it is this check being unable to answer.
+    if not actual:
+        return problems + [
+            "`cargo test` reported no passing tests — the count could not be taken, which is not"
+            " the same as the docs being right"
+        ]
     if actual:
         for name, text in (("README.md", README), ("CLAUDE.md", CLAUDE)):
             for quoted in set(re.findall(r"(\d+) tests", text)):

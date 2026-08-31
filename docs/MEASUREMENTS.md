@@ -2315,6 +2315,9 @@ Mutated to date: `messages.rs`, `claims.rs`, `memory/inject.rs`, `memory/promote
 Everything else has not been, and `src/hooks.rs` is the one that edits
 `~/.claude/settings.json` for every project on the machine.
 
+> **`hooks.rs` was done on 2026-08-31 and this paragraph picked the right module** — M39.
+> 83.5%, and one of its survivors was a `pub fn` with no caller anywhere.
+
 
 ## M28 · Two artefacts described themselves with a constant, and both constants had rotted
 
@@ -3270,3 +3273,140 @@ is merely cited in the same paragraph. Four perturbations proving the rules can 
 passed identically before and after the fix; only the row asserting the rule stays quiet
 distinguishes them. An absence needs its own row, which M23 and M27 both record from the other
 side.
+
+---
+
+## M39 · The module that edits every project's settings had never been mutated, and one survivor was dead code
+
+**2026-08-31.** `tools/mutants.sh src/hooks.rs` — the module M27's own roll-call named as the next
+target, and the last major one never put under this pressure. It edits `~/.claude/settings.json`,
+which configures Claude Code for every project on the machine, and `CLAUDE.md` says outright that
+corrupting it breaks the user's whole tool rather than just this one.
+
+**114 mutants in 8m: 86 caught, 17 missed, 11 unviable, 0 timeout — 83.5% of viable.**
+
+Conditions, recorded because M17 and M27 each record a run invalidated by them: private
+`CARGO_TARGET_DIR`, `--jobs 1`, load 6.00 at the start and 11.37 at the end, and the same five peer
+processes present before and after with no `cargo` build appearing in the window. **Zero TIMEOUT
+rows**, so nothing here is an unanswered question in M27's sense.
+
+### The seventeen were four findings
+
+| Function | Survivors | The finding |
+|---|---|---|
+| `our_hook_exes` | 6 | the detector for this project's most-recurring failure, with no test |
+| `read_settings`, `read_raw`, `apply` | 8 | the whole read path, with no test |
+| `quote_exe` | 1 | one rule, two instances, guarded at one |
+| `Mode::parse` | 1 | the CLI's own contract check, with no test |
+| `write_settings` | 1 | **dead code** |
+
+### `write_settings` was dead, and the tool that exists to find that was explaining it away
+
+`find_unread_fields.py` had printed the same three names on every run for days, under its own
+inline advisory: *a function passed by reference has no parentheses and looks uncalled.* That
+explanation is **true for two of the three and false for the third**. `plan_uninstall` has eleven
+uses including `main.rs` passing it by reference; `command_is_ours` has fourteen including
+`is_ours`'s `.is_some_and(command_is_ours)`. `write_settings` had **one definition, zero calls and
+zero references** — its only two mentions were rustdoc links inside doc comments.
+
+Mutation is what separated them: replacing the whole body with `Ok(())` survived the entire suite.
+Neither signal is sufficient alone — an untested *live* function survives mutation too, and a
+zero call count was already being explained away — but together they are conclusive.
+
+D84 recorded this precise shape once before, when the same advisory printed three names for days
+and one was a duplicate implementation. **It recurred with a different name**, which is the
+argument for reading the advisory rather than scrolling past it, and the argument for not trusting
+a tool's own explanation of its false positives to be exhaustive.
+
+Deleted rather than tested, following D23, D39 and D45. It was superseded by D99's `apply` +
+`write_if_unchanged` cycle and, left in place, it is a public function that writes settings
+*without* the lost-update check — a convenience whose next caller silently reintroduces the defect
+D99 exists to prevent. Its two doc references were repaired in the same change, because a comment
+naming a deleted function is the false-comment failure this project has shipped four times.
+
+### `our_hook_exes`: the reader was tested and the producer was not
+
+Six survivors in one small function, including replacing its whole body with `vec![]`. It is the
+only thing that can see the stale-binary condition D94 records as having recurred five times:
+`command_is_ours` matches the file *name*, so a hook invoking last month's build is still "ours"
+and `HookState` still reports `Installed`. Returning the path is what lets `doctor` compare
+fingerprints — and `doctor`'s own tests build their fixtures directly, so the producer between
+them ran under no assertion at all. That is M37's shape exactly, one module further out.
+
+### `quote_exe`: the fixture reached the branch and the assertion looked elsewhere
+
+`an_install_path_containing_an_apostrophe_is_still_recognised` installs `/Users/o'brien/bin/amb` —
+an apostrophe with no space, which is precisely the isolating input — and then asserts that
+`command_is_ours` accepts it and `plan_uninstall` removes it. **Both pass on an unquoted command
+line**, because `unquote` is a no-op there and `file_name` is still `amb`. Its sibling asserts
+`cmd.starts_with('\'')`, but only for a path containing a space.
+
+One rule, two instances, guarded at one of them: D90's shape. It is *not* M17 — the fixture does
+reach the branch — and it is not D51 — the mutation does redden something, just not this rule. The
+test is thorough, carries a long docstring about O'Brien being a real surname, and defends against
+a reviewer's stated worry rather than against the function's own contract. What it costs is an
+unbalanced quote in `~/.claude/settings.json`: the shell cannot parse the hook command, so it never
+runs, and a hook that fails is a hook that says nothing.
+
+### `Mode::parse`: the variants are asserted 38 times and the parser never
+
+`--mode` is a `String`, so `Mode::parse` *is* the contract check behind `amb install --mode <x>`,
+and `src/main.rs` is its only caller. Deleting the `"session"` arm reddened nothing. M20's
+arithmetic picks this out: count the layers a rule passes through, count the layers that assert it,
+and suspect the outermost, because it is the one no cheap unit test happens to cover. Closed with a
+round trip over every variant rather than three literals, so a fourth mode cannot arrive with a
+parse arm spelled differently from its `as_str`.
+
+### Every new test was verified by applying the mutation it was written for
+
+Nine representative mutants, each applied to the real file, the targeted test run, and the file
+restored with its digest compared. All nine reddened. The `!is_ours` one needed a longer anchor:
+the same three lines appear in `duplicate_hooks`, so the first attempt reported the anchor twice
+and was skipped rather than silently mutating the wrong function.
+
+---
+
+## M40 · A check I had just repaired answered "clean" having run nothing, and the repair is what did it
+
+**2026-08-31.** Five new tests moved the suite from 505 to 510, and `counts_are_current` reported
+**511**. The extra one came from `tests/props_probe.rs`, an untracked file a peer session had
+created minutes earlier: `cargo test` compiles every `tests/*.rs`, tracked or not, so the number
+the documentation is *required to quote* came partly from a file that is not in the repository and
+would have rotted the moment its author renamed it.
+
+`every_bench_script_is_named`, twenty lines below in the same file, had already been repaired for
+exactly this, and its comment says so: *"Untracked means work in progress, not an uncited script.
+Without this the check fires on a peer session's half-finished file and blocks a commit that has
+nothing to do with it."* The sibling was left with the hole — the third instance in this file of
+the rule that fixing one case trains attention on the case rather than on its siblings.
+
+### The repair reproduced the defect it was citing
+
+Scoping the count to `git ls-files "tests/*.rs"` looked right and was not: **a git pathspec `*`
+matches across `/`**, so `tests/common/mod.rs` came back as well, `--test mod` went onto the
+command line, and cargo exited 101 with an empty stdout. `actual` was therefore 0 — and the next
+line was
+
+```python
+if actual:
+```
+
+so the comparison was skipped and the check printed *"docs are consistent with the code on every
+mechanical check."*
+
+**That was read as success.** It was caught one step later and only because this project's habit is
+to perturb a new guard and watch it redden: setting `CLAUDE.md` to a wrong count produced nothing.
+Without that step, the commit would have shipped a permanently unfailable check — in an edit whose
+own comment cites M35 for that precise defect.
+
+### Which of the two bugs matters
+
+A wrong pathspec is an ordinary mistake and would have been caught by anyone eventually. `if
+actual:` is not: it is `if not tag: return []`, the sentence M35 and M36 exist about, sitting in
+the function immediately above the one repaired for it — and it silently converts **every** future
+mistake of the first kind into a passing run. The pathspec was fixed. The guard was replaced with a
+reported inability to answer, which is the form the rest of this file already uses, so a cargo
+invocation that never ran is now a finding rather than a clean bill of health.
+
+Verified in both directions afterwards, which is what the first attempt skipped: a wrong count
+reddens, a correct one passes, and the peer's untracked file moves neither.

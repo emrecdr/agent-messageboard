@@ -81,7 +81,7 @@ impl Plan {
     /// always populated and this was unreachable.
     ///
     /// The consequence was not cosmetic. `report_plan` writes whenever a plan is not a no-op, and
-    /// [`write_settings`] takes a fresh backup on every write — so a second `amb install`
+    /// the write path takes a fresh backup on every write — so a second `amb install`
     /// overwrote the only pre-`amb` backup with a post-`amb` copy, destroying the thing the
     /// backup exists for. Reproduced against a real settings file (D29).
     ///
@@ -714,9 +714,9 @@ const LOCK_FILE: &str = ".amb-settings.lock";
 
 /// Take the settings lock, blocking until it is free.
 ///
-/// **The critical section is read + plan + write, not the write alone** (D99). `write_settings`
+/// **The critical section is read + plan + write, not the write alone** (D99). The write itself
 /// was already atomic — temp file plus `rename`, and 540 measured trials produced zero corrupt
-/// files (M31). What was unguarded is the *cycle*: read at T, decide, write at T+ε, with another
+/// files (M31), and [`write_if_unchanged`] still is. What was unguarded is the *cycle*: read at T, decide, write at T+ε, with another
 /// writer free to land in between. Measured on this machine, that lost a third party's setting in
 /// **38 of 540** runs and amb's **own hooks in 8**, the second being a silent stop to mail
 /// delivery.
@@ -882,36 +882,6 @@ fn write_if_unchanged(path: &Path, value: &Value, seen: Option<&str>) -> Result<
     }
     std::fs::rename(&tmp, path).map_err(io(format!("replacing {}", path.display())))?;
     Ok(true)
-}
-
-/// Write settings back, atomically, keeping one backup.
-///
-/// Temp file plus rename, so a crash mid-write cannot leave Claude Code with a truncated
-/// settings file. The backup exists because this is the user's global configuration and a bug
-/// here is expensive to recover from by hand.
-pub fn write_settings(path: &Path, value: &Value) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(io(format!("creating {}", parent.display())))?;
-    }
-    if path.exists() {
-        let backup = path.with_extension("json.amb-backup");
-        std::fs::copy(path, &backup).map_err(io(format!("writing backup {}", backup.display())))?;
-    }
-    let body = serde_json::to_string_pretty(value).map_err(|source| Error::Json {
-        context: "serialising settings".into(),
-        source,
-    })?;
-    // **Per-process, so two writers cannot share a scratch file.** D99's lock makes that
-    // impossible in the ordinary case; this is what holds if the lock could not be taken — on a
-    // filesystem without working advisory locks, a fixed name means one process truncating the
-    // other's half-written temp before either renames.
-    let tmp = path.with_extension(format!("json.amb-tmp.{}", std::process::id()));
-    std::fs::write(&tmp, format!("{body}\n")).map_err(io(format!("writing {}", tmp.display())))?;
-    // `rename` within a directory is atomic, so a reader sees the old file or the new one and
-    // never a partial write. 540 concurrent trials produced zero corrupt files (M31) — this half
-    // was already correct and is unchanged.
-    std::fs::rename(&tmp, path).map_err(io(format!("replacing {}", path.display())))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1742,6 +1712,202 @@ mod tests {
             got.iter()
                 .any(|(_, p)| p == Path::new("/home/u/.claude/settings.json")),
             "the user file must be rooted at the HOME passed in, not the ambient one: {got:?}"
+        );
+    }
+
+    /// Every mode the CLI documents must parse, and nothing else may.
+    ///
+    /// **The variants are asserted throughout this file; the parser that produces them was
+    /// asserted nowhere.** `--mode` is a `String`, so `Mode::parse` *is* the contract check behind
+    /// `amb install --mode <x>`, and its only caller is `src/main.rs`. Deleting the `"session"`
+    /// arm reddened nothing (M39). That is M20's arithmetic — count the layers a rule passes
+    /// through, count the layers that assert it, and suspect the outermost, because it is the one
+    /// no cheap unit test happens to cover.
+    ///
+    /// A round trip rather than three literals, so a fourth mode cannot arrive with a parse arm
+    /// spelled differently from its `as_str`.
+    #[test]
+    fn every_mode_round_trips_through_its_own_spelling() {
+        for mode in [Mode::Session, Mode::Turn, Mode::Monitor] {
+            let spelling = mode.as_str();
+            assert_eq!(
+                Mode::parse(spelling),
+                Some(mode),
+                "{spelling} must parse back to itself"
+            );
+            assert!(!mode.events().is_empty(), "{spelling} installs no event");
+        }
+        assert_eq!(Mode::parse("Session"), None, "matching is case-sensitive");
+        assert_eq!(Mode::parse(""), None);
+        assert_eq!(
+            Mode::parse("watch"),
+            None,
+            "an unknown mode is rejected rather than defaulted"
+        );
+    }
+
+    /// A path that needs quoting is quoted, whatever made it need quoting.
+    ///
+    /// **The apostrophe case was reached by a test and asserted by none.**
+    /// `an_install_path_containing_an_apostrophe_is_still_recognised` installs
+    /// `/Users/o'brien/bin/amb` and checks that `command_is_ours` accepts it and `plan_uninstall`
+    /// removes it — both of which pass on an *unquoted* command line, because `unquote` is a no-op
+    /// there and `file_name` is still `amb`. The sibling space test asserts the quoting. One rule,
+    /// two instances, guarded at one of them: D90's shape, and `replace || with && in quote_exe`
+    /// survived the whole suite (M39).
+    ///
+    /// What it costs is an unbalanced quote in `~/.claude/settings.json`, so the shell cannot parse
+    /// the hook command and it never runs — the silent failure `quote_exe`'s own docstring names.
+    #[test]
+    fn a_path_that_needs_quoting_is_quoted_whatever_made_it_need_quoting() {
+        // Each needs quoting for a different reason and none of them contains a space, which is
+        // the only reason the existing tests ever exercise.
+        for exe in [
+            "/Users/o'brien/bin/amb",
+            "/Users/say\"hi\"/amb",
+            "/tmp/a\tb/amb",
+        ] {
+            let doc = plan_install(&json!({}), exe, Mode::Session, false).settings;
+            let cmd = &commands(&doc, "SessionStart")[0];
+            assert!(cmd.starts_with('\''), "must be quoted: {cmd}");
+            assert!(command_is_ours(cmd), "and still recognised as ours: {cmd}");
+        }
+        // The control row, and it is what makes the rows above mean anything. Without it this
+        // asserts only that quoting happens, never that it is *conditional* — and a `quote_exe`
+        // that quoted unconditionally would pass every line above.
+        let doc = plan_install(&json!({}), "/usr/local/bin/amb", Mode::Session, false).settings;
+        let plain = &commands(&doc, "SessionStart")[0];
+        assert!(
+            !plain.starts_with('\''),
+            "a plain path is left alone: {plain}"
+        );
+    }
+
+    /// `doctor` reads this to find a hook invoking a *different* `amb`, and nothing here read it.
+    ///
+    /// **Six of this module's seventeen survivors were in this one function** (M39), including
+    /// replacing its whole body with `vec![]`. It is the only thing that can see the stale-binary
+    /// condition D94 records as having recurred five times: `command_is_ours` matches the file
+    /// *name*, so a hook pointing at last month's build is still "ours" and `HookState` calls it
+    /// `Installed`. Returning the path is what lets `doctor` compare fingerprints — and `doctor`'s
+    /// own tests build their fixtures directly, so the producer between them ran under no
+    /// assertion at all. M37's shape: the reader is tested, the writer is not.
+    #[test]
+    fn every_hook_of_ours_is_reported_with_the_executable_it_invokes() {
+        let foreign = json!({
+            "hooks": {
+                "Stop": [{"hooks": [{"type": "command", "command": "/other/tool hook go"}]}]
+            }
+        });
+        let doc = plan_install(&foreign, "/opt/one/amb", Mode::Session, false).settings;
+        assert_eq!(
+            our_hook_exes(&doc),
+            vec![("SessionStart".to_string(), "/opt/one/amb".to_string())],
+            "ours reported with its path, and the foreign hook not reported at all"
+        );
+
+        // Unquoted, because `doctor` compares this against a path on disk. A quoted string would
+        // never match and the stale-binary check would report BAD on a healthy install.
+        let spaced = plan_install(&json!({}), "/Users/my name/amb", Mode::Session, false).settings;
+        assert_eq!(
+            our_hook_exes(&spaced),
+            vec![("SessionStart".to_string(), "/Users/my name/amb".to_string())],
+            "the quoting `plan_install` added is undone again here"
+        );
+
+        // Degrades rather than panicking, on documents we did not write.
+        assert!(our_hook_exes(&json!({})).is_empty());
+        assert!(our_hook_exes(&json!({"hooks": "nonsense"})).is_empty());
+    }
+
+    /// Reading settings must tell absent, empty, valid and unreadable apart.
+    ///
+    /// **The whole function replaced by `Ok(Default::default())` survived**, along with both of its
+    /// guards in both directions — six mutants in one small function (M39). Its three callers are
+    /// `doctor` twice and `main` once, all on paths no test drives, so every branch here was an
+    /// unasserted answer to "is this machine configured", which is the question `doctor` exists to
+    /// answer.
+    #[test]
+    fn a_settings_file_reads_as_absent_empty_valid_or_an_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Absent is an empty document rather than an error: no settings file is an ordinary state.
+        assert_eq!(
+            read_settings(&dir.path().join("nope.json")).expect("absent"),
+            json!({})
+        );
+
+        // Empty and whitespace-only are the same as absent. `serde_json` rejects both, so without
+        // the guard an editor that saved nothing turns every `amb install` into a parse error.
+        for body in ["", "   \n\t "] {
+            let path = dir.path().join("empty.json");
+            std::fs::write(&path, body).expect("seed");
+            assert_eq!(
+                read_settings(&path).expect("empty"),
+                json!({}),
+                "body {body:?}"
+            );
+        }
+
+        // Real content comes back, which is the row that sees a function turned into a constant.
+        let path = dir.path().join("real.json");
+        std::fs::write(&path, "{\"hooks\": {\"Stop\": []}}").expect("seed");
+        assert_eq!(
+            read_settings(&path).expect("valid"),
+            json!({"hooks": {"Stop": []}})
+        );
+
+        // Malformed is an error, never an empty document. Reading somebody's unparseable settings
+        // as `{}` and then writing our own over them is the worst outcome available here.
+        std::fs::write(&path, "{not json").expect("seed");
+        assert!(
+            read_settings(&path).is_err(),
+            "malformed must not read as empty"
+        );
+
+        // Present-but-unreadable is also an error, and this is the row that separates the
+        // `NotFound` guard from `true`: a directory is not a missing file, and treating it as one
+        // has `doctor` report a healthy empty configuration for a path it cannot read at all.
+        assert!(
+            read_settings(dir.path()).is_err(),
+            "a directory is not an absent file"
+        );
+    }
+
+    /// An existing but empty settings file installs cleanly, and an unreadable one fails on read.
+    ///
+    /// Two guards on the same distinction, one in [`apply`] and one in `read_raw`, both survivors
+    /// (M39). The first decides whether an empty file is a document or a parse error; the second
+    /// decides whether a read failure that is *not* a missing file may be treated as one — and if
+    /// it may, `apply` proceeds to write over whatever it could not read.
+    #[test]
+    fn an_empty_settings_file_installs_and_an_unreadable_one_fails_before_writing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "\n").expect("seed");
+
+        let done = apply(&path, false, |cur| {
+            plan_install(cur, "/usr/local/bin/amb", Mode::Turn, false)
+        })
+        .expect("an empty settings file is a document with nothing in it");
+        assert!(!done.plan.is_noop(), "it must actually install");
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("written")
+                .contains("SessionStart"),
+            "and the hooks must reach the file"
+        );
+
+        // Asserting *where* it fails, not merely that it does. Both the correct code and the
+        // mutant return an error for a directory — the mutant just gets there by trying to rename
+        // a file over it. Only the context distinguishes them.
+        let err = apply(dir.path(), false, |cur| {
+            plan_install(cur, "/usr/local/bin/amb", Mode::Turn, false)
+        })
+        .expect_err("a directory is not a settings file");
+        assert!(
+            matches!(&err, Error::Io { context, .. } if context.contains("reading")),
+            "must fail on the read rather than attempt a write: {err:?}"
         );
     }
 }

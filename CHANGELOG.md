@@ -11,6 +11,75 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **Eight properties of the pure core, over generated input, with no new dependency** (D102).
+  `tests/properties.rs` asserts totality claims no example list can make — `overlaps` is symmetric
+  and reflexive, `quoted` never emits a control character and is idempotent, `redact` is
+  idempotent, `nearest` only ever suggests a name it was given. 20,000 cases, ~0.25 s against a
+  3.3 s suite.
+
+  **`proptest` and `insta` were both evaluated against real defects here and both declined.** The
+  arguments for them were mine and neither survived checking: M17's tie guard already has two
+  fixtures reaching the two-candidate arm, and M24's lesson already shipped as
+  `assert_rendered_shape` with 21 call sites. Eight properties over 200,000 inputs found **zero
+  violations**, so the case rested on future value.
+
+  What decided it: **the generator is the hard part and a framework does not supply one.** The
+  first version of this file left two of its eight properties *vacuous* — `redact` fired zero times
+  in 200,000 runs and nothing parsed as a duration. `any::<String>()` has that problem too, so
+  custom strategies would be the same work in another notation; what a crate adds is shrinking, and
+  with no failures there is nothing to shrink.
+
+  **The coverage floors are the substance.** The test ends by asserting how often each branch was
+  *reached*. Without them a generator that stops producing redactable strings reports success —
+  M17's defect inside the test written to catch it. That happened twice while writing it: mutating
+  `quoted` to pass control characters through **survived**, because the alphabet contained none, so
+  the property guarding D90's forgery attack was asserting nothing. Control characters are now
+  generated and floored, and that mutation reddens with a readable counter-example.
+
+  `delivery::QUOTED_MAX` is `pub` so the test reads the cap instead of transcribing it (M28).
+
+### Added
+
+- **`src/hooks.rs` mutation-tested for the first time — 86/103 viable, and one survivor was dead
+  code** (M39). M27's roll-call named it as the next target: it edits `~/.claude/settings.json`,
+  which configures Claude Code for every project on the machine. 114 mutants, 17 missed, 0 timeout.
+
+  The seventeen were four findings. `our_hook_exes` (6 survivors, including `vec![]`) is the only
+  thing that can see the stale-binary condition D94 records five times, and `doctor`'s tests build
+  their fixtures directly, so the producer ran under no assertion — M37's shape one module out.
+  `read_settings`/`read_raw`/`apply` (8) had no test on any branch of the read path. `quote_exe`
+  (1) is D90's shape: `/Users/o'brien/bin/amb` *is* tested, but for recognition and removability,
+  both of which pass on an unquoted command line — the sibling asserts the quoting and only for a
+  space. `Mode::parse` (1) is the contract check behind `amb install --mode <x>` and its variants
+  are asserted 38 times while the parser never was.
+
+  **`write_settings` was dead** — one definition, zero calls, and `find_unread_fields.py` had been
+  explaining it away for days under its own "passed by reference" advisory, which is true of the
+  other two names it prints and false of this one. Mutation is what separated them. D84 recorded
+  this shape once already, with a different name. Deleted rather than tested: superseded by D99's
+  `apply` cycle, and left in place it is a public writer that skips the lost-update check.
+
+  Five tests added, each verified by applying the exact mutation it was written for.
+
+### Fixed
+
+- **`counts_are_current` counted a peer's untracked scratch file, and the repair made the check
+  unfailable** (M40). `cargo test` compiles every `tests/*.rs`, so an untracked `props_probe.rs`
+  moved the number the docs must quote. Scoping it to `git ls-files "tests/*.rs"` then matched
+  `tests/common/mod.rs` too — a git pathspec `*` crosses `/` — so `--test mod` made cargo exit 101
+  with empty stdout, `actual` became 0, and `if actual:` skipped the comparison and printed
+  success.
+
+  That is `if not tag: return []` in the function directly above the one repaired for it. Caught
+  only by perturbing the guard and watching it fail to redden. Both fixed: files directly under
+  `tests/` only, and a cargo run that reports no tests is now a finding rather than a clean result.
+
+- **`tools/mutants.sh`'s header claimed the suite runs ~145s in the sandbox; it runs 5-11s** (M39).
+  Third rotted constant in that one header — M28 found the other two. The eighteen logged phases
+  are all survivors, which run the suite to completion, so 11s is an upper bound rather than a
+  sample. The relative timeout stays, for M27's load-variance reason rather than the absolute one
+  the header gave.
+
 - **Q8 settled: `amb` stays Claude-Code-only** (D101). Q8 framed this as breadth against the cost of
   a per-vendor hook matrix. The prior question is whether a cross-vendor mechanism exists that could
   be integrated *once*, and that was checkable rather than arguable: MCP cannot push into a running

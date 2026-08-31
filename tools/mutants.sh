@@ -76,6 +76,21 @@ export CARGO_TARGET_DIR="${AMB_MUTANTS_TARGET:-${TMPDIR:-/tmp}/amb-mutants-targe
 # measured baseline, which is the property a constant cannot have, and the baseline itself is then
 # measured rather than raced.
 #
+# **The `~145s` above was not reproduced, and it is the third rotted constant in this header**
+# (M39). On 2026-08-31 `src/hooks.rs` ran with the baseline at `7s build + 5s test`, and the
+# eighteen logged test phases spanned 5-11s. Those eighteen are all *survivors*, which is the
+# strong form of the measurement: a caught mutant fails fast, a survivor runs the suite to the
+# end, so 11s is an upper bound on a full run in the sandbox rather than a sample of quick ones.
+#
+# **What that changes and what it does not.** The relative timeout stays — but not for the reason
+# the paragraph above gives, because the margin under a fixed 180s ceiling was never 81% consumed.
+# It stays for M27's reason, which is independent and still measured: the ceiling is set once from
+# a baseline taken at minute zero, so a machine quiet then and busy at minute twenty times out
+# mutants for reasons that have nothing to do with them. A constant cannot track that. M28 already
+# found two rotted numbers in this header, and the pattern is the part worth carrying — a comment
+# explaining a mechanism rots fastest in the figures it uses to justify itself, because nothing
+# reads them.
+#
 # **It is measured once, at the start, and that is the residual hole (M27).** If the machine is
 # quiet at minute zero and busy at minute twenty, the ceiling is stale and mutants time out for
 # reasons that have nothing to do with them. Measured 2026-08-30, same module and same commit:
