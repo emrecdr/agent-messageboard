@@ -271,6 +271,118 @@ def every_bench_script_is_named(problems=None):
     return out
 
 
+OPEN_QUESTIONS = (ROOT / "docs" / "OPEN-QUESTIONS.md").read_text(encoding="utf-8")
+
+# A claim that questions have been retired. Deliberately tight: `OPEN-QUESTIONS.md` also contains
+# prose *about* the convention ("none should be settled by whoever notices it first", "a settled
+# question is deleted rather than annotated") and long blockquotes narrowing a question that is
+# still open. None of those is a retirement, and a looser pattern reads all of them as one.
+#
+# **The slack sits between the auxiliary and `settled`, and that placement was found the hard
+# way.** The first version required the two words adjacent and promptly refused to recognise the
+# paragraph written to fix the drift it had just reported — which said "have *also* been settled".
+# So the fragile part was never the verb form; it was assuming nobody puts a word in the middle.
+# Enumerating more verb phrases would not have helped, and each one added is a branch no real
+# paragraph exercises.
+#
+# Failing to recognise a retirement is the harmless direction — its questions go unaccounted and
+# rule 4 reports them — but a rule that rejects ordinary English is one people switch off, which
+# `records_are_uniquely_numbered` says of its own legitimate exception. Verified against the real
+# file: exactly the three retirement paragraphs match and nothing else in it does.
+RETIREMENT = re.compile(r"\bQ\d[^.\n]{0,100}?\b(?:was|were|has|have)\b[^.\n]{0,25}?\bsettled\b")
+
+
+def _question_numbers(text):
+    """Question numbers a span names, with `Q1-Q6` expanded to the six it stands for.
+
+    The range form is not decoration. `**Q1-Q6 and Q9 were settled**` is how this file retires
+    seven questions in one sentence, so a parser reading only the two endpoints accounts for
+    three of them and reports four perfectly well-documented questions as lost.
+    """
+    found = {int(n) for n in re.findall(r"\bQ(\d+)\b", text)}
+    for lo, hi in re.findall(r"\bQ(\d+)\s*[\u2013\u2014-]\s*Q?(\d+)\b", text):
+        found.update(range(int(lo), int(hi) + 1))
+    return found
+
+
+def retired_questions_name_their_decision():
+    """A question deleted from `OPEN-QUESTIONS.md` leaves its answer behind, or it is lost.
+
+    That file's convention is to **delete** a settled question rather than annotate it, and until
+    2026-08-31 the net under that convention was `git log`. The history was reset to publish the
+    repository, so the net is gone — the prose of Q1-Q7, Q9 and Q12 survives only in an archive
+    outside this repo. The file says so itself and draws the right conclusion: from now on a
+    deleted question must leave its answer in `DECISIONS.md` rather than trusting `git log`. What
+    it could not do is enforce it, so the convention lived in one sentence that nothing read.
+
+    **It was already broken when that sentence was written, and the sentence is what hid it.** The
+    reset note promises each deleted question "names the decision it became, immediately below".
+    Q12 appears in its own list and is named nowhere below it. Q13 was settled into D98 the same
+    day and does not appear in the file at all. Both answers exist and are correct — D85 and D98 —
+    but neither was reachable from the register that promised them, and the register read as
+    complete because everything it *did* say was true.
+
+    Four rules, and the fourth is the one that fires:
+
+      1. a retirement paragraph names at least one decision,
+      2. every decision it names exists as a `## Dn` heading,
+      3. nothing is called settled while it still carries an open `## Qn` section, and
+      4. **every question number the docs cite is either open or retired by name.**
+
+    Rules 1-3 inspect what is written, so they can only catch a claim somebody made. Rule 4 is the
+    absence check this project keeps having to learn it needs: take the union of every `Qn` any
+    document mentions, subtract the open sections and the retired ones, and report the remainder.
+    Presence checks cannot see a paragraph that was deleted; arithmetic over the numbers can.
+
+    **The residual hole is at the top of the range**, and naming it is cheaper than pretending it
+    is closed. A question created and deleted while no other document ever cited it leaves nothing
+    for rule 4 to subtract, and only the archive can see that. What rule 4 does cover is the case
+    that has actually happened twice here: the answer was written down properly and only the
+    pointer from the register was lost.
+
+    A retirement paragraph this fails to *recognise* fails loudly rather than quietly — its
+    questions go unaccounted and rule 4 reports them. For a pattern match, that is the safe
+    direction to err in.
+    """
+    decisions = (ROOT / "docs" / "DECISIONS.md").read_text(encoding="utf-8")
+    recorded = {int(n) for n in re.findall(r"^## D(\d+) ", decisions, re.M)}
+    still_open = {int(n) for n in re.findall(r"^## Q(\d+) ", OPEN_QUESTIONS, re.M)}
+
+    problems, retired = [], set()
+    for para in re.split(r"\n\s*\n", OPEN_QUESTIONS):
+        if not RETIREMENT.search(para):
+            continue
+        claimed = _question_numbers(para)
+        named = {int(n) for n in re.findall(r"\bD(\d+)\b", para)}
+        retired |= claimed
+        label = ", ".join(f"Q{n}" for n in sorted(claimed))
+        if not named:
+            problems.append(
+                f"OPEN-QUESTIONS.md retires {label} and names no decision — the answer is"
+                " recoverable only from the archive outside this repository"
+            )
+        for d in sorted(named - recorded):
+            problems.append(
+                f"OPEN-QUESTIONS.md sends {label} to D{d}, which is no heading in DECISIONS.md"
+            )
+        for q in sorted(claimed & still_open):
+            problems.append(
+                f"OPEN-QUESTIONS.md calls Q{q} settled and still carries its open `## Q{q}` section"
+            )
+
+    # Rule 4. Every doc, because the citation that proves a question existed is as likely to be in
+    # MEASUREMENTS.md as in DECISIONS.md — Q13's only surviving pointers were one of each.
+    cited = set()
+    for doc in [ROOT / "README.md", ROOT / "CLAUDE.md", *sorted((ROOT / "docs").glob("*.md"))]:
+        cited |= _question_numbers(doc.read_text(encoding="utf-8"))
+    for q in sorted(cited - still_open - retired):
+        problems.append(
+            f"Q{q} is cited in the docs, is not open in OPEN-QUESTIONS.md, and no retirement"
+            " paragraph there says which decision it became"
+        )
+    return problems
+
+
 def checks_can_still_fail():
     """Every check above needs something to examine, and an empty input is not a clean bill of health.
 
@@ -308,6 +420,10 @@ def checks_can_still_fail():
         "measurements in MEASUREMENTS.md": re.findall(
             r"^## M\d+ ", (ROOT / "docs" / "MEASUREMENTS.md").read_text(encoding="utf-8"), re.M
         ),
+        # Rules 1-3 of `retired_questions_name_their_decision` iterate over these and are dead
+        # without one. Rule 4 still fires on an empty file — loudly, on every question ever
+        # deleted — so the check does not go fully vacuous, but three quarters of it would.
+        "retirement claims in OPEN-QUESTIONS.md": RETIREMENT.findall(OPEN_QUESTIONS),
         "steps in tools/verify.sh": re.findall(
             r'^\s*run "', (ROOT / "tools" / "verify.sh").read_text(encoding="utf-8"), re.M
         ),
@@ -329,6 +445,7 @@ def main():
         + records_are_uniquely_numbered()
         + unreleased_is_honest()
         + the_gate_and_ci_run_the_same_checks()
+        + retired_questions_name_their_decision()
         + checks_can_still_fail()
         + every_bench_script_is_named()
     )

@@ -22,6 +22,18 @@ D15 (database location), D16 (findings inbox) and D19 (observed-claim granularit
 `PostToolUse` output *is* injected into the model's context. It is now D25, and mid-turn delivery
 ships. The `monitor` mode it asked about is therefore a nicety rather than load-bearing.
 
+**Q12 and Q13 have also been settled and deleted, and until 2026-08-31 neither was recorded here.**
+They are now `DECISIONS.md` D85 (`notes.content_hash` is dropped, and the measurement Q12 asked for
+could not have answered it) and D98 (a message body is stored exactly as written, closing Q13 on
+data).
+
+> **The reset note above lists Q12 among the deleted and names no decision for it, and Q13 is not
+> in that list at all.** Both answers were written down properly and both are correct; what went
+> missing was the pointer from the register that promises them — in the same paragraph that
+> promises them. Everything that note *does* say is true, which is exactly why it read as complete.
+> `tools/check_docs.py` now does the arithmetic instead of trusting the sentence, and found both on
+> its first run (M38).
+
 ---
 
 ## Q8 · Do we support non-Claude agent tools, and when?

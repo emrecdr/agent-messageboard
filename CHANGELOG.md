@@ -11,6 +11,28 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`check_docs.py` enforces `OPEN-QUESTIONS.md`'s deletion convention** (M38). That file retires a
+  settled question by deleting it, and `git log` was the net under that until the history was reset
+  to publish the repository. The file says so and draws the right conclusion — a deleted question
+  must leave its answer in `DECISIONS.md` — but the conclusion lived in one sentence nothing read.
+
+  **It was already unhonoured, and the sentence asserting it is where it broke.** The reset note
+  lists Q12 among the deleted and promises each of them "names the decision it became, immediately
+  below"; Q12 is named nowhere below. Q13 was settled into D98 the same day and does not appear in
+  the file at all. Both answers exist and are correct (D85, D98); what was lost is the pointer
+  from the register that promises them. The check proposed for this, "every `Qn was settled` line names an
+  existing D-number", passes on that file: a convention whose content is an absence cannot be
+  checked by reading what is present.
+
+  So the load-bearing rule is arithmetic, not a text search: the union of every `Qn` any doc cites,
+  minus the open sections, minus the ones a retirement paragraph names, must be empty. It reported
+  Q12 and Q13 on its first run. Three supporting rules — names a decision, that decision exists,
+  nothing settled while still open — were all green on the broken file. Each of the four verified
+  by breaking it, plus a `checks_can_still_fail` population so three of them cannot go vacuous.
+
+  Residual hole, named rather than closed: a question deleted while no other document ever cited it
+  leaves nothing to subtract, and only the archive outside this repository can see that.
+
 - **`amb doctor` detects `amb` hooks registered in more than one settings scope** (D77 amended).
   D77 fixed a duplicate by hand and said plainly that nothing would catch the next one. The hazard
   is not tidiness: duplicated hooks make an injection **cost twice and count once**, because

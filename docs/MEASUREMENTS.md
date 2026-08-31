@@ -3167,3 +3167,82 @@ not exist. With it, discarding the count reddens.
 The fixture is built with `concat!`, because `tools/check_secret_literals.py` refuses a contiguous
 credential shape in tracked source and **testing a redactor means writing one** — the permanent
 condition that tool's own header records.
+
+---
+
+## M38 · The convention that a retired question names its decision, and the sentence asserting it was already false
+
+**2026-08-31.** `docs/OPEN-QUESTIONS.md` retires a settled question by **deleting** it, and until
+the history was reset to publish the repository, `git log` was the net under that. The reset
+destroyed it: the prose of Q1–Q7, Q9 and Q12 now exists only in an archive outside the repo. The
+file records this honestly and draws the right conclusion — a question deleted from here must
+leave its answer in `DECISIONS.md`. What it could not do is enforce it, so the convention lived in
+one sentence that nothing read.
+
+The check proposed for this was *"every `Qn was settled` line names at least one existing
+D-number"*. **That check passes on the file as it stood.** Both retirement paragraphs name
+decisions, and every decision they name exists. It would have shipped green.
+
+### What was actually wrong, and why a presence check cannot see it
+
+The reset note lists Q12 among the deleted and promises that *"each of those questions names the
+decision it became, immediately below"*. **Q12 is named nowhere below it.** Q13 was settled into
+D98 the same day and does not appear in the file at all — not in the note's list, not in a
+retirement paragraph, nowhere.
+
+Both answers exist and both are correct: D85 dropped `notes.content_hash` and its heading says
+outright that it closes Q12; D98 closed Q13 on data. Nothing was lost. What went missing was the
+**pointer from the register that promises them**, and it went missing inside the paragraph doing
+the promising. Everything that paragraph *does* say is true, which is exactly why it reads as
+complete — the same shape as a false comment being worse than an absent one, applied to a
+convention rather than to a mechanism.
+
+A convention whose entire content is an absence cannot be checked by reading what is present. So
+the check is arithmetic over the numbers rather than a search for text:
+
+| | |
+|---|---|
+| cited anywhere in the docs | Q1–Q13 |
+| open `## Qn` sections | Q8, Q10, Q11 |
+| named by a retirement paragraph | Q1–Q7, Q9 |
+| **unaccounted** | **Q12, Q13** |
+
+Four rules ship. Three of them — names a decision, the decision exists, nothing is settled while
+still open — inspect claims somebody made, and all three were green on the broken file. The fourth
+takes the union of every `Qn` any document cites, subtracts the open sections and the retired
+ones, and reports the remainder. It is the only one that fired, and it fired before anything was
+fixed.
+
+**Every doc, not only `DECISIONS.md`.** The citation proving a question existed is as likely to be
+in `MEASUREMENTS.md`; Q13's only two surviving pointers were one of each.
+
+### The residual hole is at the top of the range, and it is named rather than closed
+
+A question created and deleted while no other document ever cited it leaves nothing for rule 4 to
+subtract. Only the archive can see that. What rule 4 covers is the case that has now happened
+twice here — the answer written down properly, and only the pointer lost.
+
+### The pattern was brittle in a place the verb form is not
+
+The first version required `(?:was|were) settled` with the two words adjacent, and **it refused to
+recognise the paragraph written to fix the drift it had just reported.** That paragraph reads
+"Q12 and Q13 have *also* been settled". The token that broke the match was an adverb, not a verb
+form — so enumerating more verb phrases would not have helped, and each one added is a branch no
+real paragraph exercises. The slack now sits between the auxiliary and `settled`, where writers
+put adverbs. Verified against the real file: exactly the three retirement paragraphs match, and
+nothing else in it does — not the convention prose ("none should be settled by whoever notices it
+first", "a settled question is deleted rather than annotated"), and not Q10's blockquotes.
+
+Failing to recognise a retirement is the harmless direction, because its questions then go
+unaccounted and rule 4 reports them. But a rule that rejects ordinary English is one people switch
+off, which `records_are_uniquely_numbered` already says of its own legitimate exception.
+
+### Verified by breaking each rule
+
+All four reddened against the real file, each perturbation applied and restored inside one process
+with the file's digest compared before and after. Rule 1 by deleting the D-number from Q7's
+paragraph; rule 2 by pointing it at D999; rule 3 by adding Q8, which still has an open section;
+rule 4 by deleting the paragraph that records Q12 and Q13. Removing every retirement paragraph
+fires the `checks_can_still_fail` canary *and* rule 4 on all ten retired questions at once —
+three quarters of the check goes vacuous with no population, and the quarter that does not is the
+quarter that matters.
