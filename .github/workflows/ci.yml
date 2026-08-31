@@ -1,0 +1,64 @@
+# THIS WORKFLOW HAS NEVER RUN.
+#
+# `git remote -v` in this repository is empty. GitHub Actions executes on a remote; with no
+# remote there is nothing to execute it, and there never has been. It is committed anyway so that
+# adding a remote turns CI on rather than starting a design task — but the first line of this file
+# says so out loud, because a workflow file that looks like coverage and provides none is exactly
+# the shape D45, D51 and D58 record: a mechanism that cannot fire, whose silence reads as success.
+#
+# **Until a remote exists, `tools/verify.sh` is the gate that actually runs**, via
+# `git config core.hooksPath .githooks`. This file duplicates it so the two cannot disagree about
+# what "verified" means.
+#
+# What this adds over the local gate, on the day it does run: Linux. Every check in this project
+# has only ever been run on macOS, and `libc::kill`, the three `HOME` reads, and the `statfs`
+# network-mount guard are all platform-specific.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both, deliberately. The lint and test surface is genuinely platform-dependent here:
+        # liveness is `libc::kill`, and `db::guard_location` compiles a different branch per OS.
+        # A single-platform matrix would leave the `cfg`-gated half unbuilt and unlinted.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `tools/check_docs.py` compares `[Unreleased]` against commits since the last tag, so
+          # it needs history and tags, not the default shallow clone.
+          fetch-depth: 0
+
+      # No `toolchain:` input on purpose — with none given, this action installs exactly what
+      # `rust-toolchain.toml` pins (1.98.0) and the components it lists (rustfmt, clippy). The pin
+      # is load-bearing: that file is the only reason `cargo` resolves in this directory at all on
+      # the development machine, which has no rustup default. Naming a version here would let CI
+      # and local builds drift, which is the thing the pin exists to prevent.
+      # Caching (Swatinem/rust-cache) is on by default.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test
+
+      # Linux only: these are platform-independent, and running them twice would report every
+      # drift twice.
+      - name: documentation audit
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python3 tools/check_docs.py
+          python3 tools/find_unread_fields.py

@@ -1,0 +1,106 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Rust build output
+# ──────────────────────────────────────────────────────────────────────────────
+# This machine sets a shared `target-dir` in ~/.cargo/config.toml, so a local ./target may
+# never appear — ignored anyway so this file stays correct on a machine that doesn't.
+/target
+**/*.rs.bk
+*.pdb
+
+# ──────────────────────────────────────────────────────────────────────────────
+# amb's own runtime state — never commit a board
+# ──────────────────────────────────────────────────────────────────────────────
+# The real board lives at ~/.agent-messageboard/board.db, outside every repo (D11, D15), so in
+# normal use nothing here ever appears. This guard is for the one-keystroke accident: every doc
+# and test drives the binary through `AMB_DB=...`, and `AMB_DB=./t.db` drops a board straight
+# into the working tree. Committing one is worse than useless — DESIGN.md: a lease in git
+# history "reads as current". Claims carry a wall-clock `expires_at` (D13), so a checked-in
+# board hands a reader claims that expired before they cloned it.
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# `amb install` writes this beside any settings.json it edits, including under a test HOME.
+*.amb-backup
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Verification tooling
+# ──────────────────────────────────────────────────────────────────────────────
+# CLAUDE.md makes mutation testing a standing convention ("after adding a guard, delete it and
+# watch the test go red"). cargo-mutants writes its scratch tree and report here.
+mutants.out/
+mutants.out.old/
+
+# cargo-llvm-cov / grcov
+*.profraw
+*.profdata
+/coverage
+lcov.info
+
+# ──────────────────────────────────────────────────────────────────────────────
+# bench/ — the Python startup and queue harnesses behind MEASUREMENTS.md
+# ──────────────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Editors and OS
+# ──────────────────────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# ──────────────────────────────────────────────────────────────────────────────
+# devt plugin (carried over from the devt-generated ignore file)
+# ──────────────────────────────────────────────────────────────────────────────
+# workflow state (recursive — catches sub-tree devt invocations)
+**/.devt/state/
+# agent persistent memory (per-project)
+.claude/agent-memory/
+# memory FTS5 index (regenerable from the markdown beside it)
+.devt/memory/index.db
+# memory auto-index debounce marker (transient)
+.devt/memory/.auto-index-stamp
+# MCP tool-call trace (recursive)
+**/.devt/memory/_mcp-trace.jsonl
+# memory export bundles (transient — share through an explicit channel)
+.devt/memory/export-*.json
+
+# ──────────────────────────────────────────────────────────────────────────────
+# graphify — entirely derived from src/
+# ──────────────────────────────────────────────────────────────────────────────
+# graph.json and graph.html are ~944K together, roughly 10x all the hand-written source, and
+# both are regenerated from src/ by graphify. Tracking them makes every source edit produce an
+# unreviewable diff, and a graph that drifts silently out of date is worse than no graph.
+# Regenerate with /graphify.
+#
+# To keep the graph for fresh clones instead — so the graphify MCP server in .mcp.json resolves
+# without a regen — replace this line with `graphify-out/cache/` + `graphify-out/manifest.json`.
+graphify-out/
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Deliberately NOT ignored
+# ──────────────────────────────────────────────────────────────────────────────
+# Listed because an un-ignored file looks exactly like a forgotten one, and these get
+# "helpfully" fixed otherwise.
+#
+#   Cargo.lock          committed. `amb` is a binary with `publish = false`; applications commit
+#                       their lockfile so a build is reproducible. Not a library.
+#   rust-toolchain.toml committed. rustup has no global default on this machine, so this file is
+#                       the only reason `cargo` resolves inside this directory at all.
+#   .devt/rules/        committed. Shared conventions, not local state.
+#   .claude/settings.json, .mcp.json
+#                       committed. Project config, no secrets and no absolute paths.
+#   src/schema.sql      committed. It is source, not output — `*.db` above must never grow to
+#                       cover `*.sql`.
+
+# Claude Code local settings — per-machine hook config, deliberately not shared.
+# `.claude/settings.json` above IS committed (project config); this one is the local override
+# and carries absolute binary paths, so it must never be.
+.claude/settings.local.json

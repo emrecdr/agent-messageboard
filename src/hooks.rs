@@ -1,0 +1,1539 @@
+//! Delivery hooks: planning the edit, and applying it safely.
+//!
+//! Hooks are how an agent receives mail without remembering to look (`DECISIONS.md` D9). They
+//! are installed once per machine into `~/.claude/settings.json`.
+//!
+//! # Why the transform is a pure function
+//!
+//! That file configures Claude Code for *every* project on the machine. Corrupting it does not
+//! break `amb`; it breaks the user's entire tool. So the JSON edit is
+//! [`plan_install`]/[`plan_uninstall`] — pure, total, and exhaustively testable with no
+//! filesystem in sight — and everything touching disk is a thin shell around them.
+
+use crate::error::{Error, Result, io};
+use serde_json::{Map, Value, json};
+use std::path::{Path, PathBuf};
+
+/// How the delivery hooks are wired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// `SessionStart` only: mail waiting when a session begins.
+    Session,
+    /// `SessionStart` + `Stop`: also at every turn boundary. The portable floor.
+    Turn,
+    /// `Turn`, plus a blocking `amb watch` for seconds-latency delivery.
+    Monitor,
+}
+
+impl Mode {
+    /// The hook events this mode installs.
+    ///
+    /// `Stop` rather than `UserPromptSubmit`, deliberately: the latter blocks the user's turn on
+    /// a 30 s timeout, so a hung `amb` would hang the human. `Stop` cannot (D9).
+    pub fn events(self) -> &'static [&'static str] {
+        match self {
+            Mode::Session => &["SessionStart"],
+            // PostToolUse is what makes claims *observed* rather than declared (D14): the hook
+            // sees every Edit and Write, so an agent never has to remember `amb claim`.
+            Mode::Turn | Mode::Monitor => &["SessionStart", "Stop", "PostToolUse"],
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Mode::Session => "session",
+            Mode::Turn => "turn",
+            Mode::Monitor => "monitor",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "session" => Some(Mode::Session),
+            "turn" => Some(Mode::Turn),
+            "monitor" => Some(Mode::Monitor),
+            _ => None,
+        }
+    }
+}
+
+/// Timeout on each hook, in seconds.
+///
+/// Small on purpose. `amb` costs ~3 ms (`MEASUREMENTS.md` M5), so anything approaching this
+/// means something is wrong, and the right response is for the hook to be killed rather than to
+/// keep a session waiting.
+const HOOK_TIMEOUT_SECS: u64 = 5;
+
+/// The outcome of planning an edit. `settings` is the file's new content.
+#[derive(Debug, Clone)]
+pub struct Plan {
+    pub settings: Value,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+impl Plan {
+    /// True when applying this plan would change nothing.
+    ///
+    /// **`added` and `removed` are trustworthy here only because [`settle`] clears them when the
+    /// resulting document is byte-identical to the one it started from.** On their own they lied:
+    /// [`plan_install`] strips its own entries and re-adds them unconditionally, so `added` was
+    /// always populated and this was unreachable.
+    ///
+    /// The consequence was not cosmetic. `report_plan` writes whenever a plan is not a no-op, and
+    /// [`write_settings`] takes a fresh backup on every write — so a second `amb install`
+    /// overwrote the only pre-`amb` backup with a post-`amb` copy, destroying the thing the
+    /// backup exists for. Reproduced against a real settings file (D29).
+    ///
+    /// Found by a peer session on the board, which is the tool doing its job.
+    pub fn is_noop(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+}
+
+/// Settle a plan against the document it started from.
+///
+/// Defining "changed" as "the bytes differ" is the only definition that cannot drift from what
+/// applying the plan would actually do.
+fn settle(
+    settings: Value,
+    mut added: Vec<String>,
+    mut removed: Vec<String>,
+    before: &Value,
+) -> Plan {
+    if settings == *before {
+        added.clear();
+        removed.clear();
+    }
+    Plan {
+        settings,
+        added,
+        removed,
+    }
+}
+
+/// The file name our installed hook command invokes.
+const EXE_NAME: &str = "amb";
+
+/// Whether a hook entry is one of ours.
+///
+/// Matched on the command string rather than a marker field, because Claude Code owns this
+/// schema and may reject unknown keys.
+fn is_ours(entry: &Value) -> bool {
+    entry
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(command_is_ours)
+}
+
+/// Whether a hook command line invokes *our* binary — the pure matching rule.
+///
+/// **Matched on the executable, at a path boundary.** The previous rule was
+/// `c.contains("amb") && c.contains(" hook ")`, which claims
+/// `/Users/lambert/bin/tool hook start` — so `amb uninstall` deleted a hook belonging to someone
+/// else, and `amb install` deleted it too, since installing removes ours everywhere first. This
+/// file configures Claude Code for *every* project on the machine; a false positive here costs a
+/// stranger their tooling, which is a far worse failure than ours not being recognised (D28).
+pub fn command_is_ours(command: &str) -> bool {
+    // Split at the *last* ` hook `, so an install path that itself contains the word still
+    // resolves: `/Users/x/my hook tools/amb hook turn` must find `amb`, not `my`.
+    let Some((exe, mode)) = command.trim().rsplit_once(" hook ") else {
+        return false;
+    };
+    // A mode is one bare token. Not checked against the known set, so a mode added in a later
+    // version is still recognised as ours and can be uninstalled by an older binary.
+    let mode = mode.trim();
+    if mode.is_empty() || mode.split_whitespace().count() != 1 {
+        return false;
+    }
+    // The `.exe` arm is derived rather than spelled out, so renaming EXE_NAME cannot leave a
+    // stale second name behind that still matches somebody else's hook.
+    std::path::Path::new(unquote(exe))
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n == EXE_NAME || n.strip_suffix(".exe") == Some(EXE_NAME))
+}
+
+/// Strip one layer of surrounding shell quotes, undoing [`quote_exe`].
+fn unquote(s: &str) -> &str {
+    let s = s.trim();
+    for q in ['\'', '"'] {
+        if let Some(inner) = s.strip_prefix(q).and_then(|r| r.strip_suffix(q)) {
+            return inner;
+        }
+    }
+    s
+}
+
+/// Quote an executable path for the shell Claude Code runs hook commands through.
+///
+/// Without this, an install path containing a space produces a command line that runs the wrong
+/// thing — silently, since a hook that fails is a hook that says nothing.
+fn quote_exe(exe: &str) -> String {
+    if exe
+        .bytes()
+        .any(|b| b.is_ascii_whitespace() || b == b'\'' || b == b'"')
+    {
+        // Single quotes are literal in POSIX shells; an embedded one is closed, escaped, reopened.
+        format!("'{}'", exe.replace('\'', r"'\''"))
+    } else {
+        exe.to_string()
+    }
+}
+
+fn hook_entry(exe: &str, event_arg: &str) -> Value {
+    json!({
+        "type": "command",
+        "command": format!("{} hook {event_arg}", quote_exe(exe)),
+        "timeout": HOOK_TIMEOUT_SECS,
+    })
+}
+
+/// The argv token the memory hook is invoked with.
+///
+/// A *separate entry*, never an extra event on the delivery command. Hook timeouts are per entry,
+/// so this is what keeps a memory layer that hangs from taking mail delivery with it — the
+/// structural half of D9's guarantee rather than a discipline someone has to remember (D41).
+/// `command_is_ours` matches on `<exe> hook <one-token>`, so an older binary still recognises and
+/// can uninstall this without knowing what "memory" means.
+pub const MEMORY_ARG: &str = "memory";
+
+/// Tool calls the memory hook is asked about.
+///
+/// Narrowed here as well as in `memory::SKIP_TOOLS`, and the redundancy is deliberate: this
+/// bounds how often the process is spawned at all, while the skip list is what makes a
+/// hand-edited or absent matcher harmless rather than a hook running on every tool call.
+const MEMORY_TOOLS: &str = "Read|Edit|Write|NotebookEdit";
+
+/// The events memory registers on, with the matcher each needs.
+///
+/// `PreToolUse` over `PostToolUse`: the point is to say what is known about a file *before* it is
+/// opened, which is the strictest form of scoping the injection to its consumer. At
+/// `SessionStart` the relevant file is a guess; here it is stated.
+const MEMORY_EVENTS: &[(&str, Option<&str>)] = &[
+    ("SessionStart", None),
+    ("PreToolUse", Some(MEMORY_TOOLS)),
+    // Phase 4b's cheap half. Failures are disproportionately what is worth remembering, and
+    // capturing one needs no model, no transcript and no blocking — unlike 4a, which is
+    // deliberately not installed.
+    ("PostToolUseFailure", None),
+];
+
+/// Plan the installation of delivery hooks into an existing settings document.
+///
+/// Idempotent: installing twice adds nothing the second time. Non-destructive: other tools'
+/// hooks in the same events are preserved, and only our own entries are replaced.
+pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Plan {
+    let mut settings = existing.clone();
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+
+    if !settings.is_object() {
+        settings = Value::Object(Map::new());
+    }
+    // Unreachable in practice — `settings` was just forced to an object — but expressed as a
+    // fallible match rather than an unwrap, because this runs against a file we did not write.
+    let Some(root) = settings.as_object_mut() else {
+        return Plan {
+            settings,
+            added,
+            removed,
+        };
+    };
+    let hooks = root
+        .entry("hooks")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !hooks.is_object() {
+        *hooks = Value::Object(Map::new());
+    }
+    let Some(hooks) = hooks.as_object_mut() else {
+        return Plan {
+            settings,
+            added,
+            removed,
+        };
+    };
+
+    // Remove ours everywhere first, so switching modes cannot leave a stale event behind.
+    removed.extend(strip_ours(hooks));
+
+    let arg = mode.as_str();
+    for event in mode.events() {
+        // The same argument for every event: the hook learns which event fired from
+        // `hook_event_name` in its stdin payload, so argv carries only the mode.
+        push_entry(hooks, event, None, hook_entry(exe, arg), &mut added, "");
+    }
+    if memory {
+        for (event, matcher) in MEMORY_EVENTS {
+            push_entry(
+                hooks,
+                event,
+                *matcher,
+                hook_entry(exe, MEMORY_ARG),
+                &mut added,
+                " (memory)",
+            );
+        }
+    }
+
+    // A removal that is immediately re-added is not a change worth reporting. Matched exactly,
+    // which only works because `strip_ours` labels a memory entry differently from a delivery
+    // one: re-adding `SessionStart` must not silence the removal of `SessionStart (memory)`.
+    // Each removal cancels at most *one* addition, so removing two entries under an event and
+    // re-adding one still reports the difference.
+    let mut available = added.clone();
+    removed.retain(|e| match available.iter().position(|a| a == e) {
+        Some(i) => {
+            available.remove(i);
+            false
+        }
+        None => true,
+    });
+    settle(settings, added, removed, existing)
+}
+
+/// Remove every entry belonging to us, returning one label per entry actually removed.
+///
+/// **One copy, because install and uninstall had two.** They were identical loops, and the
+/// labelling below is the kind of change that gets applied to one of them and not the other.
+///
+/// Labels distinguish `SessionStart` from `SessionStart (memory)` because both live under the
+/// same event. Reporting only the event name meant `amb install` (without `--memory`) said it
+/// removed a `PreToolUse` hook and stayed silent about the `SessionStart` memory entry it also
+/// took out — a summary that understates what was done, in exactly the area D29 was about.
+fn strip_ours(hooks: &mut Map<String, Value>) -> Vec<String> {
+    let mut removed = Vec::new();
+    for (event, matchers) in hooks.iter_mut() {
+        let Some(list) = matchers.as_array_mut() else {
+            continue;
+        };
+        for matcher in list.iter_mut() {
+            if let Some(inner) = matcher.get_mut("hooks").and_then(Value::as_array_mut) {
+                inner.retain(|e| {
+                    if is_ours(e) {
+                        removed.push(label_of(event, e));
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+        }
+        // A matcher whose only hook was ours is now an empty shell; leaving it behind would
+        // accumulate one per install.
+        list.retain(|m| {
+            m.get("hooks")
+                .and_then(Value::as_array)
+                .is_none_or(|h| !h.is_empty())
+        });
+    }
+    removed
+}
+
+/// `SessionStart` or `SessionStart (memory)`, decided by the entry's own command line.
+/// Whether a hook entry is the *memory* half rather than the delivery half.
+///
+/// One definition, because two callers now ask: the installer, to label a removal, and
+/// [`memory_hooks`], to answer whether the layer is running at all. A second copy of this rule
+/// could drift and make the receipt confidently wrong about its own instrumentation.
+fn is_memory_entry(entry: &Value) -> bool {
+    entry
+        .get("command")
+        .and_then(Value::as_str)
+        .and_then(|c| c.trim().rsplit_once(" hook "))
+        .is_some_and(|(_, mode)| mode.trim() == MEMORY_ARG)
+}
+
+/// Whether the memory hooks are installed, as far as `amb` can tell.
+///
+/// **`Unknown` is a distinct state and must stay one.** A settings file that cannot be read or
+/// parsed is not evidence that memory is off, and collapsing it into `Incomplete` would replace
+/// one confidently wrong reading with another.
+///
+/// **`Incomplete` carries the events, and covers "some" as well as "none".** The first version had
+/// a bare `Absent` with the event list passed alongside it, which let a partial install print
+/// `NOT INSTALLED` — false, and false in the direction that makes someone reinstall rather than
+/// look. Whatever describes the state has to travel with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookState {
+    Installed,
+    Incomplete { missing: Vec<String> },
+    Unknown,
+}
+
+impl HookState {
+    /// The line a human reads above the counts, or `None` when there is nothing to warn about.
+    ///
+    /// **In the library because it is a statement about the data, not a rendering choice.** The
+    /// first version decided `installed` versus `absent` inside `src/main.rs`, which is the one
+    /// file this project keeps free of logic precisely so decisions stay testable — and it was
+    /// untested, in the commit whose whole subject was a decision made without checking its
+    /// premise.
+    pub fn caveat(&self) -> Option<String> {
+        match self {
+            HookState::Installed => None,
+            HookState::Incomplete { missing } => Some(format!(
+                "memory hooks: {} — missing {}. The counts that follow predate this and are not \
+                 evidence about the corpus; run `amb install --memory` to restore them",
+                if missing.len() == MEMORY_EVENTS.len() {
+                    "NOT INSTALLED"
+                } else {
+                    "PARTIALLY INSTALLED"
+                },
+                missing.join(", ")
+            )),
+            HookState::Unknown => Some(
+                "memory hooks: unknown — ~/.claude/settings.json could not be read, so whether \
+                 injection is running is unverified"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// A stable token for `--json`, so a machine consumer can branch on this without parsing prose.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HookState::Installed => "installed",
+            HookState::Incomplete { .. } => "incomplete",
+            HookState::Unknown => "unknown",
+        }
+    }
+}
+
+/// The memory hook state of a settings document. Pure, so every case is testable without a
+/// filesystem — including the one that matters, a settings file with delivery hooks and no memory
+/// ones, which is the state this machine was actually found in.
+pub fn memory_state(settings: &Value) -> HookState {
+    let (_, missing) = memory_hooks(settings);
+    if missing.is_empty() {
+        HookState::Installed
+    } else {
+        HookState::Incomplete { missing }
+    }
+}
+
+/// Which memory hook events are registered to our binary, and which are missing.
+///
+/// **This exists because a withdrawal condition could not tell "not working" from "not running".**
+/// D59 withdraws the injection layer when the cite ratio stays flat. The same flat zero is
+/// produced by a layer that is installed and useless and by one that was never installed — and
+/// the second happened: `install --memory` describes the *complete* desired hook state, so a
+/// later `amb install` for an unrelated mode change removed all three memory entries, correctly
+/// and as documented. The removals were printed. Nobody was reading. Weeks of "evidence"
+/// accumulated from a feature that was switched off, and D59 was measurably approaching a verdict
+/// on it.
+pub fn memory_hooks(settings: &Value) -> (Vec<String>, Vec<String>) {
+    let mut installed = Vec::new();
+    let mut missing = Vec::new();
+    let hooks = settings.get("hooks").and_then(Value::as_object);
+    for (event, _) in MEMORY_EVENTS {
+        let present = hooks
+            .and_then(|h| h.get(*event))
+            .and_then(Value::as_array)
+            .is_some_and(|matchers| {
+                matchers.iter().any(|m| {
+                    m.get("hooks")
+                        .and_then(Value::as_array)
+                        .is_some_and(|inner| inner.iter().any(|e| is_ours(e) && is_memory_entry(e)))
+                })
+            });
+        if present {
+            installed.push((*event).to_string());
+        } else {
+            missing.push((*event).to_string());
+        }
+    }
+    (installed, missing)
+}
+
+fn label_of(event: &str, entry: &Value) -> String {
+    if is_memory_entry(entry) {
+        format!("{event} (memory)")
+    } else {
+        event.to_string()
+    }
+}
+
+/// Append one entry under an event, creating the event's list if it is missing or malformed.
+fn push_entry(
+    hooks: &mut Map<String, Value>,
+    event: &str,
+    matcher: Option<&str>,
+    entry: Value,
+    added: &mut Vec<String>,
+    label: &str,
+) {
+    let list = hooks
+        .entry(event)
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !list.is_array() {
+        *list = Value::Array(Vec::new());
+    }
+    let Some(list) = list.as_array_mut() else {
+        return;
+    };
+    let mut wrapper = json!({ "hooks": [entry] });
+    // Only written when there is one. An absent matcher and `"*"` mean the same thing to the
+    // platform, and the delivery hooks have always been written without one.
+    if let Some(m) = matcher
+        && let Some(obj) = wrapper.as_object_mut()
+    {
+        obj.insert("matcher".to_string(), Value::String(m.to_string()));
+    }
+    list.push(wrapper);
+    added.push(format!("{event}{label}"));
+}
+
+/// Plan the removal of every hook entry belonging to us, leaving other tools' alone.
+/// The two fields every file-scoped hook reads out of a Claude Code payload.
+///
+/// **One copy.** Three call sites in `src/main.rs` each dug `tool_name` and
+/// `tool_input.file_path` out of the same `Value` with the same
+/// `.and_then(Value::as_str).unwrap_or_default()` shape, which is three places to keep in step
+/// with a schema this project does not own. Absent or wrongly-typed fields degrade to
+/// `("", None)`, never to a panic: this runs inside somebody else's session and D9's guarantee is
+/// that mail delivery never breaks one.
+pub fn tool_and_file(input: &Value) -> (&str, Option<&str>) {
+    let tool = input
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let file = input
+        .get("tool_input")
+        .and_then(|t| t.get("file_path"))
+        .and_then(Value::as_str);
+    (tool, file)
+}
+
+/// Every hook entry that belongs to us, as `(event, executable)`.
+///
+/// **The executable, specifically, and that is the point.** [`command_is_ours`] matches on the
+/// file *name* so `uninstall` removes our hooks wherever they were installed from (D28) — correct
+/// for uninstall, and exactly why nothing notices a hook pointing at a *different, older* `amb`.
+/// That is the stale-binary failure this project has hit four times: manual commands work
+/// perfectly while every hook on the machine runs last week's build. [`HookState`] cannot see it
+/// either, because a stale binary is still "ours". Returning the path is what lets `doctor`
+/// compare it against the build that is running.
+pub fn our_hook_exes(settings: &Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let Some(hooks) = settings.get("hooks").and_then(Value::as_object) else {
+        return out;
+    };
+    for (event, list) in hooks {
+        let Some(matchers) = list.as_array() else {
+            continue;
+        };
+        for m in matchers {
+            let Some(inner) = m.get("hooks").and_then(Value::as_array) else {
+                continue;
+            };
+            for entry in inner {
+                if !is_ours(entry) {
+                    continue;
+                }
+                if let Some(cmd) = entry.get("command").and_then(Value::as_str)
+                    && let Some((exe, _)) = cmd.trim().rsplit_once(" hook ")
+                {
+                    out.push((event.clone(), unquote(exe).to_string()));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+pub fn plan_uninstall(existing: &Value) -> Plan {
+    let mut settings = existing.clone();
+    let mut removed = Vec::new();
+
+    if let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) {
+        removed.extend(strip_ours(hooks));
+        let empty: Vec<String> = hooks
+            .iter()
+            .filter(|(_, v)| v.as_array().is_some_and(|a| a.is_empty()))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in empty {
+            hooks.remove(&k);
+        }
+    }
+    // Drop a `hooks` key that we emptied. An empty hooks object means nothing, and leaving it
+    // behind makes uninstall non-reversible — the file would never return to its original shape.
+    let now_empty = settings
+        .get("hooks")
+        .and_then(Value::as_object)
+        .is_some_and(serde_json::Map::is_empty);
+    if now_empty && let Some(root) = settings.as_object_mut() {
+        root.remove("hooks");
+    }
+    settle(settings, Vec::new(), removed, existing)
+}
+
+/// The settings file the hooks are installed into.
+pub fn settings_path() -> Result<PathBuf> {
+    let home = std::env::var("HOME").map_err(|_| Error::NoIdentity)?;
+    Ok(PathBuf::from(home).join(".claude").join("settings.json"))
+}
+
+/// Read a settings document, treating an absent file as an empty one.
+pub fn read_settings(path: &Path) -> Result<Value> {
+    match std::fs::read_to_string(path) {
+        Ok(s) if s.trim().is_empty() => Ok(json!({})),
+        Ok(s) => serde_json::from_str(&s).map_err(|source| Error::Json {
+            context: path.display().to_string(),
+            source,
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+        Err(source) => Err(Error::Io {
+            context: format!("reading {}", path.display()),
+            source,
+        }),
+    }
+}
+
+/// An exclusive hold on `~/.claude/settings.json` for the length of a read-modify-write.
+///
+/// Dropping it releases the lock, so the guard's lifetime *is* the critical section.
+pub struct SettingsLock {
+    /// Held for its `Drop`. The lock releases when the descriptor closes.
+    _file: std::fs::File,
+}
+
+/// Whether the lock was actually taken, or the reason it was not.
+///
+///
+/// **Reported rather than swallowed.** A filesystem without working advisory locks still gets the
+/// install; what it does not get is a silent claim of safety. `restrict` swallows its failures for
+/// the same class of reason, but this one is user-invoked, so there is somebody present to read it.
+pub enum LockState {
+    Held(SettingsLock),
+    Unavailable(String),
+}
+
+/// The lock file guarding the settings read-modify-write (D99).
+///
+/// A sibling rather than `settings.json` itself, because the write path replaces that file by
+/// `rename`: a lock on the old inode says nothing about the new one, and the second process would
+/// hold a descriptor for a file no longer at that path.
+const LOCK_FILE: &str = ".amb-settings.lock";
+
+/// Take the settings lock, blocking until it is free.
+///
+/// **The critical section is read + plan + write, not the write alone** (D99). `write_settings`
+/// was already atomic — temp file plus `rename`, and 540 measured trials produced zero corrupt
+/// files (M31). What was unguarded is the *cycle*: read at T, decide, write at T+ε, with another
+/// writer free to land in between. Measured on this machine, that lost a third party's setting in
+/// **38 of 540** runs and amb's **own hooks in 8**, the second being a silent stop to mail
+/// delivery.
+///
+/// `File::lock` is `std` since Rust 1.89 and this crate pins 1.98, so this costs no dependency.
+pub fn lock_settings(path: &Path) -> LockState {
+    let Some(dir) = path.parent() else {
+        return LockState::Unavailable("settings path has no parent directory".into());
+    };
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        return LockState::Unavailable(format!("creating {}: {e}", dir.display()));
+    }
+    let lock_path = dir.join(LOCK_FILE);
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+    {
+        Ok(f) => f,
+        Err(e) => return LockState::Unavailable(format!("opening {}: {e}", lock_path.display())),
+    };
+    match file.lock() {
+        Ok(()) => LockState::Held(SettingsLock { _file: file }),
+        Err(e) => LockState::Unavailable(format!("locking {}: {e}", lock_path.display())),
+    }
+}
+
+/// The exact bytes of a settings file, or `None` when it does not exist.
+///
+/// Separate from [`read_settings`] because the compare-and-swap in [`apply`] compares *bytes*, not
+/// parsed JSON: two documents can be equal as `Value` and differ on disk, and it is the file
+/// another process wrote that must be detected, not an equivalent one.
+fn read_raw(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(Error::Io {
+            context: format!("reading {}", path.display()),
+            source,
+        }),
+    }
+}
+
+/// How many times [`apply`] re-runs its cycle when another process wrote first.
+///
+/// A bound rather than a loop: a settings file being rewritten faster than amb can read it is not
+/// a condition retrying fixes, and spinning inside somebody's terminal is worse than saying so.
+pub const MAX_RMW_ATTEMPTS: usize = 8;
+
+/// What [`apply`] did, and under what protection.
+#[derive(Debug)]
+pub struct Applied {
+    pub plan: Plan,
+    /// Whether the advisory lock was held. Reported, because an unlocked write is weaker.
+    pub locked: bool,
+    pub lock_error: Option<String>,
+    /// Times another process wrote during the cycle, forcing a re-read.
+    pub retries: usize,
+}
+
+/// Read, plan and write `~/.claude/settings.json` as one guarded cycle (D99).
+///
+/// **Two protections, because they cover different writers, and this was measured rather than
+/// reasoned** (M31).
+///
+/// 1. **An advisory lock** — [`lock_settings`]. It makes two `amb` processes serialise, and it
+///    took a measured 46 lost updates in 540 trials to **zero**. It does nothing against a writer
+///    that does not take it, and against a naive writer the same harness still lost 42 of 540 —
+///    which is the whole point, because **Claude Code writes this file and will never take amb's
+///    lock.** `/config` writes `crossSessionInbound` to user settings.
+/// 2. **Compare-and-swap** — the bytes read at the start of the cycle are re-read immediately
+///    before the rename, and a mismatch restarts the cycle rather than overwriting. This is what
+///    covers the uncooperative writer, because it detects rather than excludes.
+///
+/// The residual window is between the final comparison and the `rename`, which is two syscalls
+/// rather than the ~4 ms the whole cycle used to take. It is not zero, and saying it is zero would
+/// be the kind of claim this file is full of corrections to.
+pub fn apply(
+    path: &Path,
+    dry_run: bool,
+    mut planner: impl FnMut(&Value) -> Plan,
+) -> Result<Applied> {
+    let lock = lock_settings(path);
+    let (locked, lock_error) = match &lock {
+        LockState::Held(_) => (true, None),
+        LockState::Unavailable(why) => (false, Some(why.clone())),
+    };
+
+    for attempt in 0..MAX_RMW_ATTEMPTS {
+        let before = read_raw(path)?;
+        let value = match &before {
+            None => json!({}),
+            Some(s) if s.trim().is_empty() => json!({}),
+            Some(s) => serde_json::from_str(s).map_err(|source| Error::Json {
+                context: path.display().to_string(),
+                source,
+            })?,
+        };
+        let plan = planner(&value);
+
+        // Nothing to write means nothing to race with.
+        if dry_run || plan.is_noop() {
+            return Ok(Applied {
+                plan,
+                locked,
+                lock_error,
+                retries: attempt,
+            });
+        }
+        if write_if_unchanged(path, &plan.settings, before.as_deref())? {
+            return Ok(Applied {
+                plan,
+                locked,
+                lock_error,
+                retries: attempt,
+            });
+        }
+        // Somebody wrote while we were deciding. Their content is now the base for our plan.
+    }
+    Err(Error::Io {
+        context: format!(
+            "{} changed under every one of {MAX_RMW_ATTEMPTS} attempts to update it; another \
+             process is rewriting it continuously",
+            path.display()
+        ),
+        source: std::io::Error::other("settings file contended"),
+    })
+}
+
+/// Write settings back, but only if the file still holds `seen`. Returns whether it wrote.
+fn write_if_unchanged(path: &Path, value: &Value, seen: Option<&str>) -> Result<bool> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io(format!("creating {}", parent.display())))?;
+    }
+    let body = serde_json::to_string_pretty(value).map_err(|source| Error::Json {
+        context: "serialising settings".into(),
+        source,
+    })?;
+    let tmp = path.with_extension(format!("json.amb-tmp.{}", std::process::id()));
+    std::fs::write(&tmp, format!("{body}\n")).map_err(io(format!("writing {}", tmp.display())))?;
+
+    // **The backup is taken before the check, deliberately, and this ordering was measured.**
+    // Copying it *between* the check and the rename put a whole file copy inside the window the
+    // check exists to close — measured at 12 lost updates in 540 trials against an uncooperative
+    // writer, against 4 once the copy moved above it (M31). The backup is of the file we are about
+    // to verify, so taking it first costs nothing but a discarded copy on the retry path.
+    if seen.is_some() {
+        let backup = path.with_extension("json.amb-backup");
+        std::fs::copy(path, &backup).map_err(io(format!("writing backup {}", backup.display())))?;
+    }
+
+    // **The check goes as late as it can.** Anything read earlier is a claim about the past; this
+    // is a claim about the instant before the rename, and what follows it is one syscall.
+    //
+    // The gap is not zero and this decision does not pretend it is. Closing it entirely needs an
+    // atomic compare-and-rename the platform does not portably offer, and the residual is stated
+    // in D99 with the number attached.
+    if read_raw(path)?.as_deref() != seen {
+        let _ = std::fs::remove_file(&tmp);
+        return Ok(false);
+    }
+    std::fs::rename(&tmp, path).map_err(io(format!("replacing {}", path.display())))?;
+    Ok(true)
+}
+
+/// Write settings back, atomically, keeping one backup.
+///
+/// Temp file plus rename, so a crash mid-write cannot leave Claude Code with a truncated
+/// settings file. The backup exists because this is the user's global configuration and a bug
+/// here is expensive to recover from by hand.
+pub fn write_settings(path: &Path, value: &Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io(format!("creating {}", parent.display())))?;
+    }
+    if path.exists() {
+        let backup = path.with_extension("json.amb-backup");
+        std::fs::copy(path, &backup).map_err(io(format!("writing backup {}", backup.display())))?;
+    }
+    let body = serde_json::to_string_pretty(value).map_err(|source| Error::Json {
+        context: "serialising settings".into(),
+        source,
+    })?;
+    // **Per-process, so two writers cannot share a scratch file.** D99's lock makes that
+    // impossible in the ordinary case; this is what holds if the lock could not be taken — on a
+    // filesystem without working advisory locks, a fixed name means one process truncating the
+    // other's half-written temp before either renames.
+    let tmp = path.with_extension(format!("json.amb-tmp.{}", std::process::id()));
+    std::fs::write(&tmp, format!("{body}\n")).map_err(io(format!("writing {}", tmp.display())))?;
+    // `rename` within a directory is atomic, so a reader sees the old file or the new one and
+    // never a partial write. 540 concurrent trials produced zero corrupt files (M31) — this half
+    // was already correct and is unchanged.
+    std::fs::rename(&tmp, path).map_err(io(format!("replacing {}", path.display())))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A payload missing the fields, or carrying the wrong types, must degrade rather than panic.
+    ///
+    /// This runs inside somebody else's session; D9's guarantee is that delivery never breaks one.
+    #[test]
+    fn the_payload_reader_degrades_instead_of_panicking() {
+        assert_eq!(tool_and_file(&json!({})), ("", None));
+        assert_eq!(tool_and_file(&json!({"tool_name": 7})), ("", None));
+        assert_eq!(
+            tool_and_file(&json!({"tool_name": "Read", "tool_input": "not an object"})),
+            ("Read", None)
+        );
+        assert_eq!(
+            tool_and_file(&json!({"tool_name": "Edit", "tool_input": {"file_path": "src/a.rs"}})),
+            ("Edit", Some("src/a.rs"))
+        );
+    }
+
+    /// A partial install must not say "NOT INSTALLED", and every state must describe itself.
+    ///
+    /// **The wording is the mechanism here, not decoration.** This line is the only thing standing
+    /// between a reader and D69's mistake, so it has to be true in every case it can reach. The
+    /// first version decided `installed` versus `absent` in `src/main.rs` with the event list
+    /// carried alongside, which made "some hooks missing" print as "NOT INSTALLED" — false, and
+    /// false in the direction that sends someone to reinstall rather than to look at which half is
+    /// running.
+    #[test]
+    fn a_partial_memory_install_is_not_described_as_no_install() {
+        let exe = "/usr/local/bin/amb";
+
+        let full = plan_install(&serde_json::json!({}), exe, Mode::Monitor, true);
+        assert_eq!(memory_state(&full.settings), HookState::Installed);
+        assert_eq!(
+            memory_state(&full.settings).caveat(),
+            None,
+            "a healthy install must print nothing; a standing warning is one nobody reads"
+        );
+
+        let none = plan_install(&serde_json::json!({}), exe, Mode::Monitor, false);
+        let total = memory_state(&none.settings);
+        let line = total.caveat().expect("an absent layer must say so");
+        assert!(line.contains("NOT INSTALLED"), "{line}");
+
+        // Exactly the machine state that produced D69, minus one event: some, not none.
+        let partial = HookState::Incomplete {
+            missing: vec!["PreToolUse".to_string()],
+        };
+        let line = partial.caveat().expect("a partial layer must say so");
+        assert!(
+            line.contains("PARTIALLY INSTALLED") && line.contains("PreToolUse"),
+            "a partial install must name itself and the missing half, got: {line}"
+        );
+        assert!(
+            !line.contains("NOT INSTALLED"),
+            "partial is not absent, and saying so sends the reader to the wrong fix: {line}"
+        );
+
+        assert_eq!(HookState::Unknown.as_str(), "unknown");
+        assert!(
+            HookState::Unknown
+                .caveat()
+                .is_some_and(|l| l.contains("unverified"))
+        );
+    }
+
+    fn commands(v: &Value, event: &str) -> Vec<String> {
+        v["hooks"][event]
+            .as_array()
+            .map(|ms| {
+                ms.iter()
+                    .filter_map(|m| m["hooks"].as_array())
+                    .flatten()
+                    .filter_map(|h| h["command"].as_str())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn install_into_an_empty_document_adds_both_events() {
+        let p = plan_install(&json!({}), "/usr/local/bin/amb", Mode::Turn, false);
+        assert_eq!(
+            commands(&p.settings, "SessionStart"),
+            ["/usr/local/bin/amb hook turn"]
+        );
+        assert_eq!(
+            commands(&p.settings, "Stop"),
+            ["/usr/local/bin/amb hook turn"]
+        );
+        assert!(!p.is_noop());
+    }
+
+    #[test]
+    fn session_mode_installs_only_sessionstart() {
+        let p = plan_install(&json!({}), "/bin/amb", Mode::Session, false);
+        assert_eq!(commands(&p.settings, "SessionStart").len(), 1);
+        assert!(
+            commands(&p.settings, "Stop").is_empty(),
+            "session mode must not touch Stop"
+        );
+    }
+
+    #[test]
+    fn installing_twice_is_idempotent() {
+        let once = plan_install(&json!({}), "/bin/amb", Mode::Turn, false).settings;
+        let twice = plan_install(&once, "/bin/amb", Mode::Turn, false).settings;
+        assert_eq!(once, twice, "a second install must change nothing");
+        assert_eq!(
+            commands(&twice, "SessionStart").len(),
+            1,
+            "and must not duplicate the entry"
+        );
+    }
+
+    #[test]
+    fn another_tools_hooks_survive_install_and_uninstall() {
+        // The property that matters most: this file belongs to the user, not to us.
+        let theirs = json!({
+            "hooks": {
+                "SessionStart": [{ "hooks": [
+                    { "type": "command", "command": "bash /Users/x/.claude/hooks/herdr.sh session" }
+                ]}],
+                "PreToolUse": [{ "matcher": "Bash", "hooks": [
+                    { "type": "command", "command": "node /plugin/run-hook.js guard.sh" }
+                ]}]
+            },
+            "statusLine": { "type": "command", "command": "/Users/x/.claude/statusline.sh" }
+        });
+
+        let installed = plan_install(&theirs, "/bin/amb", Mode::Turn, false).settings;
+        assert!(
+            commands(&installed, "SessionStart")
+                .iter()
+                .any(|c| c.contains("herdr")),
+            "their SessionStart hook must survive"
+        );
+        assert_eq!(
+            commands(&installed, "PreToolUse").len(),
+            1,
+            "PreToolUse is untouched"
+        );
+        assert_eq!(
+            installed["statusLine"], theirs["statusLine"],
+            "unrelated keys are untouched"
+        );
+
+        let cleaned = plan_uninstall(&installed).settings;
+        assert!(
+            !commands(&cleaned, "SessionStart")
+                .iter()
+                .any(|c| c.contains("amb")),
+            "ours must be gone"
+        );
+        assert!(
+            commands(&cleaned, "SessionStart")
+                .iter()
+                .any(|c| c.contains("herdr")),
+            "theirs must remain"
+        );
+        assert_eq!(cleaned["statusLine"], theirs["statusLine"]);
+    }
+
+    #[test]
+    fn uninstall_restores_a_document_we_installed_into() {
+        let before = json!({ "env": { "FOO": "1" } });
+        let installed = plan_install(&before, "/bin/amb", Mode::Turn, false).settings;
+        let after = plan_uninstall(&installed).settings;
+        assert_eq!(
+            after, before,
+            "uninstall must return the document to its original shape"
+        );
+    }
+
+    #[test]
+    fn switching_mode_does_not_leave_a_stale_event() {
+        let turn = plan_install(&json!({}), "/bin/amb", Mode::Turn, false).settings;
+        let session = plan_install(&turn, "/bin/amb", Mode::Session, false).settings;
+        assert!(
+            commands(&session, "Stop").is_empty(),
+            "narrowing from turn to session must remove the Stop hook"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_or_unexpected_document_does_not_panic() {
+        // Never panic on someone's settings file: an array, a string, a null, a wrong-typed
+        // `hooks` key. Producing something valid beats crashing on their config.
+        for weird in [
+            json!([1, 2, 3]),
+            json!("nonsense"),
+            json!(null),
+            json!({"hooks": 7}),
+        ] {
+            let p = plan_install(&weird, "/bin/amb", Mode::Turn, false);
+            assert!(
+                p.settings["hooks"]["SessionStart"].is_array(),
+                "got {:?}",
+                p.settings
+            );
+            let _ = plan_uninstall(&weird);
+        }
+    }
+
+    #[test]
+    fn a_third_party_hook_whose_path_merely_contains_amb_is_not_ours() {
+        // The defect this rule exists for. `contains("amb")` matched every one of these, and
+        // `uninstall` deleted them — someone else's tooling, gone, with no error.
+        for theirs in [
+            "/Users/lambert/bin/tool hook start",
+            "/opt/amber/run hook pre",
+            "node /home/chamber/hooks/run-hook.js hook guard",
+            "/usr/local/gambit hook session",
+        ] {
+            assert!(
+                !command_is_ours(theirs),
+                "{theirs} belongs to someone else and must survive"
+            );
+        }
+    }
+
+    #[test]
+    fn our_own_command_is_recognised_however_it_is_spelled() {
+        for ours in [
+            "amb hook turn",
+            "/usr/local/bin/amb hook session",
+            "/Users/x/.cargo/bin/amb hook monitor",
+            "'/Users/my name/bin/amb' hook turn",
+            // A mode this binary does not know must still be removable, or switching versions
+            // strands an entry nothing can clean up.
+            "/usr/local/bin/amb hook some-future-mode",
+        ] {
+            assert!(command_is_ours(ours), "{ours} is ours");
+        }
+    }
+
+    #[test]
+    fn a_path_containing_the_word_hook_still_resolves_to_the_executable() {
+        // Splitting at the *first* " hook " would take the exe as "/Users/x/my", not "amb".
+        assert!(command_is_ours("/Users/x/my hook tools/amb hook turn"));
+        assert!(!command_is_ours("/Users/x/my hook tools/other hook turn"));
+    }
+
+    #[test]
+    fn a_command_that_is_not_a_hook_invocation_is_not_ours() {
+        assert!(!command_is_ours("amb inbox --json"));
+        assert!(!command_is_ours("amb hook"), "a mode is required");
+        assert!(!command_is_ours("amb hook turn extra"), "one bare token");
+        assert!(!command_is_ours(""));
+    }
+
+    #[test]
+    fn a_third_party_hook_survives_a_real_install_and_uninstall_cycle() {
+        // The end-to-end form of the same property: not just the predicate, but the plan.
+        let theirs = json!({
+            "hooks": { "SessionStart": [{ "hooks": [
+                { "type": "command", "command": "/Users/lambert/bin/tool hook start" }
+            ]}]}
+        });
+        let installed = plan_install(&theirs, "/usr/local/bin/amb", Mode::Turn, false).settings;
+        assert!(
+            commands(&installed, "SessionStart")
+                .iter()
+                .any(|c| c.contains("lambert")),
+            "install must not delete it"
+        );
+        let cleaned = plan_uninstall(&installed).settings;
+        assert_eq!(
+            commands(&cleaned, "SessionStart"),
+            ["/Users/lambert/bin/tool hook start"],
+            "uninstall must leave exactly their hook behind"
+        );
+    }
+
+    #[test]
+    fn an_install_path_containing_a_space_is_quoted_and_still_round_trips() {
+        let exe = "/Users/my name/bin/amb";
+        let p = plan_install(&json!({}), exe, Mode::Session, false);
+        let cmd = &commands(&p.settings, "SessionStart")[0];
+        assert!(cmd.starts_with('\''), "the path must be quoted: {cmd}");
+        assert!(
+            command_is_ours(cmd),
+            "and must still be recognised as ours: {cmd}"
+        );
+        assert!(
+            plan_uninstall(&p.settings).settings.get("hooks").is_none(),
+            "so uninstall can remove it again"
+        );
+    }
+
+    #[test]
+    fn an_install_path_containing_an_apostrophe_is_still_recognised() {
+        // `unquote` is **not** a strict inverse of `quote_exe`: an embedded `'` is emitted as
+        // `'\''`, and stripping one outer pair leaves that sequence in place. A reviewer read
+        // that as "`/Users/o'brien/amb` makes amb unable to recognise its own hook, so uninstall
+        // strands it and install duplicates it" — plausible, and wrong, because the only thing
+        // consulted is `file_name`, and the escape lands in a *directory* component.
+        //
+        // Pinned rather than argued, since the next reader will have the same worry. O'Brien is
+        // a real surname, so this is a live path shape, not a contrived one.
+        for exe in [
+            "/Users/o'brien/bin/amb",
+            "/a'b'c/amb",
+            "/Users/o'brien/my bin/amb",
+        ] {
+            let p = plan_install(&json!({}), exe, Mode::Session, false);
+            let cmd = &commands(&p.settings, "SessionStart")[0];
+            assert!(command_is_ours(cmd), "must be recognised as ours: {cmd}");
+            assert!(
+                plan_uninstall(&p.settings).settings.get("hooks").is_none(),
+                "and removable again: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn installing_twice_reports_no_change_the_second_time() {
+        // D29. `installing_twice_is_idempotent` proved the *content* was stable and could not see
+        // that the plan still claimed to have changed it — and `report_plan` writes whenever a
+        // plan is not a no-op, taking a fresh backup each time.
+        let before = json!({ "model": "opus" });
+        let once = plan_install(&before, "/bin/amb", Mode::Turn, false);
+        assert!(!once.is_noop(), "the first install really does change it");
+
+        let twice = plan_install(&once.settings, "/bin/amb", Mode::Turn, false);
+        assert!(
+            twice.is_noop(),
+            "the second must report no change, or it rewrites the file: added={:?}",
+            twice.added
+        );
+        assert!(twice.added.is_empty() && twice.removed.is_empty());
+    }
+
+    #[test]
+    fn uninstalling_twice_reports_no_change_the_second_time() {
+        let installed = plan_install(&json!({}), "/bin/amb", Mode::Turn, false).settings;
+        let once = plan_uninstall(&installed);
+        assert!(!once.is_noop());
+        assert!(plan_uninstall(&once.settings).is_noop());
+    }
+
+    #[test]
+    fn a_real_change_is_still_reported() {
+        // The guard must not swing the other way and silence genuine edits.
+        let turn = plan_install(&json!({}), "/bin/amb", Mode::Turn, false).settings;
+        let narrowed = plan_install(&turn, "/bin/amb", Mode::Session, false);
+        assert!(!narrowed.is_noop(), "turn -> session is a real change");
+        assert!(narrowed.removed.contains(&"Stop".to_string()));
+    }
+
+    #[test]
+    fn uninstall_of_a_document_without_hooks_is_a_noop() {
+        let doc = json!({ "model": "opus" });
+        let p = plan_uninstall(&doc);
+        assert!(p.is_noop());
+        assert_eq!(p.settings, doc);
+    }
+    // ── Memory entries ──────────────────────────────────────────────────────
+
+    #[test]
+    fn memory_registers_its_own_entry_and_never_extends_the_delivery_command() {
+        // D41, and it is structural rather than a convention: hook timeouts are per entry, so a
+        // memory layer that hangs must be a separate entry or it burns delivery's budget too.
+        let p = plan_install(&json!({}), "/bin/amb", Mode::Turn, true);
+        let start = commands(&p.settings, "SessionStart");
+        assert!(
+            start.contains(&"/bin/amb hook turn".to_string()),
+            "{start:?}"
+        );
+        assert!(
+            start.contains(&"/bin/amb hook memory".to_string()),
+            "{start:?}"
+        );
+        assert_eq!(
+            start.len(),
+            2,
+            "two entries, not one merged command: {start:?}"
+        );
+        // Every entry carries its own timeout, which is what makes the isolation real.
+        for list in p.settings["hooks"]["SessionStart"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            for e in list["hooks"].as_array().into_iter().flatten() {
+                assert_eq!(e["timeout"], json!(HOOK_TIMEOUT_SECS), "{e}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_memory_pretooluse_entry_is_narrowed_to_file_tools() {
+        let p = plan_install(&json!({}), "/bin/amb", Mode::Turn, true);
+        let list = p.settings["hooks"]["PreToolUse"]
+            .as_array()
+            .expect("PreToolUse should exist");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["matcher"], json!(MEMORY_TOOLS));
+    }
+
+    #[test]
+    fn the_delivery_hooks_are_written_without_a_matcher_as_before() {
+        // The matcher support added for memory must not have leaked into the mail entries: an
+        // absent matcher and "*" mean the same thing, and changing these would rewrite every
+        // existing install for no reason.
+        let p = plan_install(&json!({}), "/bin/amb", Mode::Turn, false);
+        for event in ["SessionStart", "Stop", "PostToolUse"] {
+            for m in p.settings["hooks"][event].as_array().into_iter().flatten() {
+                assert!(m.get("matcher").is_none(), "{event}: {m}");
+            }
+        }
+    }
+
+    #[test]
+    fn installing_with_memory_twice_changes_nothing_the_second_time() {
+        let once = plan_install(&json!({}), "/bin/amb", Mode::Turn, true);
+        let twice = plan_install(&once.settings, "/bin/amb", Mode::Turn, true);
+        assert_eq!(twice.settings, once.settings);
+        assert!(
+            twice.is_noop(),
+            "added {:?} removed {:?}",
+            twice.added,
+            twice.removed
+        );
+    }
+
+    #[test]
+    fn installing_without_memory_takes_the_memory_entries_back_out() {
+        let with = plan_install(&json!({}), "/bin/amb", Mode::Turn, true);
+        let without = plan_install(&with.settings, "/bin/amb", Mode::Turn, false);
+        let all: Vec<String> = ["SessionStart", "Stop", "PostToolUse", "PreToolUse"]
+            .iter()
+            .flat_map(|e| commands(&without.settings, e))
+            .collect();
+        assert!(
+            !all.iter().any(|c| c.ends_with(" hook memory")),
+            "memory survived: {all:?}"
+        );
+        assert!(!without.is_noop(), "removing two hooks is a change");
+    }
+
+    #[test]
+    fn a_removed_memory_entry_is_reported_by_name_not_swallowed() {
+        // The summary must not say "PreToolUse" and stay silent about the SessionStart entry it
+        // also removed: an install that understates what it did is the defect D29 was about.
+        let with = plan_install(&json!({}), "/bin/amb", Mode::Turn, true);
+        let without = plan_install(&with.settings, "/bin/amb", Mode::Turn, false);
+        assert!(
+            without
+                .removed
+                .contains(&"SessionStart (memory)".to_string()),
+            "removed: {:?}",
+            without.removed
+        );
+        assert!(
+            without.removed.contains(&"PreToolUse (memory)".to_string()),
+            "removed: {:?}",
+            without.removed
+        );
+        assert!(
+            !without.removed.contains(&"SessionStart".to_string()),
+            "the delivery hook was re-added, so it is not a removal: {:?}",
+            without.removed
+        );
+    }
+
+    #[test]
+    fn uninstall_removes_the_memory_entries_too() {
+        let with = plan_install(&json!({}), "/bin/amb", Mode::Turn, true);
+        let gone = plan_uninstall(&with.settings);
+        assert_eq!(gone.settings.get("hooks"), None, "{}", gone.settings);
+        assert!(
+            gone.removed.iter().any(|r| r.contains("(memory)")),
+            "{:?}",
+            gone.removed
+        );
+    }
+
+    #[test]
+    fn an_older_binary_still_recognises_the_memory_hook_as_ours() {
+        // `command_is_ours` matches `<exe> hook <one-token>` without checking the token against a
+        // known set, so a binary that predates memory can still uninstall it. That is the only
+        // reason a mixed-version machine can be cleaned up at all.
+        assert!(command_is_ours("/bin/amb hook memory"));
+        assert!(command_is_ours("'/Users/a b/amb' hook memory"));
+        assert!(!command_is_ours("/bin/other hook memory"));
+    }
+
+    #[test]
+    fn a_foreign_hook_under_pretooluse_survives_a_memory_install() {
+        // This machine really has one: a `matcher: "Bash"` entry belonging to another tool.
+        let theirs = json!({
+            "hooks": { "PreToolUse": [
+                { "matcher": "Bash", "hooks": [{ "type": "command", "command": "/other/rewrite.sh" }] }
+            ]}
+        });
+        let after = plan_install(&theirs, "/bin/amb", Mode::Turn, true).settings;
+        let cmds = commands(&after, "PreToolUse");
+        assert!(cmds.contains(&"/other/rewrite.sh".to_string()), "{cmds:?}");
+        assert!(
+            cmds.contains(&"/bin/amb hook memory".to_string()),
+            "{cmds:?}"
+        );
+    }
+
+    /// The hook-state read itself, over a settings document rather than a filesystem.
+    #[test]
+    fn memory_hooks_are_detected_only_when_all_three_entries_are_ours() {
+        let exe = "/usr/local/bin/amb";
+
+        let full = plan_install(&serde_json::json!({}), exe, Mode::Monitor, true);
+        let (installed, missing) = memory_hooks(&full.settings);
+        assert_eq!(installed.len(), 3, "installed was {installed:?}");
+        assert!(missing.is_empty(), "missing was {missing:?}");
+
+        // Delivery-only is the state this machine was actually found in.
+        let delivery = plan_install(&serde_json::json!({}), exe, Mode::Monitor, false);
+        let (installed, missing) = memory_hooks(&delivery.settings);
+        assert!(
+            installed.is_empty(),
+            "delivery hooks must never read as memory ones; got {installed:?}"
+        );
+        assert_eq!(missing.len(), 3);
+
+        // Someone else's hook on the same event is not ours, however it is spelled.
+        let stranger = serde_json::json!({
+            "hooks": { "PreToolUse": [ { "hooks": [
+                { "type": "command", "command": "/opt/other/amb-helper hook memory" }
+            ] } ] }
+        });
+        let (installed, _) = memory_hooks(&stranger);
+        assert!(
+            installed.is_empty(),
+            "a stranger's binary must not count as our memory hook (D28)"
+        );
+    }
+
+    /// A competing write during the cycle is detected, and the plan is re-applied on top of it.
+    ///
+    /// **Deterministic, not timed.** The planner closure is called once per attempt, so writing to
+    /// the file from inside it reproduces exactly the interleaving M31 had to hit with a 0.1 ms
+    /// sweep: amb read at T, somebody wrote at T+ε, amb is about to write stale content.
+    ///
+    /// The assertion that matters is the third: the foreign key **survives**. A fix that merely
+    /// retried and then still clobbered would pass a retry-count check and fail this one.
+    #[test]
+    fn a_competing_write_is_detected_and_the_plan_is_reapplied_over_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{\"mine\": 1}\n").expect("seed");
+
+        let calls = std::cell::Cell::new(0usize);
+        let done = apply(&path, false, |cur| {
+            let n = calls.get();
+            calls.set(n + 1);
+            if n == 0 {
+                // The uncooperative peer, landing between our read and our write.
+                std::fs::write(&path, "{\"mine\": 1, \"theirs\": \"kept\"}\n").expect("peer write");
+            }
+            plan_install(cur, "/usr/local/bin/amb", Mode::Turn, false)
+        })
+        .expect("apply");
+
+        assert_eq!(
+            done.retries, 1,
+            "the competing write must force exactly one re-read"
+        );
+        assert_eq!(
+            calls.get(),
+            2,
+            "and the plan must be recomputed, not reused"
+        );
+
+        let after: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read back"))
+                .expect("valid json");
+        assert_eq!(
+            after["theirs"], "kept",
+            "the competing writer's key must survive — this is the whole defect (M31)"
+        );
+        assert!(
+            after.get("hooks").is_some(),
+            "and our own change must still land: {after}"
+        );
+    }
+
+    /// With nobody competing, the cycle runs once and reports no retries.
+    ///
+    /// The presence row for the test above. Without it, an `apply` that retried on *every* run
+    /// would satisfy the retry assertion there and be badly wrong here.
+    #[test]
+    fn an_uncontended_apply_runs_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        let done = apply(&path, false, |cur| {
+            plan_install(cur, "/usr/local/bin/amb", Mode::Turn, false)
+        })
+        .expect("apply");
+        assert_eq!(done.retries, 0);
+        assert!(done.locked, "a plain temp directory must support the lock");
+        assert!(done.lock_error.is_none());
+        assert!(path.exists(), "and it must actually have written");
+    }
+
+    /// A dry run reads and plans but writes nothing, contended or not.
+    #[test]
+    fn a_dry_run_writes_nothing_and_needs_no_retry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        let done = apply(&path, true, |cur| {
+            plan_install(cur, "/usr/local/bin/amb", Mode::Turn, false)
+        })
+        .expect("apply");
+        assert!(!done.plan.is_noop(), "the plan is still computed");
+        assert_eq!(done.retries, 0);
+        assert!(!path.exists(), "dry run must not create the file");
+    }
+
+    /// A file rewritten faster than amb can read it gives up and says so, rather than spinning.
+    #[test]
+    fn endless_contention_is_reported_rather_than_looped_forever() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{\"n\": 0}\n").expect("seed");
+
+        let calls = std::cell::Cell::new(0usize);
+        let err = apply(&path, false, |cur| {
+            let n = calls.get();
+            calls.set(n + 1);
+            // Writes on *every* attempt, so the check can never succeed.
+            // `n + 1`, so the very first peer write already differs from the seed. Writing
+            // `n` made attempt 0 byte-identical to it, the check passed, and this test proved
+            // nothing — the fixture never reached the branch it names (M17).
+            std::fs::write(&path, format!("{{\"n\": {}}}\n", n + 1)).expect("peer write");
+            plan_install(cur, "/usr/local/bin/amb", Mode::Turn, false)
+        })
+        .expect_err("must not succeed");
+
+        assert_eq!(
+            calls.get(),
+            MAX_RMW_ATTEMPTS,
+            "it must stop at the bound rather than spinning in somebody's terminal"
+        );
+        assert!(
+            err.to_string().contains("changed under every one of"),
+            "and name the condition: {err}"
+        );
+
+        // **The give-up path is the only one where cleanup is observable**, and that is why this
+        // assertion lives here rather than in the retry test below. Within one process the temp
+        // name is fixed, so a retry reuses and then renames away the same file — deleting the
+        // cleanup survives that test entirely. Here nothing renames, so a leaked scratch file
+        // stays beside the user's configuration. Confirmed by deleting `remove_file`.
+        assert!(
+            scratch_beside(dir.path()).is_empty(),
+            "giving up must not leave scratch next to settings.json: {:?}",
+            scratch_beside(dir.path())
+        );
+    }
+
+    /// Temp files amb left in a directory.
+    fn scratch_beside(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .expect("readdir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("amb-tmp"))
+            .collect()
+    }
+
+    /// The backup captures what was there *before* the change.
+    #[test]
+    fn the_backup_holds_the_previous_contents() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{\"before\": true}\n").expect("seed");
+        apply(&path, false, |cur| {
+            plan_install(cur, "/usr/local/bin/amb", Mode::Turn, false)
+        })
+        .expect("apply");
+        let backup =
+            std::fs::read_to_string(path.with_extension("json.amb-backup")).expect("backup exists");
+        assert!(backup.contains("\"before\""), "got {backup}");
+    }
+
+    /// No temp file is left behind once a retry succeeds.
+    ///
+    /// **This cannot see a missing cleanup, and says so rather than implying coverage.** The temp
+    /// name carries the pid, so both attempts in one process use it and the successful `rename`
+    /// consumes it whether or not the discarded attempt removed it — deleting `remove_file` leaves
+    /// this green. The give-up path is where that guard is observable, and
+    /// `endless_contention_is_reported_rather_than_looped_forever` asserts it there.
+    ///
+    /// Kept because it pins the property a *future* per-attempt temp name would break.
+    #[test]
+    fn no_scratch_file_survives_a_retry() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{\"mine\": 1}\n").expect("seed");
+        let calls = std::cell::Cell::new(0usize);
+        apply(&path, false, |cur| {
+            let n = calls.get();
+            calls.set(n + 1);
+            if n == 0 {
+                std::fs::write(&path, "{\"mine\": 2}\n").expect("peer write");
+            }
+            plan_install(cur, "/usr/local/bin/amb", Mode::Turn, false)
+        })
+        .expect("apply");
+
+        let leftovers = scratch_beside(dir.path());
+        assert!(leftovers.is_empty(), "scratch left behind: {leftovers:?}");
+    }
+}

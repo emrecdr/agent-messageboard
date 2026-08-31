@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Run every quality check before a commit lands.
+#
+# **Committed, unlike a hook in `.git/hooks/`, and that is the point.** `.git/hooks/` is not
+# version-controlled, so a gate installed there exists only on the machine that installed it and
+# silently does not exist anywhere else. This directory is tracked; `git config core.hooksPath
+# .githooks` is the one command that turns it on, and `tools/verify.sh` documents the rest.
+#
+# Enable:  git config core.hooksPath .githooks
+# Disable: git config --unset core.hooksPath
+# Bypass once: AMB_VERIFY_SKIP=1 git commit …
+
+set -euo pipefail
+
+if [ "${AMB_VERIFY_SKIP:-}" = "1" ]; then
+  # Announced rather than silent. A bypass nobody sees is indistinguishable from a gate that is
+  # not running, which is the failure this whole gate exists to prevent.
+  printf '\033[33m! AMB_VERIFY_SKIP=1 — pre-commit checks skipped\033[0m\n' >&2
+  exit 0
+fi
+
+exec "$(git rev-parse --show-toplevel)/tools/verify.sh"

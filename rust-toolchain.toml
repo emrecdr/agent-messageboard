@@ -1,0 +1,17 @@
+[toolchain]
+# Latest stable at time of scaffold (2026-08-27). Pinned rather than tracking `stable` so local
+# builds and CI agree exactly on a version, rather than drifting apart the next time
+# stable moves.
+#
+# Deliberately NOT matched to nestwatch's 1.96.0 pin: this is a standalone binary sharing no CI
+# or crate graph with it, and D8's "adds no new toolchain" argument was about not introducing a
+# new *language* to the machine, not about a specific patch release.
+#
+# Also load-bearing for a second reason: `cargo` only resolves inside a directory carrying this
+# file if rustup has no global default.
+# `.github/workflows/ci.yml` deliberately names no toolchain, so it installs exactly what this file
+# pins. D70 records that the workflow has never run — this repository has no git remote — and that
+# `tools/verify.sh` is the gate that does.
+#
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
