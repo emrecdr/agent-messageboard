@@ -113,6 +113,15 @@ pub struct Derived {
     pub count: usize,
     pub projects: Vec<String>,
     pub path: PathBuf,
+    /// How many values `redact` removed from what this call actually wrote.
+    ///
+    /// **Rendered, and that is what makes it load-bearing rather than bookkeeping** (M27). `write.rs`
+    /// prints `"N value(s) redacted before writing"` under `if w.redacted > 0` and its comment gives
+    /// the reason: a redaction the author cannot see is one they cannot correct. `derive` called
+    /// `redact(...).text` at three sites and threw `.removed` away at every one, so promotion's
+    /// ledger redacted **silently** — in the one flow D49 designed entirely around a human seeing
+    /// what they approve.
+    pub redacted: usize,
 }
 
 /// Record a derivation against a candidate, creating it if it does not exist.
@@ -173,9 +182,14 @@ fn derive_locked(
         .and_then(|t| parse_note(&t, &id.slug, at));
     let created = existing.is_none();
 
+    // Redacted once each, not three times. The two `redact(note)` calls this replaces computed the
+    // same answer twice and discarded both counts.
+    let title_r = redact(title);
+    let note_r = redact(note);
+
     let mut candidate = existing.unwrap_or_else(|| Note {
         id: id.clone(),
-        title: redact(title).text,
+        title: title_r.text.clone(),
         status: ACTIVE.into(),
         created: at,
         session: Some(me.id.clone()),
@@ -191,9 +205,21 @@ fn derive_locked(
         declined_at: None,
         declined_after: None,
         derivations: Vec::new(),
-        body: redact(note).text,
+        body: note_r.text.clone(),
     });
     candidate.id = id.clone();
+
+    // **Counted for what is written, not for what was examined.** An existing candidate keeps its
+    // stored title and body, so the only new text on that path is the derivation line — counting
+    // the whole note there would report removals that never reached the file, and a number that
+    // overstates is as untrustworthy as one that understates.
+    let redacted = if created {
+        title_r.removed + note_r.removed
+    } else if independent {
+        redact(note.lines().next().unwrap_or("")).removed
+    } else {
+        0
+    };
 
     // Paths accumulate: a candidate is the union of what its derivations concerned, which is what
     // makes the next path lookup find it.
@@ -207,7 +233,7 @@ fn derive_locked(
             ts: at,
             project: me.project.clone(),
             session: me.id.clone(),
-            note: redact(note).text.lines().next().unwrap_or("").to_string(),
+            note: note_r.text.lines().next().unwrap_or("").to_string(),
             // Detected here, from the repository this session is standing in, because this is the
             // only moment anything knows where that repository is (D82).
             topics: crate::memory::detect(Path::new(&me.root)),
@@ -235,6 +261,7 @@ fn derive_locked(
         count: candidate.derivations.len(),
         projects,
         path: path.to_path_buf(),
+        redacted,
     })
 }
 
@@ -570,6 +597,14 @@ pub fn render_derived(d: &Derived) -> String {
              paths, so it is a citation rather than a derivation\n",
         );
     }
+    // Word-for-word what `write.rs` prints, because two spellings of one guarantee is two
+    // guarantees to keep in step.
+    if d.redacted > 0 {
+        out.push_str(&format!(
+            "  {} value(s) redacted before writing\n",
+            d.redacted
+        ));
+    }
     if d.count >= PROMOTION_THRESHOLD {
         out.push_str(&format!(
             "  ready to offer — `amb memory promote {}`\n",
@@ -617,7 +652,61 @@ mod tests {
             count,
             projects: vec!["nest".into(), "mobile".into()],
             path: PathBuf::from("/v/candidates/lock-order.md"),
+            redacted: 0,
         }
+    }
+
+    /// **A redaction the author cannot see is one they cannot correct**, and `derive` hid every
+    /// one: `redact(...).text` at three call sites, `.removed` discarded at all three.
+    ///
+    /// A truth table rather than a needle list, because M27 found ten of forty survivors in one
+    /// renderer sitting on the `x > 0` -> `x >= 0` edit and a presence-only test cannot see that
+    /// relaxation. The `0` row is the absence; the other two prove its premise, since if the line
+    /// stopped rendering at all the `0` row would still pass and this would guard nothing (M23).
+    #[test]
+    fn a_silent_redaction_is_impossible_because_the_count_is_rendered() {
+        for (n, expected) in [(0usize, false), (1, true), (7, true)] {
+            let mut d = derived(true, true, 3);
+            d.redacted = n;
+            let out = render_derived(&d);
+            assert_eq!(
+                out.contains("value(s) redacted before writing"),
+                expected,
+                "redacted={n} rendered:\n{out}"
+            );
+            if expected {
+                assert!(
+                    out.contains(&format!("{n} value(s)")),
+                    "wrong count:\n{out}"
+                );
+            }
+        }
+    }
+
+    /// The notice is word-for-word the one the `observe` path prints.
+    ///
+    /// Two spellings of one guarantee is two guarantees to keep in step. This asserts the same
+    /// needle against both renderers, so a change to either wording goes red rather than quietly
+    /// producing two sentences that mean the same thing differently.
+    #[test]
+    fn the_redaction_notice_matches_the_one_the_observe_path_prints() {
+        let mut d = derived(true, true, 3);
+        d.redacted = 2;
+        let from_derive = render_derived(&d);
+        let from_observe = crate::memory::render_written(
+            &crate::memory::Written {
+                id: NoteId::candidate("x"),
+                path: PathBuf::from("/v/x.md"),
+                redacted: 2,
+                cited: Vec::new(),
+                superseded: None,
+            },
+            None,
+            &[],
+        );
+        let needle = "2 value(s) redacted before writing";
+        assert!(from_derive.contains(needle), "derive:\n{from_derive}");
+        assert!(from_observe.contains(needle), "observe:\n{from_observe}");
     }
 
     /// **A non-independent derivation must say it did not count.**

@@ -3113,3 +3113,57 @@ The third row is what proves the other two: it fails if the enclosing `int(n) > 
 reached, which is the premise the first attempt silently lacked. **An absence-only break test has an
 unproven premise, and "I emptied it and the gate stayed green" is indistinguishable from "the fix
 does not work" until something shows the branch was reached at all.**
+
+---
+
+## M37 · The promotion ledger redacted in silence, and the first fix guarded the wrong half
+
+**2026-08-31.** `derive` called `redact(...).text` at three sites and discarded `.removed` at every
+one. So a credential in a derivation was stripped correctly and **the author was never told** — in
+the one flow D49 designed entirely around a human seeing what they are approving.
+
+M27 already named this exact shape from the other side: *"`Redacted.removed` reads, inside
+`redact.rs`, as bookkeeping. Its actual contract lives one module away"* — `write.rs` prints
+`"N value(s) redacted before writing"` under `if w.redacted > 0`, and its comment gives the reason:
+**a redaction the author cannot see is one they cannot correct.** `observe` honoured that.
+`derive` did not, and nothing connected the two.
+
+The count is computed for what is **written** rather than for what was examined. An existing
+candidate keeps its stored title and body, so on that path the only new text is the derivation line;
+counting the whole note there would report removals that never reached the file, and a number that
+overstates is as untrustworthy as one that understates. The notice is word-for-word `write.rs`'s,
+because two spellings of one guarantee are two guarantees to keep in step.
+
+`redact(note)` was also being computed twice, one line apart, with both results discarded.
+
+### The first fix was verified, and the verification was worthless
+
+Two tests were written against it: a truth table over `render_derived` with rows at `0`, `1` and
+`7`, and a cross-renderer check that the notice matches `observe`'s to the character. Both passed.
+Relaxing the render guard `d.redacted > 0` to `>= 0` reddened the truth table, exactly as intended.
+
+Then the *other* mutation — forcing the computed count back to `0`, which **is the original
+defect** — was applied:
+
+```
+FAILING: NONE — the guard is fake
+```
+
+Nothing in the entire suite. Both tests set `Derived.redacted` **on a fixture**, so they guard the
+renderer and never the computation. The path from `redact()` into the struct had no test at all, and
+the two tests written specifically to close this defect could not see it being reintroduced.
+
+**This is the sharpest form of the reader/writer split M27 records.** M27's advice is *"when you
+check a counter, go and read what reads it"* — and following that advice produced two tests of the
+reader and none of the writer. The advice is right and incomplete: guarding where the meaning is
+does not guard where the value comes from, and a fixture-set field silently severs the two.
+
+The fix is an end-to-end test through the real binary — a credential in `--note`, asserting both
+that the vault file does not contain it *and* that the output says a value was removed. M20's
+arithmetic picks that layer: count the layers a rule passes through, count the ones that assert it,
+and suspect the outermost, because it is the expensive one to write and therefore the one that does
+not exist. With it, discarding the count reddens.
+
+The fixture is built with `concat!`, because `tools/check_secret_literals.py` refuses a contiguous
+credential shape in tracked source and **testing a redactor means writing one** — the permanent
+condition that tool's own header records.

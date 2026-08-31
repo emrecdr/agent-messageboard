@@ -11,6 +11,45 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **`amb memory derive` redacted credentials in silence** (M37). It called `redact(...).text` at
+  three sites and discarded `.removed` at every one, so a secret in a derivation was stripped
+  correctly and the author was never told — in the flow D49 built entirely around a human seeing
+  what they approve. `observe` has always printed `N value(s) redacted before writing`; `derive`
+  now prints the same sentence, word for word, and counts what is *written* rather than what was
+  examined. `redact(note)` was also computed twice, one line apart, with both results discarded.
+
+  **The first fix was verified and the verification was worthless.** Two tests — a truth table over
+  the renderer and a cross-renderer wording check — both passed, and relaxing `> 0` to `>= 0`
+  reddened them. Then forcing the computed count back to `0`, which *is* the original defect,
+  reddened **nothing in the whole suite**: both tests set the field on a fixture, so they guarded
+  the reader and never the writer. M27's advice ("go and read what reads it") is right and
+  incomplete — it produced two tests of the reader and none of the writer. Closed with an
+  end-to-end test through the real binary, asserting both halves: the vault file does not contain
+  the credential, and the output says a value was removed.
+
+- **`unreleased_is_honest` fired on the changelog entry describing its own repair.** The check
+  tested `"Nothing yet" in section`, so any prose *quoting* the sentinel counted as the sentinel —
+  and the M36 entry below quotes it. The same commit that made the check unfailable in one
+  direction made it unpassable in the other.
+
+  Now matched as the section's whole content rather than as a substring: headings stripped, the
+  remainder compared against the placeholder as a full match. **A sentinel searched for anywhere
+  cannot survive being written about, and a `CHANGELOG` is precisely where it gets written about.**
+  Truth-tabled over three rows — empty fires, a bare placeholder fires, real prose quoting the
+  phrase does not.
+
+- **Three cleanup findings from `/simplify`, one of which three independent reviewers reported.**
+  `doctor::board_bytes` re-derived SQLite's `-wal`/`-shm` sidecar paths that `db::restrict` already
+  built, so the fact that a board on disk is three files was asserted in two modules with nothing
+  tying them together. Factored to `db::sidecars`, which is where the pragmas that create those
+  files live. Also: a no-op ternary in `check_docs.py`'s parity check, which would have matched the
+  *wrong* token had any gate label ever grown a flag; and a duplicated `path.exists()` in
+  `doctor::gather`, one `stat` on a boolean already computed seven lines above.
+
+  Not taken: `eyeball.sh`'s timing block overlaps `bench_startup.py`'s `bench()` textually, but
+  `bench()` runs fifty iterations for a median and p95 while `eyeball` takes one spot reading —
+  sharing it would multiply a diagnostic's runtime and change what it measures.
+
 - **Two checks could not fail, and one was created by the fix for the other's sibling** (M36).
   M35 ended on a question — what state does a check need in order to be *able* to fail, and what
   routine operation destroys it? Sweeping every check answered it twice.

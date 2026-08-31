@@ -351,6 +351,7 @@ mod tests {
             count: 1,
             projects: vec!["nest".into()],
             path: PathBuf::from("/v/candidates/lock-order.md"),
+            redacted: 0,
         };
         let out = render_written(&written(), Some(&d), &[]);
         crate::assert_rendered_shape("render_written", &out);

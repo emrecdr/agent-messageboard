@@ -21,7 +21,7 @@ install.
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite compiles; ~15s cold
-cargo test                       # all 495 tests
+cargo test                       # all 498 tests
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # run before finishing; the gate runs `cargo fmt --check`
 ./tools/verify.sh                # every gate check in one command, ~30s after a change (D70)

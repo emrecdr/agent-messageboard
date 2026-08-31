@@ -1484,6 +1484,54 @@ fn the_promotion_threshold_is_configurable_as_the_plan_says() {
     );
 }
 
+/// **`derive` redacts, and the author is told — end to end, through the real binary.**
+///
+/// The unit tests for this set `Derived.redacted` on a fixture, so they guard the *renderer* and
+/// never the computation. Proved by mutation: forcing the count to `0` where it is computed
+/// reddened nothing across the whole suite, because no test drove `redact` into `Derived` at all.
+/// This is the fixture that closes the gap, and it is at the outermost layer on purpose — M20's
+/// arithmetic says the layer to suspect is the one a person actually runs.
+///
+/// The literal is split with `concat!` because `tools/check_secret_literals.py` refuses a
+/// contiguous credential shape in tracked source, and testing a redactor means writing one.
+#[test]
+fn a_credential_in_a_derivation_is_stripped_and_the_author_is_told() {
+    let b = Board::new();
+    let secret = concat!("ghp_", "0123456789abcdefghijABCDEFGHIJ0123456789");
+    let out = b.mem(
+        "uuid-1",
+        &[
+            "memory",
+            "derive",
+            "leaky",
+            "--title",
+            "take locks in declaration order",
+            "--files",
+            "src/x.rs",
+            "--note",
+            &format!("the deploy used {secret} and failed"),
+        ],
+    );
+
+    // The guarantee has two halves and a test asserting one of them is worth very little: a strip
+    // nobody is told about is D37's failure, and a notice with nothing stripped is a lie.
+    assert!(
+        out.contains("value(s) redacted before writing"),
+        "the author was not told a value was removed:\n{out}"
+    );
+
+    let file = b.vault.join("candidates/leaky.md");
+    let text = std::fs::read_to_string(&file).expect("candidate written");
+    assert!(
+        !text.contains(secret),
+        "the credential reached the vault:\n{text}"
+    );
+    assert!(
+        text.contains("[redacted]"),
+        "nothing was actually redacted:\n{text}"
+    );
+}
+
 #[test]
 fn a_decision_marked_private_stays_in_the_vault() {
     // The export opt-out. The default is publish, because a decision only reaches
