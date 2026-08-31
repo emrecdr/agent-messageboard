@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Find public struct fields that nothing ever reads.
 
-**This pattern has bitten this codebase three times**, which is what makes it worth a script:
+**This pattern has bitten this codebase four times**, which is what makes it worth a script:
 
   - `messages.attempts` and `messages.failed_at` had no writer at all (fixed by D23).
   - `IndexStats::skipped` recorded "this directory was too large to auto-index" and no code path
     consulted it, so a 501-note vault reported itself as empty (D45).
   - claude-mem's `relevance_count`, the incumbent's own version, is zero across all 80,264 rows —
     which is the evidence D39 rests on.
+  - `hooks::write_settings` had one definition, zero calls and zero references, superseded by
+    D99's `apply` cycle. **This script printed it every run and put it in the wrong arm** — its
+    two rustdoc links counted as by-reference uses, so it read as explained rather than dead. Found
+    by mutation instead (M39); the reference count now excludes comments, and a probe reproducing
+    the condition is in M41.
 
 `rustc`'s `dead_code` lint cannot catch it: these are `pub` fields on a library crate, so they are
 reachable by definition. A field that is written, never read, and describes something true is
@@ -54,6 +59,42 @@ PROD = "\n".join(
     _t[: _t.find("#[cfg(test)]")] if "#[cfg(test)]" in _t else _t
     for _t in (p.read_text(encoding="utf-8") for p in (ROOT / "src").rglob("*.rs"))
 )
+
+def _uncommented(text: str) -> str:
+    """Rust source with comments blanked out, for counting *references* rather than mentions.
+
+    **This is what hid `hooks::write_settings` for days** (M39). A bare mention of a function
+    without parentheses is how a function passed by reference looks — `.is_some_and(f)`,
+    `apply(path, dry_run, plan_uninstall)` — and the advisory below exists to say so. But a
+    rustdoc link reads identically: ``[`write_settings`]`` is a bare mention with no parentheses.
+    That function had one definition, zero calls and zero references, and its two doc links made
+    it print under "passed by reference, so it looks uncalled" — the reassuring arm — every run
+    until mutation testing proved the whole body could be replaced by `Ok(())` with nothing
+    reddening.
+
+    D84 already recorded that this advisory gets scrolled past. The reason it gets scrolled past
+    is that it was wrong about which arm a name belonged in, and being wrong in the reassuring
+    direction is what makes a permanent advisory worse than no advisory.
+
+    Crude, like the rest of this file: line comments are cut at `//` when the text before it has
+    an even number of quotes, block comments are removed outright, and no attempt is made at raw
+    strings. It over-removes rather than under-removes, which for a *reference* count means a
+    false "nothing mentions it" — loud and checkable — rather than a false reassurance.
+    """
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    out = []
+    for line in text.splitlines():
+        i = line.find("//")
+        while i != -1:
+            if line[:i].count('"') % 2 == 0:
+                line = line[:i]
+                break
+            i = line.find("//", i + 2)
+        out.append(line)
+    return "\n".join(out)
+
+
+PROD_CODE = _uncommented(PROD)
 
 STRUCT = re.compile(r"pub struct (\w+)\s*\{(.*?)\n\}", re.S)
 FIELD = re.compile(r"^\s*pub (\w+):", re.M)
@@ -109,8 +150,8 @@ def main() -> int:
                 # a function pointer in a table. One of these means "referenced, not called",
                 # which is the entire content of the advisory below — so the tool says it instead
                 # of leaving the reader to work it out for the same function every time.
-                refs = len(re.findall(r"\b" + fn + r"\b(?!\s*\()", PROD)) - len(
-                    re.findall(r"\bfn\s+" + fn + r"\b(?!\s*\()", PROD)
+                refs = len(re.findall(r"\b" + fn + r"\b(?!\s*\()", PROD_CODE)) - len(
+                    re.findall(r"\bfn\s+" + fn + r"\b(?!\s*\()", PROD_CODE)
                 )
                 dead_fns.append((path.name, fn, calls - in_tests - defs, refs))
 
@@ -121,17 +162,29 @@ def main() -> int:
 
     print()
     if dead_fns:
-        print(f"{len(dead_fns)} public fn(s) called only by their own tests:")
-        for name, fn, production, refs in dead_fns:
-            why = (
-                f" — but referenced {refs}x without parentheses, so it is passed by reference"
-                if refs > 0
-                else "  <-- nothing in production mentions it at all"
-            )
-            print(f"  {name} :: {fn}()  ({production} production call(s)){why}")
-        print("  ADVISORY — this check over-reports and does not fail the run. A function passed")
-        print("  by reference (`.is_some_and(f)`) has no parentheses and looks uncalled. Read each")
-        print("  one; the question is whether it has a *production* caller, not whether it has any.")
+        # **Split, because the two arms mean opposite things and shared a paragraph.** One is a
+        # finding; the other is this tool explaining its own false positive. Printing them
+        # together under one advisory is what made D84's "read it, do not scroll past it"
+        # necessary in the first place, and M39 is the instance where scrolling past was fatal.
+        unreferenced = [r for r in dead_fns if r[3] == 0]
+        by_ref = [r for r in dead_fns if r[3] > 0]
+        if unreferenced:
+            print(f"{len(unreferenced)} public fn(s) NOTHING IN PRODUCTION MENTIONS AT ALL:")
+            for name, fn, production, _ in unreferenced:
+                print(f"  {name} :: {fn}()  ({production} production call(s))  <-- dead?")
+            print("  This is the arm that matters. D23, D39, D45 and M39 are four instances of a")
+            print("  thing nothing reads; the last was `hooks::write_settings`, which sat in the")
+            print("  *other* arm for days because its two rustdoc links counted as references.")
+            print("  Still advisory rather than fatal: a `pub fn` reached only from an integration")
+            print("  test is legitimate, and blocking a peer's commit on a screen that says it")
+            print("  over-reports would be worse than the silence. Confirm with mutation — a dead")
+            print("  body replaced by a constant survives, which is the second half of the proof.")
+        if by_ref:
+            print(f"{len(by_ref)} passed by reference rather than called — explained, not a finding:")
+            for name, fn, production, refs in by_ref:
+                print(f"  {name} :: {fn}()  — {refs} bare mention(s) in production *code*")
+            print("  Comment mentions are excluded from that count since M39, so a name here has")
+            print("  a real `.is_some_and(f)`-shaped use. Verify the site if it is new to you.")
         print()
 
     if unread:

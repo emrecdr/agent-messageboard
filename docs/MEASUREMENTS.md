@@ -3410,3 +3410,55 @@ invocation that never ran is now a finding rather than a clean bill of health.
 
 Verified in both directions afterwards, which is what the first attempt skipped: a wrong count
 reddens, a correct one passes, and the peer's untracked file moves neither.
+
+---
+
+## M41 · The tool that exists to find dead code put the dead function in its reassuring arm
+
+**2026-08-31.** M39 found `hooks::write_settings` dead by mutation. `find_unread_fields.py` exists
+to find exactly that and had been printing the name every run for days — under the wrong heading.
+
+Its advisory has two arms. One says *nothing in production mentions it at all*, which is a finding.
+The other says *referenced N times without parentheses, so it is passed by reference*, which is the
+tool explaining its own false positive. `write_settings` printed under the second, with `N = 2`.
+
+**The two references were rustdoc links.** ``[`write_settings`]`` is a bare mention of a name with
+no parentheses, which is indistinguishable — to a regex over raw source — from
+`.is_some_and(command_is_ours)` or `apply(&path, dry_run, plan_uninstall)`. The reference count was
+taken over `PROD`, which is every `src/*.rs` file up to its `mod tests`, comments included.
+
+So the tool was not silent and was not wrong about the call count. It was **wrong about the arm**,
+and in the reassuring direction. D84 records that this advisory gets scrolled past; the reason it
+gets scrolled past is that two of its three lines were permanent noise and the third was
+misfiled with them.
+
+### The fix, and the probe that proves it
+
+References are now counted over a comment-stripped view. The stripper is crude in the direction
+that fails loudly: it over-removes, so the error it can make is a false *"nothing mentions it"* —
+checkable in seconds — rather than a false reassurance.
+
+Verified by reconstructing the condition rather than by reasoning about it. A `pub fn
+amb_probe_dead` was added with two rustdoc self-links and no callers:
+
+| | where the probe lands |
+|---|---|
+| with the fix | **NOTHING IN PRODUCTION MENTIONS AT ALL** |
+| references counted over raw source, as before | *passed by reference — 2 bare mentions* |
+
+The classification flips on exactly the change under test, and `write_settings`'s history is that
+second row.
+
+### The two arms are now printed separately
+
+They mean opposite things and shared a paragraph, which is what a reader skims as one block. The
+finding arm names D23, D39, D45 and M39 and says what to do next — confirm with mutation, since a
+dead body replaced by a constant survives and that is the second half of the proof. Neither arm
+fails the run: a `pub fn` reached only from an integration test is legitimate, and blocking a
+peer's commit on a screen whose own header says it over-reports would trade a silence for a
+worse one.
+
+**Two signals were needed and neither was sufficient.** A zero call count was already being
+explained away; a surviving mutation is equally consistent with a live but untested function. Only
+together do they decide it, which is the argument for running both rather than trusting whichever
+one is cheaper.

@@ -11,6 +11,16 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`find_unread_fields.py` counted rustdoc links as by-reference uses** (M41), which is why it
+  filed `hooks::write_settings` under *"passed by reference, so it looks uncalled"* — the
+  reassuring arm — every run for days, while the function was dead. ``[`write_settings`]`` is a
+  bare mention with no parentheses and a regex over raw source cannot tell it from
+  `.is_some_and(f)`. References are now counted over a comment-stripped view, and the two arms
+  print separately because they mean opposite things and were being skimmed as one block (D84).
+
+  Verified by reconstructing the condition: a `pub fn` with two rustdoc self-links and no callers
+  lands in the loud arm with the fix and in the reassuring one without it.
+
 - **Eight properties of the pure core, over generated input, with no new dependency** (D102).
   `tests/properties.rs` asserts totality claims no example list can make — `overlaps` is symmetric
   and reflexive, `quoted` never emits a control character and is idempotent, `redact` is
