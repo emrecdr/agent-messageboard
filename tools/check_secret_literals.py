@@ -59,8 +59,23 @@ def tracked_text_files():
 
 
 def main() -> int:
+    # **Reading nothing is not the same as finding nothing** (M35). `check=True` above catches git
+    # *failing*; it does not catch git succeeding with an empty index, which is exactly what sits
+    # between `git init` and the first `git add`. This repository passed through that state on
+    # 2026-08-31, during a history reset whose entire purpose was getting past secret scanning —
+    # and in that window this check would have printed "no credential-shaped literal in tracked
+    # source" having opened no file at all.
+    paths = tracked_text_files()
+    if not paths:
+        print(
+            "git lists no tracked files, so this check read nothing. That is an inability to"
+            " answer, not a clean result.",
+            file=sys.stderr,
+        )
+        return 1
+
     findings = []
-    for path in tracked_text_files():
+    for path in paths:
         if path == "tools/check_secret_literals.py":
             continue  # the prefix list above is not a credential
         try:

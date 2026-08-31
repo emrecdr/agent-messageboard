@@ -161,9 +161,14 @@ def unreleased_is_honest():
         ["git", "rev-list", "--count", rev], capture_output=True, text=True, cwd=ROOT
     ).stdout.strip()
     section = CHANGELOG.partition("## [Unreleased]")[2].partition("\n## ")[0]
-    if n.isdigit() and int(n) > 0 and "Nothing yet" in section:
+    # An *empty* section makes exactly the claim the words "Nothing yet" make, and the literal-only
+    # test could not see it — the same shape as the rest of M36, one level in: the check existed,
+    # ran, and could not fail on half the cases it is for.
+    silent = "Nothing yet" in section or not section.strip()
+    if n.isdigit() and int(n) > 0 and silent:
         since = f"since {tag}" if tag else "in a history with no tag"
-        return [f"CHANGELOG [Unreleased] says 'Nothing yet' with {n} commit(s) {since}"]
+        how = "says 'Nothing yet'" if "Nothing yet" in section else "is empty"
+        return [f"CHANGELOG [Unreleased] {how} with {n} commit(s) {since}"]
     return []
 
 
@@ -183,10 +188,14 @@ def the_gate_and_ci_run_the_same_checks():
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     problems = []
     for step in re.findall(r'^\s*run "([^"]+)"', verify, re.M):
-        # Match on the command's own name rather than the whole line: the gate labels a step and CI
-        # writes it as a shell line, so the two are never byte-identical and never should be.
-        name = step.split()[-1] if step.startswith("tools/") else step
-        if name not in workflow:
+        # The gate's label is a substring of CI's shell line, which is why this is `in` rather
+        # than equality: `run "cargo test"` against `- run: cargo test`.
+        #
+        # It briefly took `step.split()[-1]` for `tools/` labels, which was a no-op for all six
+        # current labels and wrong for any that grow a flag — `tools/foo.py --x` would have
+        # matched on `--x`. Removed rather than repaired: the whole label is the thing that must
+        # appear in CI.
+        if step not in workflow:
             problems.append(
                 f"tools/verify.sh runs '{step}' and .github/workflows/ci.yml does not"
                 " — CI would pass a commit the gate rejects (D70)"
@@ -225,6 +234,11 @@ def every_bench_script_is_named(problems=None):
             ["git", "ls-files", "bench", "tools"], capture_output=True, text=True, cwd=ROOT
         ).stdout.split()
     )
+    # An empty index is not "no scripts are tracked" — it is an inability to answer, and skipping
+    # every script on the strength of it is the same silent pass this file was just repaired for
+    # (M35). `checks_can_still_fail` reports the cause; this returns rather than pretending.
+    if not tracked:
+        return ["git lists no tracked files under bench/ or tools/ — this check examined nothing"]
     for directory, pattern in (("bench", "*.py"), ("tools", "*")):
         for script in sorted((ROOT / directory).glob(pattern)):
             # Untracked means work in progress, not an uncited script. Without this the check
@@ -245,6 +259,53 @@ def every_bench_script_is_named(problems=None):
     return out
 
 
+def checks_can_still_fail():
+    """Every check above needs something to examine, and an empty input is not a clean bill of health.
+
+    **The generalisation of M35, and the industry has a name for both halves.** The failure is the
+    one Vitest guards with `passWithNoAssertions: false` — its canonical case is seven integration
+    tests passing while the dev server was never running, because an early return meant no assertion
+    was ever reached. `unreleased_is_honest` was `if not tag: return []`, which is the same sentence
+    in Python. The remedy is the other half: MongoDB's *canary test*, which tests the testbed rather
+    than the software, so that a broken harness is distinguishable from a healthy subject.
+
+    This is that canary. It does not check the repository; it checks that the checks above are still
+    looking at something. Each entry names a population that must be non-empty for some check above
+    to be *able* to fail, and none of them can be non-empty by accident.
+
+    The concrete window this closes is not hypothetical. On 2026-08-31 `.git` was deleted and
+    re-initialised; between `git init` and the first `git add` the index was empty, and in that
+    window every check keyed on `git ls-files` — including `check_secret_literals.py` — would have
+    reported success having read no files at all. On the one operation whose entire purpose was
+    getting past secret scanning.
+    """
+    problems = []
+    tracked = subprocess.run(
+        ["git", "ls-files"], capture_output=True, text=True, cwd=ROOT
+    ).stdout.split()
+    if not tracked:
+        problems.append(
+            "git lists no tracked files — every check keyed on the index examined nothing,"
+            " including tools/check_secret_literals.py"
+        )
+    populations = {
+        "docs/*.md": list((ROOT / "docs").glob("*.md")),
+        "decisions in DECISIONS.md": re.findall(
+            r"^## D\d+ ", (ROOT / "docs" / "DECISIONS.md").read_text(encoding="utf-8"), re.M
+        ),
+        "measurements in MEASUREMENTS.md": re.findall(
+            r"^## M\d+ ", (ROOT / "docs" / "MEASUREMENTS.md").read_text(encoding="utf-8"), re.M
+        ),
+        "steps in tools/verify.sh": re.findall(
+            r'^\s*run "', (ROOT / "tools" / "verify.sh").read_text(encoding="utf-8"), re.M
+        ),
+    }
+    for name, found in populations.items():
+        if not found:
+            problems.append(f"{name} is empty — the check that reads it cannot fail")
+    return problems
+
+
 def main():
     if not BIN.exists():
         print(f"no debug binary at {BIN} — run `cargo build` first")
@@ -256,6 +317,7 @@ def main():
         + records_are_uniquely_numbered()
         + unreleased_is_honest()
         + the_gate_and_ci_run_the_same_checks()
+        + checks_can_still_fail()
         + every_bench_script_is_named()
     )
     if problems:

@@ -3020,3 +3020,96 @@ Two rejections were amended the same day for the same reason — D70's `pre-push
 release-automation rejection both argued from *"there is no remote"*. Both conclusions survive on
 other grounds and both notes say so, because **a rejection defended by a fact that stopped being
 true is how a settled question gets reopened on a technicality.**
+
+---
+
+## M36 · What a check needs in order to be *able* to fail, and two that could not
+
+**2026-08-31.** M35 ended on a question rather than a finding: *what repository state does a check
+need in order to be able to fail, and what routine operation destroys it?* This is the sweep. It
+found two live instances, and **one of them was created by the fix for the other's sibling, three
+hours earlier, in the same file.**
+
+### The dependency map
+
+| Check | State it needs to be *able* to fail | Destroyed by |
+|---|---|---|
+| `every_doc_is_indexed` | `docs/*.md` non-empty | deleting docs |
+| `every_command_is_documented` | a built binary | nothing quietly — `main` exits 2 and says so |
+| `counts_are_current` | suite output, `## D` headings | a suite that does not run |
+| `records_are_uniquely_numbered` | `## D` / `## M` headings | an empty or renamed record file |
+| `unreleased_is_honest` | ~~a git tag~~ commit count | **was** `git init` — repaired in M35 |
+| `the_gate_and_ci_run_the_same_checks` | `run "…"` lines in `verify.sh` | rewriting the gate's step syntax |
+| `every_bench_script_is_named` | a **non-empty git index** | `git init`, before the first `git add` |
+| `check_secret_literals.py` | a **non-empty git index** | the same |
+
+### The one written while fixing its sibling
+
+`every_bench_script_is_named` was widened to `tools/` earlier the same day and given `git ls-files`
+so it would skip untracked work in progress. An empty index makes `tracked` an empty set; every
+script is then "untracked"; every script is skipped; the check returns `[]`. **That is the identical
+shape as `unreleased_is_honest`'s `if not tag: return []` — written into the same file, hours after
+repairing that one.**
+
+`CLAUDE.md` already records the pattern: *"fixing one instance trains attention on the thing fixed
+rather than on its siblings"*, with D86, D88 and D90 each a second instance of a defect repaired in
+the same file the same day. This is a fourth, and the sibling was not merely nearby — **the repair
+produced it.**
+
+### The one that mattered, and the window was not hypothetical
+
+`check_secret_literals.py` calls `git ls-files … check=True`. `check=True` catches git *failing*. It
+does not catch git *succeeding with an empty index*, which is exactly the state between `git init`
+and the first `git add`.
+
+This repository was in that state on 2026-08-31, during a history reset **whose entire purpose was
+getting past GitHub's secret scanning**. In that window the check would have printed
+
+```
+no credential-shaped literal in tracked source.
+```
+
+having opened no file at all, and exited 0. Confirmed in a fresh repository: before the change it
+printed exactly that and exited 0; after it, `git lists no tracked files, so this check read
+nothing. That is an inability to answer, not a clean result.` and exit 1.
+
+### The remedy is two halves, and both are standard practice
+
+The failure has a name outside this project. It is what Vitest's `passWithNoAssertions: false`
+exists for, and the canonical case is **seven integration tests passing while the dev server was
+never running**, because an early return meant no assertion was reached — *tests passing is not
+tests verifying*. The published guidance is to make an unmet prerequisite an explicit skip or
+failure rather than a silent return. That is the first half, applied to both instances above.
+
+The second half is MongoDB's **canary test**: one that tests the testbed rather than the software
+under test. `checks_can_still_fail` is that, and it deliberately checks nothing about the
+repository — it checks that the checks are still looking at something. Each entry names a population
+that must be non-empty for some check above to be able to fail, and none can be non-empty by
+accident. Against a fresh empty repository it reports all four; against this one, nothing.
+
+**A check with no input reports success, and the vacuous result is byte-identical to the healthy
+one.** That is the whole class, and it is why no amount of reading the output finds it.
+
+### And the first verification of the last fix proved nothing
+
+`unreleased_is_honest` looked only for the literal *"Nothing yet"*, so an **empty** `[Unreleased]`
+— which makes exactly the same claim — passed. Fixed, then verified by emptying the real
+`CHANGELOG.md` and re-running the gate. It came back **green**.
+
+Not because the rule was wrong. `HEAD` was the tagged commit at that moment, so `v0.2.0..HEAD` was
+zero commits and `int(n) > 0` returned *before* the new clause was ever evaluated. **M17's shape — a
+fixture that never reaches the guarded branch — inside the verification of a fix for this very
+class, in the same hour it was written down.**
+
+Re-verified against a scratch repository with one commit after a tag, as a truth table:
+
+| `[Unreleased]` | verdict |
+|---|---|
+| empty | `is empty with 1 commit(s) since v0.1.0` |
+| `Nothing yet.` | `says 'Nothing yet' with 1 commit(s) since v0.1.0` |
+| real content | passes |
+
+The third row is what proves the other two: it fails if the enclosing `int(n) > 0` ever stops being
+reached, which is the premise the first attempt silently lacked. **An absence-only break test has an
+unproven premise, and "I emptied it and the gate stayed green" is indistinguishable from "the fix
+does not work" until something shows the branch was reached at all.**

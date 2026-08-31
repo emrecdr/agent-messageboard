@@ -9,6 +9,36 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two checks could not fail, and one was created by the fix for the other's sibling** (M36).
+  M35 ended on a question — what state does a check need in order to be *able* to fail, and what
+  routine operation destroys it? Sweeping every check answered it twice.
+
+  `every_bench_script_is_named` was given `git ls-files` hours earlier so it would skip untracked
+  work in progress. An empty index makes every script "untracked", so every script is skipped and
+  the check returns `[]` — the identical shape as the `if not tag: return []` repaired in the same
+  file the same day. `CLAUDE.md` records that fixing one instance trains attention on the thing
+  fixed rather than on its siblings; here the repair *produced* the sibling.
+
+  `tools/check_secret_literals.py` uses `check=True`, which catches git failing and not git
+  succeeding with an empty index — the state between `git init` and the first `git add`. This
+  repository was in that state during a history reset **whose purpose was getting past secret
+  scanning**, and in that window the check printed `no credential-shaped literal in tracked source`
+  having opened no file. Both now report an inability to answer rather than a clean result.
+
+- **`unreleased_is_honest` could not see an empty `[Unreleased]`**, only the literal "Nothing yet" —
+  and an empty section makes the same claim. Same shape as the rest of M36 one level in: a check
+  that exists, runs, and cannot fail on half the cases it is for.
+
+### Added
+
+- **`checks_can_still_fail` — a canary for the checking apparatus itself** (M36). It checks nothing
+  about the repository; it checks that each check above still has a non-empty population to examine,
+  because a check with no input reports success and the vacuous result is byte-identical to the
+  healthy one. The pattern is MongoDB's canary test — one that tests the testbed rather than the
+  software — paired with the rule Vitest spells `passWithNoAssertions: false`.
+
 ## [0.2.0] — 2026-08-31
 
 **Two of D56's four contract surfaces broke, which is what makes this a minor bump rather than a
