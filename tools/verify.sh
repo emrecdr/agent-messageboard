@@ -7,11 +7,15 @@
 # depended entirely on whoever was committing remembering to — in a repository several concurrent
 # agents write to. A guarantee enforced by memory is not enforced.
 #
-# **Why this is a script and not a CI workflow.** This repository has no git remote
-# (`git remote -v` is empty), so a `.github/workflows/` file would never execute. Shipping one as
-# the fix would be a guard that cannot fire, read by the next person as coverage — which is the
-# exact defect class D45, D51 and D58 record. `.github/workflows/ci.yml` exists beside this script
-# for the day a remote is added, and says plainly that it has never run.
+# **Why this is the gate, now that CI also runs.** Until 2026-08-31 this repository had no remote,
+# so `.github/workflows/ci.yml` could not execute and shipping it as the fix would have been a guard
+# that cannot fire — the defect class D45, D51 and D58 record. The repository was then published and
+# that workflow ran, green on Linux and macOS.
+#
+# It changes nothing about which check is primary. **CI fires after a commit is pushed; this fires
+# before one is written**, and only the second stops a bad commit from existing. The workflow
+# duplicates these checks so the two cannot disagree about what "verified" means — they had already
+# diverged once, over `check_secret_literals.py` — so anything added here belongs there too (D70).
 #
 # Cost: **the script measures it and prints it** — the last line of a run is `gate: Ns`. Two
 # states differ by roughly 3x. With nothing changed since the last run the gate is mostly the two

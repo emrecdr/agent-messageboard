@@ -1,18 +1,25 @@
-# THIS WORKFLOW HAS NEVER RUN.
+# **This workflow ran for the first time on 2026-08-31, and both platforms passed.**
 #
-# `git remote -v` in this repository is empty. GitHub Actions executes on a remote; with no
-# remote there is nothing to execute it, and there never has been. It is committed anyway so that
-# adding a remote turns CI on rather than starting a design task — but the first line of this file
-# says so out loud, because a workflow file that looks like coverage and provides none is exactly
-# the shape D45, D51 and D58 record: a mechanism that cannot fire, whose silence reads as success.
+# It said "THIS WORKFLOW HAS NEVER RUN" from the day it was written until that push, which was
+# true and load-bearing: `git remote -v` was empty, GitHub Actions executes on a remote, and a
+# workflow file that looks like coverage while providing none is the shape D45, D51 and D58
+# record. The remote was added when the repository was published; the claim inverted the same
+# minute, and this header is corrected rather than deleted because a file that quietly acquires
+# a true statement teaches nobody (D27's convention).
 #
-# **Until a remote exists, `tools/verify.sh` is the gate that actually runs**, via
-# `git config core.hooksPath .githooks`. This file duplicates it so the two cannot disagree about
-# what "verified" means.
+# Run 33388877601, 1m6s, `ubuntu-latest` and `macos-latest` both green.
 #
-# What this adds over the local gate, on the day it does run: Linux. Every check in this project
-# has only ever been run on macOS, and `libc::kill`, the three `HOME` reads, and the `statfs`
-# network-mount guard are all platform-specific.
+# **What that first run actually bought, and it is not redundancy: Linux.** Every check in this
+# project had only ever executed on macOS. Liveness is `libc::kill`, `db::guard_location`
+# compiles a different branch per OS, and `HOME` is read in three places — all of it unbuilt and
+# unlinted on Linux until this ran. That is the reason for the matrix, and it is now evidence
+# rather than an intention.
+#
+# **`tools/verify.sh` remains the gate**, via `git config core.hooksPath .githooks`. It fires
+# before a commit exists; this fires after one is pushed, so the local gate is still the one that
+# stops a bad commit being written. This file duplicates its checks so the two cannot disagree
+# about what "verified" means — which is why `check_secret_literals.py` is in the list below: it
+# was added to the gate after this workflow was written, and the two had silently diverged.
 
 name: ci
 
@@ -62,3 +69,4 @@ jobs:
         run: |
           python3 tools/check_docs.py
           python3 tools/find_unread_fields.py
+          python3 tools/check_secret_literals.py
