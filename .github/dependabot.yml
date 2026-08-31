@@ -1,0 +1,26 @@
+# Dependency updates, opened as pull requests against `main`.
+#
+# **Weekly, grouped, and deliberately not daily.** Six direct dependencies (`docs/RESEARCH.md`
+# records why each is there) means the useful signal is rare, and a per-crate PR stream on a
+# repository worked by several concurrent agent sessions is noise that trains people to ignore it —
+# the same failure `DECISIONS.md` D24 records for injected context.
+#
+# `cargo` and `github-actions` both, because a pinned action digest rots exactly like a pinned
+# crate and nothing else here would notice.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the routine bumps; anything major still arrives on its own, where the
+      # `rust-version = "1.98.0"` floor and the four D56 contract surfaces can be checked.
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

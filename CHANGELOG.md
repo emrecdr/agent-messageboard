@@ -9,6 +9,24 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-31
+
+**Two of D56's four contract surfaces broke, which is what makes this a minor bump rather than a
+patch.** *Exit codes*: D97 moved every clap-level argument error from `2` to the documented `64`,
+so a script branching on `2` changes behaviour — and `amb hook` with unparseable arguments now
+exits `0` instead of `2`, which is the fix rather than a regression, since `2` is how Claude Code
+blocks a session. *CLI and `--json` shapes*: the `--version` banner gained a `sqlite` field,
+`doctor` gained a `sqlite` row, `install --json` gained `locked`, `lock_error` and `retries`, and
+`--poll 0` / `--limit 0` are now refused where they were silently accepted. Hook entries and vault
+layout are unchanged, so an older `uninstall` still recognises what this installs and an older
+binary still reads every note.
+
+> **`v0.1.0` has no tag, and cannot honestly be given one.** The repository's history was reset on
+> 2026-08-31 to publish it (D100), which destroyed the tag along with the commit it pointed at.
+> Tagging the current tree `v0.1.0` would label a tree containing D96–D100, schema 12 and M29–M33
+> as the 2026-08-28 release. The section below is kept as the record of what 0.1.0 was; the tag is
+> gone and saying so is more useful than a false one.
+
 ### Fixed
 
 - **A gate check had switched itself off, and the operation that did it never touched the check**

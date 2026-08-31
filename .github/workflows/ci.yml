@@ -62,6 +62,24 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
 
+      # **Advisories, Linux only.** `cargo-audit` over `Cargo.lock` against the RustSec database.
+      #
+      # Chosen over `cargo-deny`, and the reason is this project's own ethos rather than a view on
+      # which tool is better. `cargo-deny` adds licence policy, source restrictions and duplicate
+      # bans, and needs a `deny.toml` to express them — a config file that has to be kept true, in
+      # a repository whose recorded failure mode is an artefact quietly drifting from what it
+      # claims. Six direct dependencies and `publish = false` means licence policy answers a
+      # question nobody is asking here, while advisories answer one that matters: D100 already
+      # argues the vendored SQLite is a contract surface worth watching, and RustSec is the only
+      # thing that would say so first.
+      #
+      # `cargo-deny` is the escalation if this is ever published to crates.io.
+      - name: dependency advisories
+        if: matrix.os == 'ubuntu-latest'
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       # Linux only: these are platform-independent, and running them twice would report every
       # drift twice.
       - name: documentation audit

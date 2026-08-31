@@ -70,7 +70,7 @@ Requires Rust **1.98.0** (pinned in `rust-toolchain.toml`; `rustup` will fetch i
 SQLite is compiled in — there is no system dependency.
 
 ```bash
-git clone <this repo> && cd agent-messageboard
+git clone https://github.com/emrecdr/agent-messageboard.git && cd agent-messageboard
 cargo install --path . --locked      # builds release, installs `amb` onto your PATH
 amb --version                        # amb 0.1.0 (bcaa644 2026-08-31, schema 12, sqlite 3.53.2)
 ```
@@ -852,6 +852,14 @@ that was true: Actions executes on a remote and there was none.
 one is written, and only the second stops a bad commit existing. What the first CI run bought is
 **Linux** — every check here had only ever run on macOS, while liveness is `libc::kill` and
 `db::guard_location` compiles a different branch per OS (D70).
+
+CI also runs **`cargo-audit`** against the RustSec advisory database, and
+`.github/dependabot.yml` opens weekly dependency pull requests for both `cargo` and
+`github-actions`, grouped so routine bumps arrive as one PR. `cargo-deny` was considered and
+not adopted: its extra reach is licence policy and source restriction, which need a `deny.toml`
+to keep true, and six direct dependencies under `publish = false` do not pose that question.
+Advisories are the part that matters here — D100 argues the vendored SQLite is a contract
+surface worth watching, and RustSec is what would say so first.
 
 Running one test:
 
