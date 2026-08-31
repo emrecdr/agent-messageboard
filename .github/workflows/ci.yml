@@ -44,7 +44,7 @@ jobs:
         # A single-platform matrix would leave the `cfg`-gated half unbuilt and unlinted.
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # `tools/check_docs.py` compares `[Unreleased]` against commits since the last tag, so
           # it needs history and tags, not the default shallow clone.
