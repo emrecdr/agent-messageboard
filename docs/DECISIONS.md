@@ -1998,9 +1998,19 @@ stale value precisely in the case it exists to diagnose, and a reader would take
 That is D39 and D45 one level deeper — not a field nothing reads, but a field that is unreachable
 at the only moment it matters.
 
-**Release automation — `cargo-release`, `git-cliff`, a tagging CI job.** There is no remote, one
-machine and one user. Each would add a dependency to keep working in exchange for automating an
-annual `git tag -a`.
+**Release automation — `cargo-release`, `git-cliff`, a tagging CI job.** One machine and one user.
+Each would add a dependency to keep working in exchange for automating an annual `git tag -a`.
+
+> **Amended 2026-08-31.** This rejection opened with *"there is no remote"* and that ground is gone
+> — the repository was published and CI has run. The remaining two carry it on their own, so the
+> conclusion is unchanged and the dead clause is struck rather than left to be read as current.
+>
+> The same day supplied an argument that looks like it points the other way and does not. The
+> history was reset, which destroyed the `v0.1.0` tag, and `check_docs.py`'s `[Unreleased]` check
+> was written against `git describe --tags` — so it began returning `[]` unconditionally and the
+> gate stayed green (M35). A tagging job would not have prevented that: the tag was destroyed
+> deliberately, by a person. The repair is a check that does not depend on a tag, which is what was
+> built.
 
 ### `--version` carries a build fingerprint, and that is the operational half of this decision
 
@@ -3060,10 +3070,19 @@ the gate on the same day (D100) and was not in the workflow, so CI would have pa
 gate rejects. Added. **Anything added to one now belongs in the other**, and this sentence is the
 only thing enforcing that.
 
-**Not adopted, and why:** a `pre-push` hook instead of `pre-commit` — with no remote, nothing is
-ever pushed, so it would fire exactly as often as the workflow would. Splitting fast checks into
-`pre-commit` and slow ones into `pre-push` is the standard advice and is wrong here for the same
-reason.
+**Not adopted, and why:** a `pre-push` hook instead of `pre-commit`. Splitting fast checks into
+`pre-commit` and slow ones into `pre-push` is the standard advice and is still wrong here.
+
+> **Amended 2026-08-31, because the original reason expired and the conclusion did not.** This read
+> *"with no remote, nothing is ever pushed, so it would fire exactly as often as the workflow
+> would"* — that is, never. Pushes happen now, so a `pre-push` hook would fire.
+>
+> It is still not adopted, on a ground the original could not have used: a `pre-push` hook fires at
+> **exactly** the moment CI does, so it duplicates the workflow while adding a third place the three
+> can disagree about what "verified" means. And the thing worth having is the one only `pre-commit`
+> gives — a bad commit is never *written*, rather than written and then caught. Restating the
+> reason is the point of this note: a rejection defended by a fact that stopped being true is how a
+> settled question gets reopened by the next reader on the strength of a technicality.
 
 ---
 

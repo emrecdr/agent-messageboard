@@ -9,6 +9,29 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A gate check had switched itself off, and the operation that did it never touched the check**
+  (M35). The history reset destroyed the `v0.1.0` tag; `unreleased_is_honest` began with
+  `git describe --tags` and `return []` when there was no tag, so it passed unconditionally from
+  that moment. `CLAUDE.md` records that all six checks here were verified by breaking them — five
+  were live and one was a no-op, and the gate printed `✓ all checks passed` either way.
+
+  Unlike D83's threshold (M34) this one **worked, was verified, and was then killed from outside**:
+  no diff, no commit that introduced it, and no test that could fail. The repair removes the
+  dependency rather than restoring the tag — "commits since the last release" and "commits at all"
+  are the same question while no release has happened, and the second survives a `git init`.
+
+  **The question this leaves is about dependencies, not conditions:** what repository state does a
+  check need in order to be *able* to fail, and what routine operation destroys it?
+
+- **`.github/workflows/ci.yml` must run every check `tools/verify.sh` runs, and now something says
+  so** (M35). D70 records the divergence that motivated the rule — `check_secret_literals.py` was in
+  the gate and not the workflow, so CI would have passed a commit the gate rejects — and then states
+  that a sentence is the only thing enforcing it. `the_gate_and_ci_run_the_same_checks` enforces it
+  one-directionally: extra steps in CI are expected (the matrix builds on Linux), a missing one is
+  drift. Both new checks were verified by breaking them.
+
 ### Added
 
 - **The `promote.rs` mutation pass got its confirming re-run: 40 of 40 viable mutants caught, up

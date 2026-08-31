@@ -139,19 +139,59 @@ def records_are_uniquely_numbered():
 
 
 def unreleased_is_honest():
-    """`[Unreleased]` saying nothing, while commits exist since the tag, is the drift itself."""
+    """`[Unreleased]` saying nothing, while commits exist, is the drift itself.
+
+    **This check switched itself off on 2026-08-31 and the gate stayed green.** It used to
+    `git describe --tags` and `return []` when there was no tag. The history was then reset at the
+    user's direction and re-initialised, which destroyed the `v0.1.0` tag — so the early return
+    became unconditional and one of the six checks here passed without evaluating anything. Nothing
+    said so, because a check that reports nothing and a check that finds nothing print identically
+    (D88's shape, in the gate itself, disabled by an operation that had nothing to do with it).
+
+    The repair is to stop depending on the tag rather than to recreate it. "Commits exist since the
+    last release" and "commits exist at all" are the same question whenever no release has happened,
+    and the second one cannot be switched off by a `git init`. A tag, when there is one, still
+    narrows the count and the message.
+    """
     tag = subprocess.run(
         ["git", "describe", "--tags", "--abbrev=0"], capture_output=True, text=True, cwd=ROOT
     ).stdout.strip()
-    if not tag:
-        return []
+    rev = f"{tag}..HEAD" if tag else "HEAD"
     n = subprocess.run(
-        ["git", "rev-list", "--count", f"{tag}..HEAD"], capture_output=True, text=True, cwd=ROOT
+        ["git", "rev-list", "--count", rev], capture_output=True, text=True, cwd=ROOT
     ).stdout.strip()
     section = CHANGELOG.partition("## [Unreleased]")[2].partition("\n## ")[0]
     if n.isdigit() and int(n) > 0 and "Nothing yet" in section:
-        return [f"CHANGELOG [Unreleased] says 'Nothing yet' with {n} commit(s) since {tag}"]
+        since = f"since {tag}" if tag else "in a history with no tag"
+        return [f"CHANGELOG [Unreleased] says 'Nothing yet' with {n} commit(s) {since}"]
     return []
+
+
+def the_gate_and_ci_run_the_same_checks():
+    """Whatever `tools/verify.sh` runs, `.github/workflows/ci.yml` runs too.
+
+    **D70 states this rule and says outright that a sentence is the only thing enforcing it.** The
+    divergence it was written after is the proof it needs more: `check_secret_literals.py` was added
+    to the gate and not to the workflow, so CI would have passed a commit the gate rejects — and the
+    two disagreeing about what "verified" means is the one thing the workflow exists to prevent.
+
+    Cheap and one-directional on purpose. A step in CI that is not in the gate is fine and expected:
+    the matrix builds on Linux, which the local gate cannot do at all. A step in the gate that is
+    missing from CI is the drift.
+    """
+    verify = (ROOT / "tools" / "verify.sh").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    problems = []
+    for step in re.findall(r'^\s*run "([^"]+)"', verify, re.M):
+        # Match on the command's own name rather than the whole line: the gate labels a step and CI
+        # writes it as a shell line, so the two are never byte-identical and never should be.
+        name = step.split()[-1] if step.startswith("tools/") else step
+        if name not in workflow:
+            problems.append(
+                f"tools/verify.sh runs '{step}' and .github/workflows/ci.yml does not"
+                " — CI would pass a commit the gate rejects (D70)"
+            )
+    return problems
 
 
 BIN = ROOT / "target" / "debug" / "amb"
@@ -215,6 +255,7 @@ def main():
         + counts_are_current()
         + records_are_uniquely_numbered()
         + unreleased_is_honest()
+        + the_gate_and_ci_run_the_same_checks()
         + every_bench_script_is_named()
     )
     if problems:

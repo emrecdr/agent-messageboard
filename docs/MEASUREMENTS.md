@@ -2952,3 +2952,71 @@ rather than in a ledger.
 Both sides are now counted through a `.backup` copy opened normally, and an empty snapshot is
 reported as *"could not count the board"* rather than as agreement. **When a check compares two
 reads, ask what it prints when both reads fail.**
+
+---
+
+## M35 · A gate check switched itself off, and the thing that switched it off never touched it
+
+**2026-08-31.** The git history was reset at the user's direction and re-initialised, so the first
+push to GitHub would not be blocked by push protection on 89 of 95 historical commits. That
+operation destroyed the `v0.1.0` tag. It also, invisibly, disabled one of the six checks in
+`tools/check_docs.py`:
+
+```python
+tag = subprocess.run(["git", "describe", "--tags", "--abbrev=0"], …).stdout.strip()
+if not tag:
+    return []                      # <- unconditional, from the moment the tag stopped existing
+```
+
+`unreleased_is_honest` is the check that catches `CHANGELOG` claiming *"Nothing yet"* while commits
+exist. `CLAUDE.md` records that **all six were verified by breaking them**, and that was true when
+written. Afterwards five were live and one returned an empty list every time, and the gate printed
+`✓ all checks passed` exactly as before.
+
+### Why this is not just another dead condition
+
+D95 named the shape — a stated condition that cannot fire is worse than none, because a reader sees
+a standard and assumes something is watching. M34 found the same shape in D83's threshold. Both of
+those were **dead at birth**: nothing had ever been able to evaluate them.
+
+This one **worked, was verified, and was then killed from outside.** The operation that killed it
+was a `git init` — it did not touch `check_docs.py`, `CHANGELOG.md`, or anything the check reads
+except a tag that was incidental to the check's purpose. There is no diff to review, no commit that
+introduced it, and no test that could fail, because the check's own contract is "return the problems
+you found" and it found none.
+
+**So the reusable question is about dependencies rather than about conditions:** *what repository
+state does this check need in order to be able to fail, and what routine operation destroys it?* A
+check that reads a tag, a remote, a branch name, an untracked file or a directory is disabled by any
+operation that removes one — and it reports that state identically to a clean run. This is D88's
+shape ("a ledger that only writes on success reports a broken mechanism as an idle one") arriving
+through an external dependency rather than through an unhappy path.
+
+**The repair is to remove the dependency, not to restore the tag.** "Commits exist since the last
+release" and "commits exist at all" are the same question while no release has happened, and the
+second cannot be destroyed by a `git init`. A tag, when there is one, still narrows the count and
+the message. Confirmed by breaking:
+
+```
+CHANGELOG [Unreleased] says 'Nothing yet' with 3 commit(s) in a history with no tag
+```
+
+### And a rule D70 said was enforced by one sentence
+
+The same push exposed a real divergence: `check_secret_literals.py` had been added to
+`tools/verify.sh` and not to `.github/workflows/ci.yml`, so **CI would have passed a commit the gate
+rejects** — the one thing a duplicated workflow exists to prevent. D70 records the fix and then says
+outright that *"this sentence is the only thing enforcing that"*.
+
+`the_gate_and_ci_run_the_same_checks` now enforces it, and it is deliberately one-directional: a
+step in CI that is not in the gate is expected, because the matrix builds on Linux and the local
+gate cannot. A step in the gate missing from CI is the drift. Verified by removing one:
+
+```
+tools/verify.sh runs 'tools/check_secret_literals.py' and .github/workflows/ci.yml does not
+```
+
+Two rejections were amended the same day for the same reason — D70's `pre-push` alternative and the
+release-automation rejection both argued from *"there is no remote"*. Both conclusions survive on
+other grounds and both notes say so, because **a rejection defended by a fact that stopped being
+true is how a settled question gets reopened on a technicality.**
