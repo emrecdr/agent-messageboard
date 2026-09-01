@@ -40,6 +40,13 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`amb install --dry-run` reports the delta, not the desired state.** A reinstall whose only
+  difference was one new event printed seven `+` rows — a one-entry edit reading as a wholesale
+  rewrite until the JSON was diffed. Additions and removals now cancel as *identical pairs*
+  (label, matcher, and entry content), so an exe repoint — D94's case — still reports every
+  entry as both removed and re-added, because every one genuinely is. `searches` is measured
+  into D83's growth picture as M49: one row, the slowest ledger on the board.
+
 - **The capture failure counter is per-session, and the fail-loud notice is machine-wide**
   (D108). One shared `.memory-failures` file let any healthy session clear a broken session's
   consecutive count indefinitely; markers are now keyed by session, the reader takes the worst

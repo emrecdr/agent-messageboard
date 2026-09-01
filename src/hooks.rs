@@ -242,8 +242,10 @@ const MEMORY_EVENTS: &[(&str, Option<&str>)] = &[
 /// hooks in the same events are preserved, and only our own entries are replaced.
 pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Plan {
     let mut settings = existing.clone();
-    let mut added = Vec::new();
-    let mut removed = Vec::new();
+    // Ledgers, not labels: what was removed and what was added carry their content, so the
+    // delta below can tell an identical re-add from a rewrite. Reduced to labels at the end.
+    let mut added: Vec<(String, Option<Value>, Value)> = Vec::new();
+    let mut removed: Vec<(String, Option<Value>, Value)> = Vec::new();
 
     if !settings.is_object() {
         settings = Value::Object(Map::new());
@@ -253,8 +255,8 @@ pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Pl
     let Some(root) = settings.as_object_mut() else {
         return Plan {
             settings,
-            added,
-            removed,
+            added: Vec::new(),
+            removed: Vec::new(),
         };
     };
     let hooks = root
@@ -266,8 +268,8 @@ pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Pl
     let Some(hooks) = hooks.as_object_mut() else {
         return Plan {
             settings,
-            added,
-            removed,
+            added: Vec::new(),
+            removed: Vec::new(),
         };
     };
 
@@ -293,19 +295,26 @@ pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Pl
         }
     }
 
-    // A removal that is immediately re-added is not a change worth reporting. Matched exactly,
-    // which only works because `strip_ours` labels a memory entry differently from a delivery
-    // one: re-adding `SessionStart` must not silence the removal of `SessionStart (memory)`.
-    // Each removal cancels at most *one* addition, so removing two entries under an event and
-    // re-adding one still reports the difference.
-    let mut available = added.clone();
-    removed.retain(|e| match available.iter().position(|a| a == e) {
-        Some(i) => {
-            available.remove(i);
-            false
+    // A removal whose *identical* entry is immediately re-added is not a change at all —
+    // cancel the pair, from both lists. The first version cancelled only the removal, so a
+    // reinstall whose sole difference was one new event printed the entire desired state as
+    // `+` lines: seven rows for a one-entry edit, which reads as a wholesale rewrite until
+    // someone diffs the JSON (it took exactly that to trust it once). Matched on content —
+    // label, matcher, and the entry itself — not label alone: an entry re-added with a
+    // different command or matcher is a genuine rewrite and keeps both its `-` and its `+`,
+    // and label-only matching would have silenced precisely the exe-repoint case D94 exists
+    // to catch. Position-based, so duplicates still cancel one-for-one.
+    let mut surviving = Vec::new();
+    for a in added {
+        match removed.iter().position(|r| *r == a) {
+            Some(i) => {
+                removed.remove(i);
+            }
+            None => surviving.push(a),
         }
-        None => true,
-    });
+    }
+    let added = surviving.into_iter().map(|(l, _, _)| l).collect();
+    let removed = removed.into_iter().map(|(l, _, _)| l).collect();
     settle(settings, added, removed, existing)
 }
 
@@ -318,17 +327,18 @@ pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Pl
 /// same event. Reporting only the event name meant `amb install` (without `--memory`) said it
 /// removed a `PreToolUse` hook and stayed silent about the `SessionStart` memory entry it also
 /// took out — a summary that understates what was done, in exactly the area D29 was about.
-fn strip_ours(hooks: &mut Map<String, Value>) -> Vec<String> {
+fn strip_ours(hooks: &mut Map<String, Value>) -> Vec<(String, Option<Value>, Value)> {
     let mut removed = Vec::new();
     for (event, matchers) in hooks.iter_mut() {
         let Some(list) = matchers.as_array_mut() else {
             continue;
         };
         for matcher in list.iter_mut() {
+            let scope = matcher.get("matcher").cloned();
             if let Some(inner) = matcher.get_mut("hooks").and_then(Value::as_array_mut) {
                 inner.retain(|e| {
                     if is_ours(e) {
-                        removed.push(label_of(event, e));
+                        removed.push((label_of(event, e), scope.clone(), e.clone()));
                         false
                     } else {
                         true
@@ -477,7 +487,7 @@ fn push_entry(
     event: &str,
     matcher: Option<&str>,
     entry: Value,
-    added: &mut Vec<String>,
+    added: &mut Vec<(String, Option<Value>, Value)>,
     label: &str,
 ) {
     let list = hooks
@@ -489,7 +499,7 @@ fn push_entry(
     let Some(list) = list.as_array_mut() else {
         return;
     };
-    let mut wrapper = json!({ "hooks": [entry] });
+    let mut wrapper = json!({ "hooks": [entry.clone()] });
     // Only written when there is one. An absent matcher and `"*"` mean the same thing to the
     // platform, and the delivery hooks have always been written without one.
     if let Some(m) = matcher
@@ -498,7 +508,11 @@ fn push_entry(
         obj.insert("matcher".to_string(), Value::String(m.to_string()));
     }
     list.push(wrapper);
-    added.push(format!("{event}{label}"));
+    added.push((
+        format!("{event}{label}"),
+        matcher.map(|m| Value::String(m.to_string())),
+        entry,
+    ));
 }
 
 /// The two fields every file-scoped hook reads out of a Claude Code payload.
@@ -603,7 +617,7 @@ pub fn plan_uninstall(existing: &Value) -> Plan {
     let mut removed = Vec::new();
 
     if let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) {
-        removed.extend(strip_ours(hooks));
+        removed.extend(strip_ours(hooks).into_iter().map(|(label, _, _)| label));
         let empty: Vec<String> = hooks
             .iter()
             .filter(|(_, v)| v.as_array().is_some_and(|a| a.is_empty()))
@@ -1354,6 +1368,50 @@ mod tests {
         let once = plan_uninstall(&installed);
         assert!(!once.is_noop());
         assert!(plan_uninstall(&once.settings).is_noop());
+    }
+
+    /// The dry-run's promise is the *delta*, in both directions. A one-event widening reports
+    /// exactly the new entries and no removals; an exe repoint — the change D94 exists to catch
+    /// — reports every entry as both removed and re-added, because every one genuinely is. The
+    /// first version printed the whole desired state as `+` for any change at all, so a
+    /// one-entry edit read as a seven-row rewrite.
+    #[test]
+    fn a_dry_run_reports_the_delta_not_the_desired_state() {
+        // Pure widening: same mode, memory added. The four delivery entries are re-added
+        // byte-identical, so they cancel; only the three memory entries are news. (A *mode*
+        // switch is not this case — it rewrites every delivery entry's argv, and reporting
+        // those as changes is correct.)
+        let plain = plan_install(&json!({}), "/bin/amb", Mode::Turn, false).settings;
+        let widened = plan_install(&plain, "/bin/amb", Mode::Turn, true);
+        assert_eq!(
+            widened.added,
+            [
+                "SessionStart (memory)",
+                "PreToolUse (memory)",
+                "PostToolUseFailure (memory)"
+            ],
+            "only the genuinely new entries"
+        );
+        assert!(
+            widened.removed.is_empty(),
+            "the four unchanged delivery entries are not removals: {:?}",
+            widened.removed
+        );
+
+        let turn = plan_install(&json!({}), "/bin/amb", Mode::Turn, false).settings;
+        let repointed = plan_install(&turn, "/usr/local/bin/amb", Mode::Turn, false);
+        assert_eq!(
+            repointed.added.len(),
+            4,
+            "a repoint rewrites every entry: {:?}",
+            repointed.added
+        );
+        assert_eq!(
+            repointed.removed.len(),
+            4,
+            "and says what it replaced: {:?}",
+            repointed.removed
+        );
     }
 
     #[test]

@@ -133,11 +133,22 @@ def counts_are_current():
             "`cargo test` reported no passing tests — the count could not be taken, which is not"
             " the same as the docs being right"
         ]
-    if actual:
-        for name, text in (("README.md", README), ("CLAUDE.md", CLAUDE)):
-            for quoted in set(re.findall(r"(\d+) tests", text)):
-                if int(quoted) != actual:
-                    problems.append(f"{name} says {quoted} tests; the suite runs {actual}")
+    # The suite is deliberately platform-asymmetric — the statfs magic table compiles only on
+    # Linux (M46: "CI's Linux leg is the assertor"), so one count stopped being checkable the
+    # day that landed: whichever leg the docs quoted, the other platform's run disagreed, and
+    # this check went red on CI while green at the gate. The docs therefore quote both legs as
+    # `N tests (M on Linux)`, and this check verifies the leg it is actually standing on —
+    # bare `N tests` quotes (no annotation) are still held to the local count, so a stray
+    # unannotated number elsewhere stays guarded.
+    on_linux = sys.platform.startswith("linux")
+    for name, text in (("README.md", README), ("CLAUDE.md", CLAUDE)):
+        for mac_n, linux_n in set(re.findall(r"(\d+) tests(?: \((\d+) on Linux\))?", text)):
+            expected = int(linux_n) if (on_linux and linux_n) else int(mac_n)
+            if expected != actual:
+                leg = "Linux" if on_linux else "this platform"
+                problems.append(
+                    f"{name} quotes {expected} tests for {leg}; the suite here runs {actual}"
+                )
     return problems
 
 

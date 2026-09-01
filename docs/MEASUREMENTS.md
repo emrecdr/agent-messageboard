@@ -3876,3 +3876,24 @@ mis-spelling of the window, fewer than the multiplicative truth, plus one prefix
 note that makes exact and coarse counts disagree. The resolve arm gets the presence row its match
 was missing. All three re-applied by hand after writing the guards and seen red; reverts
 byte-identical.
+
+## M49 · The `searches` ledger, measured into D83's growth picture
+
+**2026-09-02.** The read-only audit flagged `searches` (migration 12) as the one table that
+post-dates D83's measurement — a row per `amb memory recall`, no dedup, never windowed out —
+so "what does a year-old board look like" had an unmeasured term. Measured against a copy of
+the live board (never the live file), with the `sqlite3` CLI:
+
+- **`searches`: 1 row.** Forty payload bytes. Written 2026-08-31, lane `text`, one hit.
+- The same board holds 116 `messages`, 116 `note_events`, and totals 786 KB.
+
+So the flagged table is the **slowest-growing ledger on the board by two orders of magnitude**,
+and its growth is bounded by how often `recall` is actually run — which the receipt already
+counts. There is no pruning question here at any plausible horizon; D83's 50 MB trigger remains
+the number to watch, and `messages` bodies remain what would trip it.
+
+**The row count carries a second reading, and it is Q10's.** This ledger writes misses as well
+as hits (`hits` is a column — D89 built it so a broken search and an unasked one stop printing
+the same zero), so near-emptiness here means *recall is barely run*, not that failures go
+unrecorded. That is also why the FTS5 upgrade stays held: the instrument that would justify it
+is live and quiet, which is the cheap answer working as designed.
