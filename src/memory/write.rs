@@ -418,6 +418,63 @@ mod tests {
         );
     }
 
+    /// **The collision loop was the module's entire missed set: eight mutants, all in
+    /// [`free_slug`], because no test had ever collided two notes** (M49). The docstring above it
+    /// calls silent overwrite "the one thing this design promises never to do", and the promise
+    /// had zero assertions. This drives the real function against a real directory through every
+    /// branch:
+    ///
+    /// - the first note takes the bare stem (kills `n == 1 → !=`, which suffixes it `-1`);
+    /// - the second takes `-2`, never the first's name (kills the deleted `!`, which returns the
+    ///   existing path and overwrites, and `+= → -=`, which suffixes `-0`);
+    /// - past the cap the loop stops probing and returns `-201` even though it exists — the
+    ///   bounded-work trade the constant encodes (kills every mutant of `> 200`, each of which
+    ///   moves the crossing, and `|| → &&`, which sends a *fresh* note to `-201`).
+    ///
+    /// `+= → *=` pins `n` at 1 forever and only a collision makes that observable — as a hang,
+    /// which the harness reports as a timeout. That is the designed detection, not a gap (M46's
+    /// `budget_spent` shape).
+    #[test]
+    fn a_title_collision_gets_a_fresh_suffix_and_the_cap_stops_the_probe() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d = dir.path();
+
+        let (first, path) = free_slug(d, "2026-09-02", "same-lesson");
+        assert_eq!(
+            first, "2026-09-02-same-lesson",
+            "the first note is unsuffixed"
+        );
+        std::fs::write(&path, "x").expect("write");
+
+        let (second, path2) = free_slug(d, "2026-09-02", "same-lesson");
+        assert_eq!(
+            second, "2026-09-02-same-lesson-2",
+            "a collision is a new name"
+        );
+        assert_ne!(
+            path2, path,
+            "never the first note's path — overwrite is the one broken promise"
+        );
+        std::fs::write(&path2, "x").expect("write");
+
+        // Fill every slot the probe will visit, using the function's own answers rather than a
+        // second copy of its format.
+        for _ in 2..201 {
+            let (_, p) = free_slug(d, "2026-09-02", "same-lesson");
+            std::fs::write(&p, "x").expect("write");
+        }
+        let (capped, capped_path) = free_slug(d, "2026-09-02", "same-lesson");
+        assert_eq!(
+            capped, "2026-09-02-same-lesson-201",
+            "past 200 collisions the probe stops and reuses the last name — bounded work, \
+             accepted overwrite"
+        );
+        assert!(
+            capped_path.exists(),
+            "and that name does exist: the cap is the trade"
+        );
+    }
+
     #[test]
     fn a_supersession_is_named_and_says_what_it_costs_the_old_note() {
         let mut w = written();
