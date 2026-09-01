@@ -378,18 +378,12 @@ pub fn size_check(bytes: u64) -> Check {
     }
 }
 
-/// Whether SQLite's own consistency check passed, and what to do when it did not.
+/// What the probe was able to say.
 ///
-/// **A corrupted board previously had no way to say so** — no `quick_check` ran anywhere, so
-/// corruption surfaced as whatever query failed first, usually inside a hook that swallows
-/// errors by contract (D9). `quick_check` rather than `integrity_check`: it skips the
-/// index-content verification, which keeps doctor quick on a D83-sized board, and what it can
-/// miss there is repaired by `REINDEX`, not lost.
-///
-/// What the probe was able to say. Three named verdicts rather than the `Option<Option<String>>`
-/// an earlier form took — the nesting encoded these positionally, its own test had to write
-/// `integrity_check(Some(None))` for "healthy", and the caller composed two different failure
-/// sources into one unlabelled shape.
+/// Three named verdicts rather than the `Option<Option<String>>` an earlier form took — the
+/// nesting encoded these positionally, its own test had to write `integrity_check(Some(None))`
+/// for "healthy", and the caller composed two different failure sources into one unlabelled
+/// shape.
 pub enum Integrity {
     /// The probe never answered — the board did not open, or `quick_check` itself errored. A
     /// `Warn`, not a `Bad`: when the cause is the board, the schema line beside this reports
@@ -399,6 +393,27 @@ pub enum Integrity {
     Failed(String),
 }
 
+impl Integrity {
+    /// Every shape the probe hands back, named in one place. `None` is "the board never
+    /// opened"; `Some(Err(_))` is "`quick_check` itself failed" — different causes, one honest
+    /// verdict, because the schema line beside it reports an opening failure in its own terms.
+    /// This match used to live inline in [`gather`], where nothing tested it (D78's pull).
+    fn from_probe(probe: Option<crate::error::Result<Option<String>>>) -> Self {
+        match probe {
+            None | Some(Err(_)) => Integrity::CouldNotRun,
+            Some(Ok(None)) => Integrity::Passed,
+            Some(Ok(Some(err))) => Integrity::Failed(err),
+        }
+    }
+}
+
+/// Whether SQLite's own consistency check passed, and what to do when it did not.
+///
+/// **A corrupted board previously had no way to say so** — no `quick_check` ran anywhere, so
+/// corruption surfaced as whatever query failed first, usually inside a hook that swallows
+/// errors by contract (D9). `quick_check` rather than `integrity_check`: it skips the
+/// index-content verification, which keeps doctor quick on a D83-sized board, and what it can
+/// miss there is repaired by `REINDEX`, not lost.
 pub fn integrity_check(finding: Integrity) -> Check {
     match finding {
         Integrity::CouldNotRun => Check::new(
@@ -542,27 +557,24 @@ pub fn gather(now: f64) -> Report {
     // freshness lanes in the memory block below. An earlier form opened a second one for
     // freshness, which paid the whole open (and `migrate`'s version pass) twice per run.
     let board_path = db::db_path();
-    let conn = board_path
-        .as_ref()
-        .ok()
-        .filter(|p| p.exists())
-        .and_then(|p| db::open_at(p).ok());
+    let mut conn = None;
     match &board_path {
         Err(e) => checks.push(Check::new("board", Health::Warn, e.to_string())),
         Ok(path) => {
             checks.push(location_check(path));
+            let exists = path.exists();
+            if exists {
+                conn = db::open_at(path).ok();
+            }
             let on_disk = conn.as_ref().and_then(|c| {
                 c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .ok()
             });
             checks.push(schema_check(on_disk, db::SCHEMA_VERSION));
-            if path.exists() {
-                let finding = match conn.as_ref().map(db::quick_check) {
-                    None | Some(Err(_)) => Integrity::CouldNotRun,
-                    Some(Ok(None)) => Integrity::Passed,
-                    Some(Ok(Some(err))) => Integrity::Failed(err),
-                };
-                checks.push(integrity_check(finding));
+            if exists {
+                checks.push(integrity_check(Integrity::from_probe(
+                    conn.as_ref().map(db::quick_check),
+                )));
                 checks.push(size_check(board_bytes(path)));
             }
         }
@@ -610,6 +622,29 @@ pub fn gather(now: f64) -> Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every probe shape lands on the verdict its Check will name — all four rows, because the
+    /// map from what [`gather`] saw to what doctor prints used to live inline there, tested by
+    /// nothing (the `Some(Err(_))` arm in particular was exercised by no test at all).
+    #[test]
+    fn every_probe_shape_names_its_verdict() {
+        assert!(matches!(
+            Integrity::from_probe(None),
+            Integrity::CouldNotRun
+        ));
+        assert!(matches!(
+            Integrity::from_probe(Some(Err(crate::error::Error::NoSuchMessage(0)))),
+            Integrity::CouldNotRun
+        ));
+        assert!(matches!(
+            Integrity::from_probe(Some(Ok(None))),
+            Integrity::Passed
+        ));
+        assert!(matches!(
+            Integrity::from_probe(Some(Ok(Some("page 2".into())))),
+            Integrity::Failed(ref e) if e == "page 2"
+        ));
+    }
 
     /// **A truth table, because the guard is a comparison and comparisons relax silently.**
     ///

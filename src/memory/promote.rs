@@ -425,6 +425,13 @@ pub fn gate_json(confirm: &str, offer: Option<serde_json::Value>) -> serde_json:
     refusal
 }
 
+/// The `--direct` gate's prose twin, beside [`gate_json`] so one gate's two formats live in one
+/// file — the drift M26 names is exactly what a prose copy of this stranded in `main.rs` costs.
+pub fn render_direct_gate() -> &'static str {
+    "direct promotion skips the derivation ledger entirely, so there is \
+     nothing to read.\n  confirm with --direct --yes"
+}
+
 /// The offer `amb memory promote` prints when `--yes` was not given.
 ///
 /// **Pure, and separate from the write, because this text *is* the human gate.** The threshold
@@ -851,6 +858,9 @@ mod tests {
         let with = gate_json("--yes", Some(offer_json(&c, &destination(&c))));
         assert_eq!(with["written"], serde_json::Value::Bool(false), "{with}");
         assert!(with["offer"]["derivations"].is_array(), "{with}");
+
+        // The prose twin names the same confirmation — one gate, two formats, one file (M26).
+        assert!(render_direct_gate().contains("--direct --yes"));
     }
 
     /// A newline in a title cannot forge a derivation line on the approval gate.

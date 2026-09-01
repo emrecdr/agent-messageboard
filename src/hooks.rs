@@ -531,6 +531,30 @@ pub fn is_stop_refire(input: &Value) -> bool {
     input.get("stop_hook_active").and_then(Value::as_bool) == Some(true)
 }
 
+/// The event this payload announces, with `SessionStart` standing in for everything else.
+///
+/// The same three-copy count that hoisted [`tool_and_file`] (D78): written out identically in
+/// `hook_main`, `hook_memory` and `hook_deliver`, on a schema this project does not own. Absent
+/// or wrongly-typed fields degrade to `"SessionStart"` — every consumer treats that as the
+/// ordinary banner case, so an unknown event renders like a session opening, never like a tool
+/// event it was not.
+pub fn event_name(input: &Value) -> &str {
+    input
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .unwrap_or("SessionStart")
+}
+
+/// True when this payload comes from a subagent rather than the session itself.
+///
+/// A subagent is not a participant on the board: it has no independent inbox and would register
+/// as a phantom peer, so every hook goes silent for it. The key's *presence* is the whole test —
+/// a null or wrongly-typed `agent_id` still reads as a subagent, because only subagent payloads
+/// carry the key at all, and assuming more of the schema is not ours to do.
+pub fn is_subagent(input: &Value) -> bool {
+    input.get("agent_id").is_some()
+}
+
 /// Every hook entry that belongs to us, as `(event, executable)`.
 ///
 /// **The executable, specifically, and that is the point.** [`command_is_ours`] matches on the
@@ -973,6 +997,35 @@ mod tests {
             (Value::Null, false),
         ] {
             assert_eq!(is_stop_refire(&payload), expected, "{payload}");
+        }
+    }
+
+    /// The extraction degrades to `SessionStart`, never to a panic and never to a tool event.
+    #[test]
+    fn an_absent_or_alien_event_reads_as_session_start() {
+        for (payload, expected) in [
+            (json!({"hook_event_name": "Stop"}), "Stop"),
+            (json!({"hook_event_name": "PostToolUse"}), "PostToolUse"),
+            (json!({"hook_event_name": 7}), "SessionStart"),
+            (json!({}), "SessionStart"),
+            (Value::Null, "SessionStart"),
+        ] {
+            assert_eq!(event_name(&payload), expected, "{payload}");
+        }
+    }
+
+    /// Presence of the key is the whole test: null still counts, absence never does. Both
+    /// directions in one table (M27) — the present rows kill an always-participate mutant, the
+    /// absent rows an always-silent one.
+    #[test]
+    fn only_the_agent_id_key_marks_a_subagent() {
+        for (payload, expected) in [
+            (json!({"agent_id": "abc123"}), true),
+            (json!({"agent_id": null}), true),
+            (json!({"session_id": "abc123"}), false),
+            (Value::Null, false),
+        ] {
+            assert_eq!(is_subagent(&payload), expected, "{payload}");
         }
     }
 

@@ -862,10 +862,9 @@ fn hook_main(mode: &str) -> ExitCode {
     let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw);
     let input: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
 
-    // A subagent is not a participant on the board: it has no independent inbox and would
-    // register as a phantom peer. Borrowed from an existing hook on this machine that does the
-    // same check for the same reason.
-    if input.get("agent_id").is_some() {
+    // A subagent gets silence for the same reason a Stop re-fire does below —
+    // `hooks::is_subagent` carries the full story.
+    if hooks::is_subagent(&input) {
         return ExitCode::SUCCESS;
     }
 
@@ -913,10 +912,7 @@ fn hook_main(mode: &str) -> ExitCode {
             .unwrap_or_else(|_| "amb".to_string());
         let notice =
             delivery::stale_binary_notice(path, &exe, amb::version::banner(), found, expected);
-        let event = input
-            .get("hook_event_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("SessionStart");
+        let event = hooks::event_name(&input);
         println!("{}", delivery::envelope(event, &notice));
     }
     if let Err(e) = result
@@ -943,10 +939,7 @@ fn hook_memory(input: &serde_json::Value) -> Result<(), Error> {
     let Some(vault) = memory::vault_path() else {
         return Ok(());
     };
-    let event = input
-        .get("hook_event_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("SessionStart");
+    let event = hooks::event_name(input);
     let me = identity::resolve()?;
     let conn = db::open_at_for_hook(&path)?;
     let at = db::now()?;
@@ -1121,10 +1114,7 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
         return Ok(());
     }
 
-    let event = input
-        .get("hook_event_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("SessionStart");
+    let event = hooks::event_name(input);
     let me = identity::resolve()?;
     let mut conn = db::open_at_for_hook(&path)?;
     identity::touch(&conn, &me, None)?;
@@ -1444,10 +1434,7 @@ fn run_memory(
                     if cli.json {
                         print_json(&memory::gate_json("--direct --yes", None));
                     } else {
-                        println!(
-                            "direct promotion skips the derivation ledger entirely, so there is \
-                             nothing to read.\n  confirm with --direct --yes"
-                        );
+                        println!("{}", memory::render_direct_gate());
                     }
                     return Ok(());
                 }

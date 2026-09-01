@@ -1084,6 +1084,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn the_root_volume_answers_with_a_name_and_no_locality_claim() {
         let (name, local) = volume_of(std::path::Path::new("/")).expect("statfs on / succeeds");
+        // "xyzzy" is cargo-mutants' canonical String replacement: the clause kills the
+        // replaced-body mutants of `volume_of` and `fstype_name`, not a real fstype.
         assert!(!name.is_empty() && name != "xyzzy", "{name}");
         assert_eq!(local, None);
     }
@@ -1101,20 +1103,24 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let p = dir.path().join("board.db");
         std::fs::write(&p, b"x").expect("file");
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o400)).expect("chmod");
-        restrict(&p, false);
-        let mode = std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777;
+        let mode_after = |m: u32| {
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(m)).expect("chmod");
+            restrict(&p, false);
+            std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777
+        };
         assert_eq!(
-            mode, 0o400,
+            mode_after(0o400),
+            0o400,
             "restrict must not widen a deliberately tight mode"
         );
 
         // The loose direction still tightens — the row proving the gate above was consulted,
         // without which the assertion above is satisfied by `restrict` doing nothing at all.
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).expect("chmod");
-        restrict(&p, false);
-        let mode = std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "a group-readable board is tightened");
+        assert_eq!(
+            mode_after(0o644),
+            0o600,
+            "a group-readable board is tightened"
+        );
     }
 
     /// A database that cannot convert answers with its real mode, after the whole budget —

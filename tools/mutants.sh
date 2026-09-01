@@ -48,8 +48,8 @@
 #     moment it lands. Two consecutive baselines failed on the same missing file with the
 #     directory freshly deleted in between (2026-09-01), which is what proved the cleaner was
 #     concurrent rather than nightly. The directory now lives under `~/.cache`, where no cleaner
-#     runs; if a baseline ever fails on a missing generated file again, delete the directory and
-#     check nothing has moved it back under `$TMPDIR`.
+#     runs, and the script refuses a `$TMPDIR`-resolved target outright below — a note saying
+#     "do not move it back" is the D39/D45 failure, so the check is mechanical.
 #
 # Usage:
 #   tools/mutants.sh src/claims.rs [src/other.rs ...]   one or more modules, exhaustively
@@ -72,6 +72,17 @@ fi
 # Private, so a mutant can never land in the shared target directory. Kept between runs: a cold
 # build costs ~90s and the incremental rebuild per mutant is most of what makes this affordable.
 export CARGO_TARGET_DIR="${AMB_MUTANTS_TARGET:-${XDG_CACHE_HOME:-$HOME/.cache}/amb-mutants-target}"
+
+# Refuse, not warn: a $TMPDIR-resolved target dir fails as a missing generated file mid-run,
+# which reads as a broken test suite, never as this line (see the 2006-mtime trap in the header).
+case "$CARGO_TARGET_DIR" in
+  "${TMPDIR:-/tmp}"*)
+    echo "refusing: CARGO_TARGET_DIR ($CARGO_TARGET_DIR) resolves under \$TMPDIR, where macOS's" >&2
+    echo "age-based cleaner eats libsqlite3-sys's 2006-mtime bindgen.rs mid-run (header, trap 2)." >&2
+    echo "Point AMB_MUTANTS_TARGET somewhere durable, e.g. ~/.cache/amb-mutants-target" >&2
+    exit 78
+    ;;
+esac
 
 # `--copy-vcs true` or `build.rs` cannot fingerprint the repository and the BASELINE fails before
 # a single mutant runs — the first symptom anyone hits, and it looks like a broken test suite.

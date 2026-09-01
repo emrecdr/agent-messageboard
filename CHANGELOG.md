@@ -11,6 +11,22 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **A second simplify pass, over the first one's own commits.** Four review lanes over the four
+  unpushed commits — including the pass below — converged on one shape: a rule the diff itself
+  states, applied to half its instances. `claims::list_sql` returns clause and binds as one pair
+  again (the interim form kept the SQL in one function and the binds in `list`, agreeing by
+  comment, with a third hand-built copy in the plan test — the exact two-chain drift the deleted
+  docstring had named, minus the dead `None`-project axis it was right to remove);
+  `hooks::event_name` and `hooks::is_subagent` join `is_stop_refire`, closing the three-copy
+  `hook_event_name` extraction and the untested subagent gate that sat five lines above the
+  predicate D78's rationale hoisted; the `--direct` promote gate's prose twin moved beside
+  `gate_json` (M26's last arm, claimed finished one commit early); `Integrity::from_probe`
+  names the probe-to-verdict map beside the enum with all four rows asserted — the
+  `Some(Err(_))` arm was reachable by no test — and `doctor::gather` asks `exists` once instead
+  of twice; `tools/mutants.sh` refuses a `$TMPDIR`-resolved target dir mechanically, because a
+  header saying "check nothing moved it back" is D39/D45's note-instead-of-script failure. Each
+  new guard was deleted once and its table watched go red before the byte-identical revert.
+
 - **A simplify pass over audit round two, by its own rules.** Four review lanes over the four
   fresh commits found the diff's own patterns applied to half their instances, and the fixes
   finish them: the sync probe's SQL is one named constant asserted by its plan test (the

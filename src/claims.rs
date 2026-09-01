@@ -345,15 +345,9 @@ pub fn edited_paths(conn: &Connection, project: &str) -> Result<Vec<EditedPath>>
 /// `RESEARCH.md` R1's specific complaint about the prior art.
 pub fn list(conn: &Connection, project: &str, live_only: bool) -> Result<Vec<Claim>> {
     let at = now()?;
-    // Beside the same branch that appends `?2` in [`list_sql`], so the positional order lives
-    // in one screen.
-    let binds: Vec<rusqlite::types::Value> = if live_only {
-        vec![project.to_string().into(), at.into()]
-    } else {
-        vec![project.to_string().into()]
-    };
+    let (query, binds) = list_sql(project, live_only.then_some(at));
     let mut stmt = conn
-        .prepare(&list_sql(live_only))
+        .prepare(&query)
         .map_err(sql("preparing the claims query"))?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(binds), |r| {
@@ -380,7 +374,7 @@ pub fn list(conn: &Connection, project: &str, live_only: bool) -> Result<Vec<Cla
         .map_err(sql("reading a claim row"))
 }
 
-/// The SQL [`list`] runs.
+/// The SQL [`list`] runs, paired with the binds that satisfy it.
 ///
 /// **The `(?1 IS NULL OR c.project = ?1)` idiom this replaces defeated the planner**, and it did
 /// so invisibly: SQLite cannot know at plan time that a parameter is non-NULL, so
@@ -396,10 +390,13 @@ pub fn list(conn: &Connection, project: &str, live_only: bool) -> Result<Vec<Cla
 /// size the fixtures never reached.
 ///
 /// The project clause is unconditional: every caller has one, and an earlier form assembled
-/// clause and bind lists to keep a `None` case nothing could reach — ~25 lines of machinery
-/// generalising over an axis that does not exist. `?1` is always the project; `?2`, present only
-/// when `live`, is the liveness instant, and [`list`] builds its binds beside the same branch.
-fn list_sql(live: bool) -> String {
+/// clause and bind lists to generalise over a `None`-project case nothing could reach — ~25
+/// lines of machinery for an axis that does not exist. `?1` is always the project; `?2`,
+/// present only when `live_at` is given, is the liveness instant. Clause and bind are appended
+/// by the same `if let`, so the positional order is held by structure — an interim form kept
+/// the SQL here and the binds in [`list`], two branches agreeing by comment, with a third
+/// hand-built copy in the plan test.
+fn list_sql(project: &str, live_at: Option<f64>) -> (String, Vec<rusqlite::types::Value>) {
     let mut query = String::from(
         "SELECT c.path, c.agent, a.name, c.project, c.intent, c.source, c.taken_at,
                 c.expires_at, a.pid, a.last_seen
@@ -407,11 +404,13 @@ fn list_sql(live: bool) -> String {
          LEFT JOIN agents a ON a.id = c.agent
          WHERE c.project = ?1",
     );
-    if live {
+    let mut binds: Vec<rusqlite::types::Value> = vec![project.to_string().into()];
+    if let Some(at) = live_at {
         query.push_str(" AND c.expires_at > ?2");
+        binds.push(at.into());
     }
     query.push_str(" ORDER BY c.taken_at DESC");
-    query
+    (query, binds)
 }
 
 /// One line per holder-and-directory, for display.
@@ -681,11 +680,8 @@ mod tests {
     fn the_project_filter_reaches_the_index() {
         let (_dir, conn, _a, _b, _c) = board();
         for live in [false, true] {
-            let mut binds: Vec<rusqlite::types::Value> = vec!["nest".to_string().into()];
-            if live {
-                binds.push(0.0.into());
-            }
-            crate::assert_query_plan_uses(&conn, &list_sql(live), binds, "ix_claims_live");
+            let (query, binds) = list_sql("nest", live.then_some(0.0));
+            crate::assert_query_plan_uses(&conn, &query, binds, "ix_claims_live");
         }
     }
 
