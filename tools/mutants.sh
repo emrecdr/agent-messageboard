@@ -27,7 +27,14 @@
 # this file's own header (M28). Cost per mutant depends on how fast the suite fails under it, which
 # is a property of the mutant, not of the tool.
 #
-# **Two traps that make a run report the wrong thing, both hit on 2026-08-31:**
+# **Three traps that make a run report the wrong thing, each hit on 2026-08-31:**
+#
+#   - **A MISSED row in `#[cfg]`'d-out code means "not compiled here", not "untested".** Mutating
+#     a Linux-only function on macOS builds fine — the mutated code is simply absent from the
+#     binary — and every test passes, so the row prints MISSED and no test on this machine can
+#     ever redden it. db.rs reported 16 such rows in one run (M46). Read the platform gate before
+#     prosecuting a survivor, and assert foreign-platform code in tests cfg'd to where it
+#     compiles: CI's other leg is the assertor.
 #
 #   - **Do not pipe this script anywhere.** `tools/mutants.sh … | tail` reports *tail's* exit
 #     status, and a baseline failure then prints `exit 0` beside a run that tested **nothing**.

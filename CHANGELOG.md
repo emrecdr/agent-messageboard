@@ -29,6 +29,30 @@ and why the on-disk schema is deliberately not one of them.
   `[profile.release]` adds thin LTO, one codegen unit and symbol stripping; the README's startup
   figures are re-measured against the new profile, per this project's measurement rule.
 
+- **`amb doctor`'s morning-after answer, measured instead of asserted** (M44). Q14 filed the
+  distribution question on the D94 hazard — `brew upgrade` is the stale-hook condition firing with
+  nobody thinking about `amb` — and answered its own test with "the detector already exists".
+  Simulated under a sandboxed `$HOME`: `doctor` prints `BAD`, both fingerprints, *"Manual commands
+  work and every hook is stale"*, and the literal `cp` that fixes it. Two caveats now recorded in
+  Q14: the verdict is `--json`'s `worst`, never the exit code (D73), and the comparison keys on the
+  executable being *named* `amb` — a renamed binary makes hooks invisible rather than stale.
+
+  The run also exposed three `doctor.rs` comments claiming `worst` drives the exit code — a design
+  D73 explicitly rejected, the fifth false-comment instance, sitting on the one field an unattended
+  check would be built on. All three now state the true contract.
+
+- **The reached-assertion audit: seventeen gate constants, two holes, neither a threshold** (M45).
+  A literal-coupled threshold fixture usually fails *loud* on drift; the silent class is an
+  absence assertion behind a gate, and a writer no test reaches. `sync_dir`'s decline branch —
+  D45's exact defect site — had no test caller anywhere: the readers were asserted on hand-built
+  stats while the write could vanish green, and only the early return stops a declined pass from
+  pruning the whole index against a scan that never happened. Now tested at the writer, both
+  bounds. And `a_git_sha_is_not_mistaken_for_a_secret` gained a one-case-flip control at the same
+  forty bytes, so entropy-gate drift reddens a row instead of quietly changing the test's subject.
+
+- **`src/db.rs` mutation-tested** (M46) — the schema, migrations, location guard and WAL
+  engagement, none of it mutated before; details under Fixed and in `docs/MEASUREMENTS.md`.
+
 ### Fixed
 
 - **A Stop re-fire is now answered with silence, which ends the machine-wide wake loop.** The
@@ -100,7 +124,32 @@ and why the on-disk schema is deliberately not one of them.
   purpose until the open measurement window closes: changing what a note renders mid-window
   changes what sessions cite (M23's deferral, still standing, now four wide instead of six).
 
+- **`engage_wal`'s failure half had never run under a test.** Ten mutants survived in the retry
+  loop: the guard verifying SQLite's answer could be forced `true` — D30's "checked rather than
+  assumed" check dead, any journal mode waved through — and every deadline comparison could flip.
+  The one deterministic refusal in the tree is an in-memory database, which always answers
+  `journal_mode = WAL` with `memory`: the new test asserts the error arrives with the real mode
+  in it and *no sooner than the full budget*. The deadline comparison now exists once, in
+  `budget_spent`, where a test reaches both sides.
+
+- **`restrict::tighten` could widen a mode the user chose tighter than ours.** All four bitwise
+  mutants of its gate read `0o400` as loose and chmod it to `0o600`; three of the four reported
+  TIMEOUT under machine load rather than surviving outright — the flattering direction
+  `tools/mutants.sh`'s header warns about, confirmed by re-running them from a clean worktree on
+  a quiet machine. A truth-table test now pins both directions.
+
+- **The macOS local-volume bit is read by a pure function.** `&` → `|` and `&` → `^` on
+  `MNT_LOCAL` both read every remote volume as local and nothing could redden — no test can mount
+  a network share. Extracted `statfs_is_local`, where the flag word is synthetic and the boundary
+  is one bit away. The Linux arm gets `#[cfg(target_os = "linux")]` tests, because a MISSED row
+  in cfg'd-out code means "not compiled here", not "untested" — now the third trap in
+  `tools/mutants.sh`'s header.
+
 ### Changed
+
+- **`is_unique_violation` is now `is_constraint_violation`**, with M43's schema argument as its
+  docstring: it always matched any constraint violation, sound only because `ux_agents_name` is
+  the sole constraint reachable through `try_touch`.
 
 - **`src/identity.rs` mutation-tested — 97.7%, a new high** (M43). 92 mutants, 2 missed, 0 timeout.
   Both survivors were one rule at its two call sites: forcing `is_unique_violation` to `true` in

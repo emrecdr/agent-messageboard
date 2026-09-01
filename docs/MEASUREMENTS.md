@@ -3721,3 +3721,92 @@ direction. The wiring `main.rs` performs — passing `AUTO_INDEX_LIMIT` as the a
 asserted by nothing but D70's thin-binary rule, noted here rather than closed: the e2e cost is a
 501-file fixture, and the parameterised test above covers every decision the wiring delivers.
 
+## M46 · Mutation-testing `db.rs`: the failure half of WAL had never run, and four timeouts held three survivors and an equivalent
+
+**2026-08-31.** `tools/mutants.sh src/db.rs` — the module owning the schema, migrations, the
+location guard and WAL engagement, never mutated before, and the target named to the peer session
+on the board before the run started. **85 mutants in 43m: 42 caught, 29 missed, 10 unviable, 4
+timeouts.**
+
+**Validity, disclosed rather than assumed.** The peer held cargo as asked. Mid-run, this session's
+own `tools/check_docs.py` invoked `cargo test` — forgotten, in the shared target directory, so no
+corruption, but real load — and the two adjacent rows ran 53s and 91s against a ~30s norm. Ambient
+load ran 9–10 for stretches (`mediaanalysisd`, a peer session, another project's test server). The
+private target directory kept every verdict *mechanically* sound; what load can still do is
+manufacture TIMEOUT at the floor, and it did.
+
+### Every TIMEOUT was resolved by hand, and none was a catch
+
+Re-run from a clean worktree at HEAD — not the working tree, which by then carried new tests that
+would have caught one mutant for the wrong reason and misattributed the answer — on a quieter
+machine: **10 mutants, 5 caught, 5 missed, 0 timeouts.**
+
+- `check_not_newer` `>` → `>=` is **equivalent by upstream guard**: both call sites sit two lines
+  below `if found == SCHEMA_VERSION { return Ok(()) }`, so the one value the operators disagree on
+  cannot reach the comparison. The genuine refusal direction — a board newer than the binary — was
+  already pinned by `tests/hook_safety.rs`. No test can or should kill this mutant; it is recorded
+  here so nobody chases it again.
+- All three `tighten` TIMEOUTs were **live survivors** — `mutants.sh`'s header warns that a
+  TIMEOUT filed as "probably caught" removes a real survivor from the count, always in the
+  flattering direction, and here it happened three times in one run.
+
+### The 29 missed decompose into three different facts
+
+**16 are mutations of code this host never compiled.** The Linux `volume_of`, Linux `fstype_name`
+and the no-platform fallback are `#[cfg]`'d out on macOS: the mutated function is absent from the
+binary, every test passes, and the row prints MISSED — indistinguishable from "untested" and
+meaning "not present". No test on this machine can ever redden one. Now the third trap in
+`mutants.sh`'s header. The Linux arm gets `#[cfg(target_os = "linux")]` tests — the magic table
+and a `statfs("/")` row — so CI's Linux leg is the assertor; the fallback arm compiles on **no**
+CI platform, and its six rows are the standing price of having a fallback at all.
+
+**2 sat where no fixture can go.** `&` → `|` and `&` → `^` on the macOS `MNT_LOCAL` bit both read
+every remote volume as local — and no test can mount a network share, so inline they were
+unkillable. Extracted pure as `statfs_is_local`, where the flag word is synthetic: a remote
+mount's word is busy, not zero, and the truth table separates all three operators.
+
+**The rest are the failure half of `engage_wal` and `tighten`, and none of it had ever run under a
+test.** Ten mutants in the retry loop: the guard verifying SQLite's answer forced `true` — D30's
+"checked rather than assumed" check dead, any journal mode waved through silently — plus every
+deadline comparison, because those arms only execute when a conversion attempt fails and no test
+had ever made one fail. The deterministic refusal was sitting in the standard library: an
+in-memory database always answers `journal_mode = WAL` with `memory` (probed with `sqlite3`
+before writing the test; `query_only = ON` was probed too and does *not* block the conversion).
+The new test asserts the error carries the real mode and arrives **no sooner than the full
+budget** — the elapsed floor is what kills the fast-fail mutants, and time only inflates, so the
+bound cannot flake. The deadline comparison now exists once, in `budget_spent`, with both sides
+one millisecond apart. And `tighten`'s gate — there so a mode the user chose *tighter* than ours
+is left alone — could be mutated four ways into widening `0o400` to `0o600`; a truth-table test
+pins both directions, with the loose row proving the gate was consulted (M27's premise rule).
+
+**Named residue, deliberately not chased:** the `Err`-arm guards need a race lost mid-conversion
+(no fixture errors on cue); the answer-check forced `false` is self-healing (the next loop
+iteration's read returns the same verdict, one sleep later); `backoff * 2` degraded to `/` is a
+busy-spin with identical outcomes. Each is named in the test's own comment, per
+`delivery::UNTRUSTED`'s convention that a residual hole is listed where the guard lives.
+
+### Red-checked, then confirmed by a second pass
+
+All seven new guards were verified by applying the mutation and watching the named test fail:
+`statfs` `&`→`|`, both `tighten` masks, the dead answer-check, `budget_spent` flipped, the
+`sync_dir` decline deleted (M45's test), and the entropy gate drifted one character (M45's flip
+row). Every file reverted byte-identical.
+
+### The confirming pass was void, and the confirmation was made by hand instead
+
+The re-pass over the survivor regions ran 58 minutes and reported **18 timeouts in 49 mutants** —
+including on mutants the original run had *caught* — and while it ran, the peer session was
+building in parallel and landing its audit-round-two edits (schema 12 → 13) into the shared
+working tree. Both facts void it under this file's own rule, and the line numbers in its output
+prove the copy had already absorbed a half-landed refactor. Third polluted instrument in one day,
+on a machine two sessions share: a long-running fleet pass is the wrong tool on a busy box,
+because every spike prints TIMEOUT at the floor and every TIMEOUT demands a hand re-run anyway.
+
+So the confirmation is the hand re-run, per M21's precedent, which load cannot touch — a filtered
+test either fails or passes, and no timeout is consulted. **All twelve killable previously-missed
+mutants were applied individually and every one reddened its named test**: both `statfs` masks,
+all four `tighten` masks, the dead answer-check at both guards, the deadline sign, the deadline
+comparison, the decline deletion and the drifted entropy gate — files reverted byte-identical
+after each. With the four named residues and the upstream-guard equivalence, that is 16 of 16
+real survivors accounted for: 12 killed with each kill observed, 4 accepted with the reason
+written where the guard lives, 1 equivalent recorded so nobody chases it again.

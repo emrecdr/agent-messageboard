@@ -109,7 +109,18 @@ fn volume_of(path: &Path) -> Option<(String, Option<bool>)> {
     let name = unsafe { std::ffi::CStr::from_ptr(buf.f_fstypename.as_ptr()) }
         .to_string_lossy()
         .into_owned();
-    Some((name, Some(buf.f_flags & libc::MNT_LOCAL as u32 != 0)))
+    Some((name, Some(statfs_is_local(buf.f_flags))))
+}
+
+/// Whether a `statfs` flag word marks the volume local.
+///
+/// Pure and separate because no test can mount a network volume: inline, the `&` isolating
+/// `MNT_LOCAL` could become `|` or `^` — both read every remote volume as local, waving the
+/// board past D28's guard — and nothing could redden (M46). Here the word is synthetic and the
+/// boundary is one bit away.
+#[cfg(target_os = "macos")]
+fn statfs_is_local(f_flags: u32) -> bool {
+    f_flags & libc::MNT_LOCAL as u32 != 0
 }
 
 #[cfg(target_os = "linux")]
@@ -932,13 +943,13 @@ fn engage_wal(conn: &Connection) -> Result<()> {
             // is left is a refusal retrying cannot fix — a read-only file, or a filesystem that
             // does not support WAL — and it is reported as the mode actually in force rather
             // than as a timeout, because that is the part that says what to do about it.
-            Ok(mode) if std::time::Instant::now() >= deadline => {
+            Ok(mode) if budget_spent(deadline) => {
                 return Err(Error::PragmaRefused {
                     pragma: "journal_mode = WAL".into(),
                     got: mode,
                 });
             }
-            Err(e) if std::time::Instant::now() >= deadline => {
+            Err(e) if budget_spent(deadline) => {
                 return Err(sql("setting journal_mode")(e));
             }
             _ => {}
@@ -946,6 +957,15 @@ fn engage_wal(conn: &Connection) -> Result<()> {
         std::thread::sleep(backoff);
         backoff = (backoff * 2).min(std::time::Duration::from_millis(50));
     }
+}
+
+/// Whether the retry budget behind `deadline` is exhausted.
+///
+/// Named so the comparison exists once and where a test can reach it: inline in two match
+/// guards, `>=` flipped to `<` in either and survived, because those arms only run when a
+/// conversion attempt fails and no unit fixture loses a race on cue (M46).
+fn budget_spent(deadline: std::time::Instant) -> bool {
+    std::time::Instant::now() >= deadline
 }
 
 // `init_schema` used to live here and ran on every open. [`migrate`] replaced it: the schema is
@@ -984,6 +1004,123 @@ mod tests {
         assert_eq!(read_timeout(&cli), INTERACTIVE_BUSY_TIMEOUT_MS);
         let hook = open_at_for_hook(&dir.path().join("hook.db")).expect("hook open");
         assert_eq!(read_timeout(&hook), HOOK_BUSY_TIMEOUT_MS);
+    }
+
+    /// The kernel flag word is one bit; only `&` reads that bit alone. `|` and `^` both answer
+    /// "local" for a remote volume's word — the two mutants that survived while this arithmetic
+    /// lived inline, unreachable because no test can mount a network share (M46).
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_local_bit_is_read_alone_and_not_smeared_across_the_word() {
+        let local = libc::MNT_LOCAL as u32;
+        let rdonly = libc::MNT_RDONLY as u32;
+        assert!(statfs_is_local(local));
+        assert!(statfs_is_local(local | rdonly));
+        assert!(!statfs_is_local(0));
+        // A remote mount's word is busy, not zero: other flags set, `MNT_LOCAL` clear.
+        assert!(!statfs_is_local(rdonly));
+    }
+
+    /// The Linux magic table, asserted where it compiles. On a macOS run every mutant of these
+    /// lines reports MISSED because the code is never built — a row that reads as "untested" and
+    /// means "not present" (M46). CI's Linux leg is the assertor.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_statfs_magic_maps_to_the_name_the_network_list_uses() {
+        for (magic, name) in [
+            (0x6969i64, "nfs"),
+            (0x517b, "smb"),
+            (0xfe53_4d42, "smb2"),
+            (0xff53_4d42, "cifs"),
+            (0x5346_414f, "afs"),
+            (0x0102_1997, "9p"),
+            (0x564c, "ncpfs"),
+            (0x7373, "coda"),
+        ] {
+            assert_eq!(fstype_name(magic), name);
+        }
+        assert_eq!(
+            fstype_name(0xdead),
+            "0xdead",
+            "an unknown magic comes back as hex, never as a guess"
+        );
+    }
+
+    /// The root volume answers with a real name and no locality claim — Linux has no
+    /// `MNT_LOCAL`, so the name carries the whole decision there.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_root_volume_answers_with_a_name_and_no_locality_claim() {
+        let (name, local) = volume_of(std::path::Path::new("/")).expect("statfs on / succeeds");
+        assert!(!name.is_empty() && name != "xyzzy", "{name}");
+        assert_eq!(local, None);
+    }
+
+    /// `tighten` widens nothing: a mode the user chose *tighter* than ours is left alone.
+    ///
+    /// The gate is `current & 0o077 != 0` — group/other bits set — and all four bitwise mutants
+    /// of it and of the `& 0o777` mask above it call 0o400 "loose" and chmod it to 0o600. Three
+    /// of the four timed out under load rather than surviving outright, which is how close this
+    /// came to being filed as caught (M46).
+    #[test]
+    #[cfg(unix)]
+    fn a_mode_tighter_than_ours_is_not_widened() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path().join("board.db");
+        std::fs::write(&p, b"x").expect("file");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o400)).expect("chmod");
+        restrict(&p, false);
+        let mode = std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o400,
+            "restrict must not widen a deliberately tight mode"
+        );
+
+        // The loose direction still tightens — the row proving the gate above was consulted,
+        // without which the assertion above is satisfied by `restrict` doing nothing at all.
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        restrict(&p, false);
+        let mode = std::fs::metadata(&p).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "a group-readable board is tightened");
+    }
+
+    /// A database that cannot convert answers with its real mode, after the whole budget —
+    /// never silently in the wrong mode, and never instantly.
+    ///
+    /// The one deterministic refusal in the tree: an in-memory database always answers
+    /// `journal_mode = WAL` with `memory`. Ten mutants lived in this loop because nothing
+    /// exercised a failed conversion (M46). The error row kills the dead-check mutant — the
+    /// guard at the conversion site forced `true`, D30's "checked rather than assumed" check
+    /// gone, any mode waved through. The elapsed floor kills every fast-fail mutant: a deadline
+    /// already in the past, or a comparison flipped so refusal skips the retries.
+    ///
+    /// Named residue, not covered here: the `Err`-arm guards are reachable only by losing a
+    /// real race mid-conversion (no fixture errors on cue — `query_only` was probed and the
+    /// conversion succeeds through it), and `backoff * 2` degrading to a busy-spin changes no
+    /// outcome, only CPU on a contended path.
+    #[test]
+    fn a_refused_wal_conversion_reports_the_mode_after_the_full_budget() {
+        let conn = Connection::open_in_memory().expect("memory db");
+        let start = std::time::Instant::now();
+        let err = engage_wal(&conn).expect_err("memory databases cannot enter WAL");
+        assert!(
+            start.elapsed() >= WAL_RETRY_BUDGET,
+            "gave up after {:?}, inside the {WAL_RETRY_BUDGET:?} budget",
+            start.elapsed()
+        );
+        assert!(
+            matches!(&err, Error::PragmaRefused { got, .. } if got.eq_ignore_ascii_case("memory")),
+            "{err:?}"
+        );
+    }
+
+    /// Both sides of the budget line, as close as an `Instant` can put them.
+    #[test]
+    fn the_budget_is_spent_exactly_when_the_deadline_has_passed() {
+        let now = std::time::Instant::now();
+        assert!(budget_spent(now - std::time::Duration::from_millis(1)));
+        assert!(!budget_spent(now + std::time::Duration::from_secs(3600)));
     }
 
     /// **The kernel's answer is the authority on macOS, and nothing asserted that it was read.**
