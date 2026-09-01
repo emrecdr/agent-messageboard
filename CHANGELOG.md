@@ -11,6 +11,13 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`memory/write.rs` under exhaustive mutation: the whole missed set was `free_slug`** (M50).
+  Eight of eight survivors sat in the collision loop whose docstring calls silent overwrite "the
+  one thing this design promises never to do" — no test had ever collided two same-day same-title
+  notes. One sequential fixture drives every branch: bare first stem, `-2` on collision, and the
+  200-probe cap asserted as the bounded-work trade it is. Seven mutants seen red by hand; the
+  eighth (`+= → *=`) detected as a hang under collision, recorded as the designed detection.
+
 - **Claim conflict lines are contained like mail** (D105). `holder`, path and `--intent` go
   through `delivery::quoted` in `claims::summarise`; before this, a newline in an intent put a
   forged `[amb]` line at column zero of an injected conflict block — reproduced against a

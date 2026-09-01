@@ -3897,3 +3897,30 @@ as hits (`hits` is a column — D89 built it so a broken search and an unasked o
 the same zero), so near-emptiness here means *recall is barely run*, not that failures go
 unrecorded. That is also why the FTS5 upgrade stays held: the instrument that would justify it
 is live and quiet, which is the cheap answer working as designed.
+
+## M50 · write.rs: the whole missed set was one function, and its docstring named the stakes
+
+**2026-09-02.** `tools/mutants.sh src/memory/write.rs` — the vault writer: `observe`, the atomic
+rename, supersession, and the collision loop. Peer held cargo (#132); quiet machine, 17s
+baseline, zero timeouts.
+
+**23 mutants in 3m: 13 caught, 8 missed, 2 unviable — and all eight missed sit in `free_slug`.**
+The function's own docstring calls silently overwriting a note "the one thing this design
+promises never to do", and the promise had no witness: no test in the suite had ever written two
+same-day same-title notes, so the bare first stem, the `-2` collision suffix, and the 200-probe
+cap were all unobserved. Every operator in the loop could flip without a test noticing.
+
+One sequential fixture kills all eight, driving the real function against a real directory
+through every branch: first note unsuffixed, collision takes `-2` and never the first note's
+path, and past 200 collisions the probe stops and knowingly reuses `-201` — the bounded-work
+trade asserted as a trade. Seven re-applied by hand and seen red; `+= → *=` pins `n` at 1
+forever and is observable only under collision — as a hang, which the harness timeout reports.
+That is the designed detection (M46's `budget_spent` shape), recorded in the test's comment so
+a future TIMEOUT row on this line reads as a kill rather than an open question.
+
+**Verified in a worktree, which is new and worth keeping.** The shared tree carried a peer's
+mid-edit hooks.rs and did not compile, so the guard and all eight hand-mutants ran in a
+`git worktree` at HEAD plus this one file, reusing the warm private target dir. A live writer's
+files were never touched — the stash-around offer was declined on principle. The M-number
+collision (their in-flight M49) was caught by reading their diff before writing this entry,
+which is what the #65 collision from history says to do.
