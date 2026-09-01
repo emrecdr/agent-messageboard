@@ -35,7 +35,11 @@ impl Mode {
             Mode::Session => &["SessionStart"],
             // PostToolUse is what makes claims *observed* rather than declared (D14): the hook
             // sees every Edit and Write, so an agent never has to remember `amb claim`.
-            Mode::Turn | Mode::Monitor => &["SessionStart", "Stop", "PostToolUse"],
+            // SessionEnd is the same coin's other face (D109): the session that recorded
+            // claims releases them the moment it ends, instead of running out a four-hour TTL
+            // that warns every peer off files nobody is touching. Best effort — the platform
+            // does not fire it on a crash, so the TTL stays the truth.
+            Mode::Turn | Mode::Monitor => &["SessionStart", "Stop", "PostToolUse", "SessionEnd"],
         }
     }
 
@@ -1417,7 +1421,7 @@ mod tests {
         // absent matcher and "*" mean the same thing, and changing these would rewrite every
         // existing install for no reason.
         let p = plan_install(&json!({}), "/bin/amb", Mode::Turn, false);
-        for event in ["SessionStart", "Stop", "PostToolUse"] {
+        for event in ["SessionStart", "Stop", "PostToolUse", "SessionEnd"] {
             for m in p.settings["hooks"][event].as_array().into_iter().flatten() {
                 assert!(m.get("matcher").is_none(), "{event}: {m}");
             }
@@ -1441,10 +1445,16 @@ mod tests {
     fn installing_without_memory_takes_the_memory_entries_back_out() {
         let with = plan_install(&json!({}), "/bin/amb", Mode::Turn, true);
         let without = plan_install(&with.settings, "/bin/amb", Mode::Turn, false);
-        let all: Vec<String> = ["SessionStart", "Stop", "PostToolUse", "PreToolUse"]
-            .iter()
-            .flat_map(|e| commands(&without.settings, e))
-            .collect();
+        let all: Vec<String> = [
+            "SessionStart",
+            "Stop",
+            "PostToolUse",
+            "SessionEnd",
+            "PreToolUse",
+        ]
+        .iter()
+        .flat_map(|e| commands(&without.settings, e))
+        .collect();
         assert!(
             !all.iter().any(|c| c.ends_with(" hook memory")),
             "memory survived: {all:?}"

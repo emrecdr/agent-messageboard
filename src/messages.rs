@@ -74,8 +74,11 @@ pub struct Outgoing<'a> {
     pub to: &'a Recipient,
     pub subject: &'a str,
     pub body: &'a str,
-    /// Free-form: `note`, `question`, `proposal`, `claim_notice`. Not an enum — a closed set
-    /// would need a release to add a kind, and the bus has no opinion about what it carries.
+    /// A lowercase tag: `note`, `question`, `proposal`, whatever the sender means. Not an enum
+    /// — a closed set would need a release to add a kind, and the bus has no opinion about what
+    /// it carries — but it *is* a charset (`[a-z0-9_-]`, at most [`MAX_KIND`] chars, D107),
+    /// because anything other than `note` is rendered inside the header's brackets and a free
+    /// string there would be grammar the sender controls.
     pub kind: &'a str,
     pub thread: Option<&'a str>,
     /// Caller-supplied stable id. Makes a resend idempotent (D6): the same `ext_id` twice
@@ -99,6 +102,11 @@ pub struct Message {
     pub subject: String,
     pub body: String,
     pub thread_id: Option<String>,
+    /// Whether *this reader* has acknowledged the message (`amb read`), computed by the inbox
+    /// query. `None` from paths with no reader in scope (`get`), where the question has no
+    /// answer — U1's finding was that the primary surface hid a distinction the design makes
+    /// first-class, and `Option` keeps the paths that cannot know from pretending they do.
+    pub read: Option<bool>,
 }
 
 impl Message {
@@ -127,7 +135,7 @@ impl Message {
     }
 
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut v = serde_json::json!({
             "id": self.id,
             "ts": self.ts,
             "from": self.sender(),
@@ -142,7 +150,13 @@ impl Message {
             "subject": self.subject,
             "body": self.body,
             "thread": self.thread_id,
-        })
+        });
+        // Only when the query could answer it — a `null` here would read as "unread-ish" to a
+        // script, and `get()` genuinely does not know.
+        if let Some(read) = self.read {
+            v["read"] = serde_json::json!(read);
+        }
+        v
     }
 }
 
@@ -167,6 +181,7 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         subject: r.get(8)?,
         body: r.get(9)?,
         thread_id: r.get(10)?,
+        read: None,
     })
 }
 
@@ -211,6 +226,17 @@ fn scoped_ext_id(from_agent: &str, ext_id: Option<&str>) -> Option<String> {
 /// note. Something genuinely large belongs in a file the recipient can choose to open.
 pub const MAX_BODY: usize = 100_000;
 
+/// A kind is a tag, not a sentence. The charset (`[a-z0-9_-]`) and this cap are what make it
+/// safe to render inside the header's brackets (D107); `delivery::scope_kind` enforces the same
+/// rule at render time for rows this validation never saw.
+pub const MAX_KIND: usize = 20;
+
+/// The subject's cap, two orders below the body's, because a subject is a header line rendered
+/// inline on every surface. `QUOTED_MAX` bounds what an injection *renders*; this bounds what
+/// the board *stores* — containment on the renderer alone is the exact defect `MAX_BODY`'s doc
+/// records for bodies, and a 300 KB subject was accepted until this existed (D106).
+pub const MAX_SUBJECT: usize = 500;
+
 /// Send a message. Returns its id.
 ///
 /// Wrapped in `BEGIN IMMEDIATE` so the writer takes the lock up front rather than discovering a
@@ -233,6 +259,25 @@ pub fn send(conn: &mut Connection, me: &Identity, out: &Outgoing<'_>) -> Result<
         return Err(Error::BodyTooLarge {
             chars,
             max: MAX_BODY,
+        });
+    }
+    let subject_chars = out.subject.chars().count();
+    if subject_chars > MAX_SUBJECT {
+        return Err(Error::FieldTooLarge {
+            field: "subject",
+            chars: subject_chars,
+            max: MAX_SUBJECT,
+        });
+    }
+    let kind_ok = !out.kind.is_empty()
+        && out.kind.len() <= MAX_KIND
+        && out
+            .kind
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+    if !kind_ok {
+        return Err(Error::BadKind {
+            input: out.kind.into(),
         });
     }
 
@@ -332,8 +377,13 @@ fn select(
     //   to_agent = me                      -> direct, from any project
     //   to_agent IS NULL AND to_proj = mine -> broadcast to my project
     //   to_agent IS NULL AND to_proj IS NULL -> global broadcast (`@@`)
+    // The 12th column answers "has this reader acknowledged it" per row, so the inbox can say
+    // which part of a list is new (U1). Delivery-side selects carry it too; it costs one index
+    // probe against `reads` per row that the unread filter was already paying.
     let sql_text = format!(
-        "SELECT {MESSAGE_COLUMNS}
+        "SELECT {MESSAGE_COLUMNS},
+                EXISTS(SELECT 1 FROM reads r
+                        WHERE r.msg_id = m.id AND r.agent = ?2 AND r.read_at IS NOT NULL)
         FROM messages m
         LEFT JOIN agents a ON a.id = m.from_agent
         WHERE
@@ -370,7 +420,11 @@ fn select(
                 max_offers,
                 cutoff
             ],
-            row_to_message,
+            |r| {
+                let mut m = row_to_message(r)?;
+                m.read = Some(r.get(11)?);
+                Ok(m)
+            },
         )
         .map_err(sql("running the inbox query"))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -788,6 +842,138 @@ mod tests {
         let ok = "x".repeat(MAX_BODY);
         send(&mut conn, &bob, &Outgoing { body: &ok, ..out }).expect("exactly at the cap is fine");
         assert_eq!(1, inbox(&conn, &alice, false).expect("inbox").len());
+    }
+
+    /// D106: the body's cap had a sibling gap — a 300 KB *subject* was accepted and stored,
+    /// because containment lived on the renderer (`QUOTED_MAX`) and not on the field, which is
+    /// the exact defect `MAX_BODY`'s own doc records for bodies.
+    #[test]
+    fn a_subject_past_the_cap_is_refused_at_the_sender() {
+        let (_d, mut conn, alice, bob, _c) = board();
+        let addr = Address::Agent {
+            name: "alice".into(),
+            project: None,
+        };
+        let to = resolve_recipient(&conn, &addr, &bob).expect("resolve");
+        let long = "s".repeat(MAX_SUBJECT + 1);
+        let out = Outgoing {
+            to: &to,
+            kind: "note",
+            subject: &long,
+            body: "b",
+            thread: None,
+            ext_id: None,
+        };
+        let err = send(&mut conn, &bob, &out).expect_err("past the cap");
+        assert!(
+            matches!(
+                err,
+                Error::FieldTooLarge {
+                    field: "subject",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            0,
+            inbox(&conn, &alice, false).expect("inbox").len(),
+            "the refusal stored a message anyway"
+        );
+        let exact = "s".repeat(MAX_SUBJECT);
+        send(
+            &mut conn,
+            &bob,
+            &Outgoing {
+                subject: &exact,
+                ..out
+            },
+        )
+        .expect("exactly at the cap is fine");
+        assert_eq!(1, inbox(&conn, &alice, false).expect("inbox").len());
+    }
+
+    /// U1: the inbox query answers "has this reader acknowledged it" per row, and the one path
+    /// with no reader in scope answers `None` rather than guessing. Both directions asserted —
+    /// a flag that is always `Some(false)` would pass a presence-only check.
+    #[test]
+    fn the_inbox_says_which_rows_this_reader_has_acknowledged() {
+        let (_d, mut conn, alice, bob, _c) = board();
+        let addr = Address::Agent {
+            name: "alice".into(),
+            project: None,
+        };
+        let to = resolve_recipient(&conn, &addr, &bob).expect("resolve");
+        let out = Outgoing {
+            to: &to,
+            kind: "note",
+            subject: "s",
+            body: "b",
+            thread: None,
+            ext_id: None,
+        };
+        let first = send(&mut conn, &bob, &out).expect("send");
+        let _second = send(
+            &mut conn,
+            &bob,
+            &Outgoing {
+                ext_id: Some("k2"),
+                ..out
+            },
+        )
+        .expect("send");
+        mark_read(&conn, &alice, first).expect("read");
+
+        let rows = inbox(&conn, &alice, false).expect("inbox");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].read, Some(true), "the acknowledged row says so");
+        assert_eq!(rows[1].read, Some(false), "the new row says so");
+        assert_eq!(
+            rows[0].to_json()["read"],
+            serde_json::json!(true),
+            "the flag reaches --json"
+        );
+
+        let fetched = get(&conn, first).expect("get");
+        assert_eq!(fetched.read, None, "get() has no reader in scope");
+        assert!(
+            fetched.to_json().get("read").is_none(),
+            "an unanswerable question is absent from JSON, not null"
+        );
+    }
+
+    /// D107's write half: the kind charset is refused where the author can still fix it. The
+    /// render half (`delivery::scope_kind`) has its own table for rows this check never saw.
+    #[test]
+    fn a_kind_outside_the_charset_is_refused_at_the_sender() {
+        let (_d, mut conn, _alice, bob, _c) = board();
+        let addr = Address::Agent {
+            name: "alice".into(),
+            project: None,
+        };
+        let to = resolve_recipient(&conn, &addr, &bob).expect("resolve");
+        let base = Outgoing {
+            to: &to,
+            kind: "note",
+            subject: "s",
+            body: "b",
+            thread: None,
+            ext_id: None,
+        };
+        for bad in ["Bad Kind", "", "question!", "xxxxxxxxxxxxxxxxxxxxx"] {
+            let err = send(&mut conn, &bob, &Outgoing { kind: bad, ..base })
+                .expect_err("outside the charset");
+            assert!(matches!(err, Error::BadKind { .. }), "{bad:?}: {err:?}");
+        }
+        send(
+            &mut conn,
+            &bob,
+            &Outgoing {
+                kind: "question",
+                ..base
+            },
+        )
+        .expect("a tame kind");
     }
 
     /// **Redaction is deliberately absent from the send path (D98), and this is the assertion of

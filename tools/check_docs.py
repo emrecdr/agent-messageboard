@@ -141,6 +141,31 @@ def counts_are_current():
     return problems
 
 
+def examples_show_the_current_schema():
+    """README transcripts quoting `schema N` must show the schema this source builds.
+
+    The install example sat at `schema 12` while the binary shipped 13 — a stale example of the
+    versioning feature itself, invisible to every other check here because none of them read
+    embedded output examples (U9). One deliberate exemption: the doctor transcript's
+    "which reports" line *is* a stale binary, demonstrating staleness — the point of that
+    example is the mismatch, so the line that says `which reports` keeps its old number.
+    """
+    problems = []
+    m = re.search(r"^pub const SCHEMA_VERSION: i64 = (\d+);", (ROOT / "src" / "db.rs").read_text(encoding="utf-8"), re.M)
+    if not m:
+        return ["src/db.rs no longer declares SCHEMA_VERSION where this check reads it"]
+    current = int(m.group(1))
+    for lineno, line in enumerate(README.splitlines(), 1):
+        if "which reports" in line:
+            continue
+        for quoted in re.findall(r"schema (\d+)", line):
+            if int(quoted) != current:
+                problems.append(
+                    f"README.md:{lineno} shows `schema {quoted}`; the binary builds schema {current}"
+                )
+    return problems
+
+
 def records_are_uniquely_numbered():
     """Two records with the same number, which nothing else here could see.
 
@@ -486,6 +511,7 @@ def main():
         every_doc_is_indexed()
         + every_command_is_documented()
         + counts_are_current()
+        + examples_show_the_current_schema()
         + records_are_uniquely_numbered()
         + unreleased_is_honest()
         + the_gate_and_ci_run_the_same_checks()

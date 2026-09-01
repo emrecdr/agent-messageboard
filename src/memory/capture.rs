@@ -16,17 +16,57 @@ use super::*;
 /// Borrowed from `CLAUDE_MEM_HOOK_FAIL_LOUD_THRESHOLD`, which exists for exactly this.
 pub const FAIL_LOUD_AFTER: i64 = 3;
 
-/// Where the consecutive-failure count lives.
+/// A marker whose session has been silent this long is a crashed session's residue, not a live
+/// outage — [`failure_count`] ignores it rather than reporting a months-dead session forever.
+/// Reader-side, so nothing on the hook path pays a directory sweep.
+const STALE_MARKER_SECS: u64 = 30 * 86_400;
+
+/// Where **this session's** consecutive-failure count lives.
 ///
 /// A file rather than a table, deliberately: the failure this counts includes *"the board could
 /// not be opened"*, and a counter that needs the board to record that the board is broken cannot
 /// record it. Sits beside the board, so `rm -rf ~/.agent-messageboard` clears it too.
+///
+/// **Per session, not per machine (D108).** The count means *consecutive failures of one
+/// session's capture*, and one shared file made the threshold unreachable exactly when it
+/// should fire: on a multi-session machine, any healthy session's success cleared a broken
+/// session's count, indefinitely. A file per session also gives the read-modify-write below a
+/// single writer — the residual race is one session's own parallel tool calls, where a lost
+/// increment delays the notice by one failure instead of resetting it.
 fn failure_marker() -> Option<PathBuf> {
     let path = crate::db::db_path().ok()?;
-    Some(path.with_file_name(".memory-failures"))
+    Some(path.with_file_name(marker_name(session_key().as_deref())))
 }
 
-/// Record that a memory hook failed, and return the consecutive count.
+/// The marker filename for one session — or the shared pre-D108 name when no session is known.
+fn marker_name(session: Option<&str>) -> String {
+    match session {
+        Some(s) => format!(".memory-failures-{s}"),
+        None => ".memory-failures".to_string(),
+    }
+}
+
+/// This session's key, made filesystem-safe. The same precedence as `identity::resolve`:
+/// `AMB_AGENT` overrides, `CLAUDE_CODE_SESSION_ID` is what every hook environment carries.
+fn session_key() -> Option<String> {
+    let raw = std::env::var("AMB_AGENT")
+        .or_else(|_| std::env::var("CLAUDE_CODE_SESSION_ID"))
+        .ok()?;
+    let safe: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(64)
+        .collect();
+    (!safe.is_empty()).then_some(safe)
+}
+
+/// Record that this session's memory hook failed, and return its consecutive count.
 ///
 /// **Never fails the caller.** A capture layer that could not write its own failure counter must
 /// still not break a session (D9).
@@ -43,7 +83,8 @@ pub fn note_failure() -> i64 {
     n
 }
 
-/// Record that a memory hook succeeded. Clears the count, so the threshold means *consecutive*.
+/// Record that this session's memory hook succeeded. Clears its own count — and only its own,
+/// which is the point of D108 — so the threshold means *consecutive*.
 pub fn note_success() {
     if let Some(path) = failure_marker()
         && path.exists()
@@ -52,11 +93,49 @@ pub fn note_success() {
     }
 }
 
-/// The consecutive failure count, for [`status`].
+/// The worst live count on the machine, for [`status`] and the fail-loud notice.
+///
+/// The machine-wide **max**, deliberately, and not this session's own count: the notice travels
+/// through the memory hook's *success* path, so the one session that cannot deliver its own
+/// warning is exactly the broken one. Healthy sessions carrying the worst count is the only
+/// route the warning has (D108) — the pre-D108 global file did this by accident, and keeping it
+/// on purpose is what this comment records.
 pub fn failure_count() -> i64 {
-    failure_marker()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| s.trim().parse().ok())
+    let Some(marker) = failure_marker() else {
+        return 0;
+    };
+    let Some(dir) = marker.parent() else {
+        return 0;
+    };
+    worst_recent_marker(dir, std::time::Duration::from_secs(STALE_MARKER_SECS))
+}
+
+/// The largest fresh `.memory-failures*` count in one directory. Path-injected so it is
+/// testable without touching the process environment.
+fn worst_recent_marker(dir: &std::path::Path, max_age: std::time::Duration) -> i64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    entries
+        .flatten()
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(".memory-failures")
+        })
+        .filter(|e| {
+            // A marker nothing has touched in a month is a crashed session's residue; counting
+            // it would report a dead outage as a live one, forever, to every session.
+            e.metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| now.duration_since(t).ok())
+                .is_some_and(|age| age <= max_age)
+        })
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|s| s.trim().parse::<i64>().ok())
+        .max()
         .unwrap_or(0)
 }
 
@@ -68,8 +147,9 @@ pub fn failure_count() -> i64 {
 pub fn fail_loud_notice(count: i64) -> Option<String> {
     (count >= FAIL_LOUD_AFTER).then(|| {
         format!(
-            "[amb memory] the memory hook has failed {count} times in a row and is capturing \
-             nothing. Run `amb memory status` — with AMB_HOOK_DEBUG=1 to see why."
+            "[amb memory] a session's memory hook on this machine has failed {count} times in a \
+             row and is capturing nothing. Run `amb memory status` — with AMB_HOOK_DEBUG=1 to \
+             see why."
         )
     })
 }
@@ -519,6 +599,41 @@ mod tests {
         assert_eq!(f.failures.len(), 1);
         assert!(f.failures[0].len() <= 120, "got {}", f.failures[0].len());
     }
+    /// D108's two rules in one table: the reader takes the machine's worst *fresh* marker (a
+    /// healthy session must carry a broken sibling's count, or the notice can never travel),
+    /// and a marker a month silent is a crashed session's residue, not a live outage.
+    #[test]
+    fn the_worst_fresh_marker_wins_and_a_stale_one_is_residue() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".memory-failures-alice"), "2").expect("write");
+        std::fs::write(dir.path().join(".memory-failures-bob"), "7").expect("write");
+        std::fs::write(dir.path().join("board.db"), "not a marker").expect("write");
+        let day = std::time::Duration::from_secs(86_400);
+        assert_eq!(worst_recent_marker(dir.path(), day), 7);
+
+        // Age bob's marker past the horizon: the residue stops counting, alice's 2 remains.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 86_400);
+        let f = std::fs::File::options()
+            .append(true)
+            .open(dir.path().join(".memory-failures-bob"))
+            .expect("open");
+        f.set_modified(old).expect("age");
+        assert_eq!(worst_recent_marker(dir.path(), day), 2);
+
+        // An empty directory reports quiet, not an error.
+        let empty = tempfile::tempdir().expect("tempdir");
+        assert_eq!(worst_recent_marker(empty.path(), day), 0);
+    }
+
+    /// The filename is the session key, so two sessions cannot clear each other's count —
+    /// and no session at all degrades to the shared pre-D108 name rather than to a panic.
+    #[test]
+    fn the_marker_is_keyed_by_session() {
+        assert_eq!(marker_name(Some("abc-123")), ".memory-failures-abc-123");
+        assert_eq!(marker_name(None), ".memory-failures");
+        assert_ne!(marker_name(Some("a")), marker_name(Some("b")));
+    }
+
     #[test]
     fn the_fail_loud_notice_waits_for_a_run_of_failures_and_then_says_what_to_do() {
         // D9's silence is right for delivery and wrong as an unlimited policy for capture: the

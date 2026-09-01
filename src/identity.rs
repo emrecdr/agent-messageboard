@@ -262,11 +262,27 @@ fn reclaim(conn: &Connection, who: &Identity, name: &str, at: f64) -> Result<Opt
 /// The roster upsert, reporting anything it displaced.
 ///
 /// [`touch`] is the same call for the callers that only need the name.
+/// A display name's cap. Rendered on every mail header as `from "name"` and on every claim
+/// line, so it gets `messages::MAX_SUBJECT`'s treatment at label scale (D106). Only an
+/// *explicit* name is checked — the auto-generated candidates are ours and bounded by
+/// construction.
+pub const MAX_NAME: usize = 80;
+
 pub fn register(
     conn: &Connection,
     who: &Identity,
     explicit_name: Option<&str>,
 ) -> Result<Registered> {
+    if let Some(n) = explicit_name {
+        let chars = n.chars().count();
+        if chars > MAX_NAME {
+            return Err(Error::FieldTooLarge {
+                field: "name",
+                chars,
+                max: MAX_NAME,
+            });
+        }
+    }
     // An explicit name gets exactly one attempt: D18 requires a clash to surface as an error, to
     // the agent that can still choose another. An implicit one falls back rather than failing.
     let candidates = match explicit_name {
@@ -785,6 +801,29 @@ mod tests {
                 ),
             }
         }
+    }
+
+    /// D106: a display name is rendered as a label on every mail header and claim line, so an
+    /// explicit one is capped where its author can still choose another. Auto-names are exempt
+    /// by construction — the fallback ladder must never be able to fail on length.
+    #[test]
+    fn an_explicit_name_past_the_cap_is_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let who = Identity {
+            id: "uuid-me".into(),
+            name: "me".into(),
+            project: "nest".into(),
+            root: dir.path().to_string_lossy().into_owned(),
+        };
+        let long = "n".repeat(MAX_NAME + 1);
+        let err = register(&conn, &who, Some(&long)).expect_err("past the cap");
+        assert!(
+            matches!(err, Error::FieldTooLarge { field: "name", .. }),
+            "{err:?}"
+        );
+        let exact = "n".repeat(MAX_NAME);
+        register(&conn, &who, Some(&exact)).expect("exactly at the cap is fine");
     }
 
     /// Reclamation must not swallow a real failure as "this name is not available".

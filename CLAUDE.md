@@ -21,7 +21,7 @@ install.
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite compiles; ~15s cold
-cargo test                       # all 542 tests
+cargo test                       # all 559 tests
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # run before finishing; the gate runs `cargo fmt --check`
 ./tools/verify.sh                # every gate check in one command, ~30s after a change (D70)
@@ -75,7 +75,7 @@ AMB_VAULT=/tmp/v cargo run -- memory observe --title t --learned l   # memory is
 
 ## `docs/DECISIONS.md` is the specification
 
-D1–D104 are **settled**, and each records *what was rejected and why*. Read it before proposing a
+D1–D109 are **settled**, and each records *what was rejected and why*. Read it before proposing a
 design change — the argument has probably already been had. `docs/OPEN-QUESTIONS.md` holds what is
 genuinely undecided; when one is settled, delete it there and record it as a new decision.
 
@@ -159,7 +159,8 @@ destroy it; `a_project_broadcast_reaches_an_agent_that_registered_afterwards` gu
 
 ### Delivery is hooks, not polling
 
-`amb install` writes `SessionStart`, `Stop` and `PostToolUse` hooks. `Stop` rather than
+`amb install` writes `SessionStart`, `Stop`, `PostToolUse` and `SessionEnd` hooks (the last
+lapses the departing session's claims, D109). `Stop` rather than
 `UserPromptSubmit` because the latter blocks the user's turn on a 30 s timeout.
 
 Two hard requirements on `hook_main` in `src/main.rs`:

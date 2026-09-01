@@ -9,7 +9,59 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Added
+
+- **Claim conflict lines are contained like mail** (D105). `holder`, path and `--intent` go
+  through `delivery::quoted` in `claims::summarise`; before this, a newline in an intent put a
+  forged `[amb]` line at column zero of an injected conflict block — reproduced against a
+  scratch board, then guarded at library and binary level. The aggregate rows also now say when
+  each claim lapses (`alice · src/auth/ (2 files) · in 2h — refactor`), which was the first
+  question a conflicting peer asks and only `--raw` could answer.
+- **Write-path caps for the body's siblings** (D106): subject 500, claim intent 500, explicit
+  display name 80 — one `FieldTooLarge` refusal at the sender, exit 64, nothing stored. A
+  300 KB subject was accepted verbatim before this.
+- **`--kind` is rendered, and it is a charset** (D107). Anything but `note` shows in the header
+  (`#7 [direct·question]`) on all three message surfaces; `[a-z0-9_-]{1,20}` is refused at the
+  sender and independently enforced at the renderer, where an untame kind degrades to the scope
+  alone rather than to grammar a sender controls. The flag's help no longer teaches
+  `claim_notice`, a value nothing has ever written.
+- **The inbox says what is new** (U1): header counts unread, `*` marks unread rows on amb's own
+  id token, and inbox `--json` rows carry `"read"` — `get()`-backed paths, which cannot know,
+  omit the key rather than inventing it.
+- **`SessionEnd` lapses the departing session's claims** (D109) — the fourth hook event in
+  `turn`/`monitor` modes, same command, no new argument. Expiry not deletion, peers untouched,
+  TTL kept as the crash backstop. Re-run `amb install` (or `./tools/install.sh`) to pick it up.
+- **A corrupt board names its own remedy**: corruption-shaped open failures (and only those —
+  a busy board keeps its message) now say the board is disposable and the vault unaffected
+  (D15), instead of stopping one sentence short of the fix at the moment it is needed.
+- **A scheduled advisory audit** (`.github/workflows/audit.yml`): RUSTSEC advisories land
+  between pushes, so the existing per-push `cargo-audit` gains a weekly cron with the same
+  tool — extending the recorded audit-not-deny choice, not revisiting it.
+
 ### Changed
+
+- **The capture failure counter is per-session, and the fail-loud notice is machine-wide**
+  (D108). One shared `.memory-failures` file let any healthy session clear a broken session's
+  consecutive count indefinitely; markers are now keyed by session, the reader takes the worst
+  fresh marker (the broken session cannot deliver its own warning — its notice travels through
+  the memory hook's success path), and month-stale markers are filtered as crashed-session
+  residue.
+- **`memory history` on a nonexistent id is exit 65** like every other id-taking command; it
+  printed "stands alone — it replaced nothing, and nothing replaced it" for a typo, exit 0 — a
+  provenance command fabricating a clean history (U5).
+- **`amb watch`'s mail path ends with a newline** (it used `print!` where the timeout path used
+  `println!`, concatenating the last mail line with the caller's next output), and `release`
+  echoes the path as stored, matching what `claim` printed.
+- **The README's exit-code table is complete**: 70 and 73 shipped unmapped in the docs — D97's
+  shape one layer up — and the doctor-exits-0 caveat now sits beside the table where a script
+  author looks. Also new there: a stated no-telemetry/no-network guarantee, what to back up
+  (vault, not board), and the `--json`-is-the-contract paragraph.
+- **A blank tier of flag help strings is filled** (ten flags including `send --thread`,
+  `register --name`, `recall --project`), and `sync_dir`'s transaction comment no longer claims
+  `busy_timeout` covers a snapshot-stale upgrade — `SQLITE_BUSY_SNAPSHOT` returns immediately,
+  the lost race is accepted, and the next hook pass is the retry.
+- **`journal_size_limit = 4 MiB`** joins the standard pragmas: long-lived-WAL truncation
+  hygiene, a no-op until checkpoint starvation would otherwise let `-wal` grow unbounded.
 
 - **`memory/query.rs` under exhaustive mutation: 48 mutants, three missed, all three now
   guarded** (M48). Two were halves of the path-lookup windowing rule — a window no fixture had

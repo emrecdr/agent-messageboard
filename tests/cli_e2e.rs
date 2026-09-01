@@ -531,3 +531,21 @@ fn watch_cannot_be_forged_by_a_newline_in_a_subject() {
         "a body line reached column zero: {out}"
     );
 }
+
+/// U6: `watch` is the monitor-mode primitive, meant to be piped — and its mail path ended
+/// without a final newline (`print!` where the timeout path used `println!`), so the last mail
+/// line concatenated with whatever the caller printed next. Raw bytes, because the string
+/// helpers trim exactly the thing under test.
+#[test]
+fn watch_output_ends_with_a_newline_on_the_mail_path() {
+    let b = Board::new();
+    b.run("uuid-eve", &["send", "@", "--subject", "s", "--body", "b"]);
+    let out = b.try_run("uuid-alice", &["watch", "--timeout", "1"]);
+    assert!(out.status.success());
+    assert_eq!(
+        out.stdout.last(),
+        Some(&b'\n'),
+        "the mail path must end its own line: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}

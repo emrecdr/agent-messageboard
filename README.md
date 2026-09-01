@@ -12,7 +12,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 542 tests, including multi-process concurrency and hook-safety
+**Status: built and working.** 559 tests, including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -72,7 +72,7 @@ SQLite is compiled in — there is no system dependency.
 ```bash
 git clone https://github.com/emrecdr/agent-messageboard.git && cd agent-messageboard
 cargo install --path . --locked      # builds release, installs `amb` onto your PATH
-amb --version                        # amb 0.1.0 (bcaa644 2026-08-31, schema 12, sqlite 3.53.2)
+amb --version                        # amb 0.2.0 (16d672b 2026-09-01, schema 13, sqlite 3.53.2)
 ```
 
 Then wire up delivery, **once per machine**:
@@ -90,6 +90,7 @@ would update /Users/you/.claude/settings.json
   + SessionStart hook (turn)
   + Stop hook (turn)
   + PostToolUse hook (turn)
+  + SessionEnd hook (turn)
 ```
 
 The existing file is backed up to `settings.json.amb-backup`, and other tools' hooks are left
@@ -589,12 +590,15 @@ path that was reached — otherwise the note is reachable and saying so would be
 
 ## Command reference
 
-Add `--json` to any command for machine-readable output.
+Add `--json` to any command for machine-readable output. **The `--json` envelopes and the exit
+codes are the stable machine contract**: renaming or removing a field is a breaking change
+(D56's versioning applies). The human-readable text is explicitly *not* stable — wording moves
+between commits, and scripts that scrape it get what they asked for.
 
 | Command | What it does |
 |---|---|
-| `amb send <to> --subject S --body B` | Send. `--body-file`, `--kind`, `--thread`, `--id` optional. A body over 100,000 characters is refused at the sender (D90) |
-| `amb inbox [--unread]` | What is waiting for you |
+| `amb send <to> --subject S --body B` | Send. `--body-file`, `--kind`, `--thread`, `--id` optional. A body over 100,000 characters — or a subject over 500 — is refused at the sender (D90, D106). A kind other than `note` shows in the header: `#7 [direct·question]` (D107) |
+| `amb inbox [--unread]` | What is waiting for you. The header counts unread, `*` marks it, and `--json` rows carry `"read"` |
 | `amb read <id>` · `amb read --all` | Acknowledge one, or everything unread — the only thing that marks mail read |
 | `amb reply <id> --body B` | Answer its sender, keeping the thread |
 | `amb agents [--live] [--project P]` | Who else is on the board |
@@ -608,7 +612,7 @@ Add `--json` to any command for machine-readable output.
 | `amb install [--mode M] [--memory] [--dry-run]` | Wire delivery into `~/.claude/settings.json` |
 | `amb uninstall [--dry-run]` | Remove them, leaving other tools' hooks intact |
 | `amb memory observe --title T --files F --learned L` | Record what this session learned (needs `AMB_VAULT`). `--cites`, `--supersedes`, `--force`, `--same-as`, `--project` optional |
-| `amb memory recall [query] [--file P] [--across-repos] [--all-projects] [--limit N]` | Search **titles and note bodies** (D88), or ask what is known about one path. Every kind but `candidate`, which reaches you through `promote` instead |
+| `amb memory recall [query] [--file P] [--across-repos] [--project P] [--all-projects] [--limit N]` | Search **titles and note bodies** (D88), or ask what is known about one path. Every kind but `candidate`, which reaches you through `promote` instead |
 | `amb memory derive <slug> --title T --note N` | Record that something was noticed again — the three-strikes ledger (D49) |
 | `amb memory candidates` | Candidates, and how close each is to being offered |
 | `amb memory promote <id> [--direct]` | Promote one candidate. One at a time, derivations shown, never writes without `--yes` (D49). `--direct` promotes on first sight, skipping the three-derivation ledger — still gated on `--yes` |
@@ -648,7 +652,7 @@ Whether it earns anything more than this is the open question D61 exists to answ
 | `--mode` | Hooks installed | Latency | Use when |
 |---|---|---|---|
 | `session` | `SessionStart` | mail at startup only | You want the lightest possible touch |
-| `turn` | `+ Stop`, `PostToolUse` | **next tool call** — mid-turn | **Default.** Almost always right |
+| `turn` | `+ Stop`, `PostToolUse`, `SessionEnd` | **next tool call** — mid-turn | **Default.** Almost always right. `SessionEnd` lapses the session's claims on exit (D109) |
 | `monitor` | `+ blocking amb watch` | seconds | Sessions genuinely coordinate in real time |
 
 **`turn` mode delivers mid-turn, not only at turn boundaries.** `PostToolUse` fires after every
@@ -735,9 +739,27 @@ A hook can branch on these without parsing stderr:
 |---|---|
 | `0` | Success |
 | `64` | Usage error — e.g. `amb: invalid address "a@b@c": it contains more than one '@'` |
-| `65` | No such agent, message, or claim |
-| `69` | Board unavailable |
+| `65` | No such agent, message, claim, or note |
+| `69` | Board unavailable — locked, corrupt, or refusing to open |
+| `70` | Internal error — a bug in `amb` itself |
+| `73` | The board's file or directory could not be created — disk full, or permissions |
 | `78` | Misconfigured |
+
+This is the complete set — `70` and `73` shipped unlisted for a while, which is D97's failure
+shape one layer up, in the table that documents it. One deliberate exception to branching on
+`$?`: **`amb doctor` always exits 0** (it reports a diagnosis; it is not itself a failure), so
+anything unattended reads `--json`'s `worst`, never the exit code.
+
+### Privacy, and what to back up
+
+**`amb` sends nothing anywhere, ever** — no telemetry, no update checks, no network at all. The
+binary touches exactly two things: the board file and, if `AMB_VAULT` is set, your vault.
+Recorded here because an unstated negative reads as an oversight (D104's lesson).
+
+What to back up follows from D15: **the board is disposable** — delete it and it is recreated
+empty, having lost only unread coordination mail — while **the vault is the asset**: plain
+markdown you own, so keep it in git or whatever already backs up your files. `amb` deliberately
+ships no backup machinery for either.
 
 ---
 
@@ -794,6 +816,7 @@ would update /Users/you/.claude/settings.json
   + SessionStart hook (turn)
   + Stop hook (turn)
   + PostToolUse hook (turn)
+  + SessionEnd hook (turn)
 ```
 
 Re-running `amb install` when nothing needs changing is safe: it writes nothing, so it cannot
@@ -828,7 +851,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 542 tests
+cargo test                       # all 559 tests
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -889,7 +912,7 @@ stays in `main.rs` is sequencing and printing, which is what the shell is for.
 
 ```
 $ amb --version
-amb 0.1.0 (bcaa644 2026-08-31, schema 12, sqlite 3.53.2)
+amb 0.2.0 (16d672b 2026-09-01, schema 13, sqlite 3.53.2)
 ```
 
 The release, the commit it was built from, and the schema it expects — so a binary can be
@@ -964,7 +987,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D104, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D109, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

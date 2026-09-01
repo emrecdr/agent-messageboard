@@ -1,0 +1,27 @@
+# Advisories on a clock, not only on a push.
+#
+# The per-push `cargo-audit` step in ci.yml checks Cargo.lock at the moment something changes —
+# but RUSTSEC advisories land *between* pushes, against dependencies that have not moved, and a
+# repository that goes quiet for two weeks is exactly the one whose lockfile nobody re-checked.
+# 2026 advisory volume passed all of 2025's by May, so the gap is real rather than theoretical.
+#
+# Same tool as ci.yml, deliberately: the choice of `cargo-audit` over `cargo-deny` is recorded
+# there (a `deny.toml` is an artefact that has to be kept true, and licence policy answers a
+# question nobody is asking of a `publish = false` binary). This file extends that choice to a
+# schedule; it does not revisit it. Weekly, matching dependabot's cadence in this repo.
+name: audit
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC — an off-peak minute, not a magic one
+  workflow_dispatch:
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: dependency advisories
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

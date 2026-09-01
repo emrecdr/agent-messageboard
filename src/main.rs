@@ -39,6 +39,7 @@ enum Command {
     Send {
         /// `alice`, `alice@nestwatch`, `@nestwatch`, or `@` for everyone in this project.
         to: String,
+        /// One line, shown in every inbox and banner. The body carries the substance.
         #[arg(long)]
         subject: String,
         /// The message. Use --body-file for anything multi-line.
@@ -51,9 +52,12 @@ enum Command {
         /// message. This is the escape hatch.
         #[arg(long, conflicts_with = "body")]
         body_file: Option<String>,
-        /// Free-form: note, question, proposal, claim_notice.
+        /// A lowercase tag ([a-z0-9_-], max 20): note, question, proposal, or your own.
+        /// Anything but "note" is shown in the header, e.g. `#7 [direct·question]`.
         #[arg(long, default_value = "note")]
         kind: String,
+        /// Join an existing conversation by its thread id. Rarely needed — `reply` threads
+        /// automatically; this is for starting a *new* message into an old thread.
         #[arg(long)]
         thread: Option<String>,
         /// Stable caller-supplied id. Sending twice with the same one delivers once (D6).
@@ -68,7 +72,8 @@ enum Command {
     },
     /// Acknowledge messages. The only thing that marks one read (D9).
     Read {
-        /// One or more ids. Acknowledging sixty messages used to mean sixty invocations.
+        /// One or more ids — or `--all` for everything unread. Acknowledging sixty messages
+        /// used to mean sixty invocations.
         #[arg(required_unless_present = "all")]
         ids: Vec<i64>,
         /// Acknowledge everything currently unread.
@@ -77,12 +82,16 @@ enum Command {
     },
     /// Reply to a message, keeping its thread. A reply to a broadcast goes to its sender.
     Reply {
+        /// The message being answered, from `inbox` or the banner.
         id: i64,
+        /// The answer. Goes to that message's sender, on its thread.
         #[arg(long)]
         body: String,
     },
     /// Record a display name for this session. Optional — every command registers (D12).
     Register {
+        /// The name peers will use to address you, e.g. `amb send alice ...`. Omit for a
+        /// readable auto-name derived from this directory.
         #[arg(long)]
         name: Option<String>,
     },
@@ -98,9 +107,13 @@ enum Command {
         ttl: Option<String>,
     },
     /// Release a claim held by this agent.
-    Release { path: String },
+    Release {
+        /// The claimed path, as `amb claims` shows it.
+        path: String,
+    },
     /// Show who holds what. Expired rows are shown too unless --live.
     Claims {
+        /// Another project's claims. Defaults to this project.
         #[arg(long)]
         project: Option<String>,
         /// Hide claims that have already lapsed.
@@ -144,6 +157,7 @@ enum Command {
     },
     /// Remove the delivery hooks, leaving other tools' hooks untouched.
     Uninstall {
+        /// Show the change without writing it.
         #[arg(long)]
         dry_run: bool,
     },
@@ -179,6 +193,7 @@ enum Command {
 
     /// List agents known to the board.
     Agents {
+        /// Another project's roster. Defaults to this project.
         #[arg(long)]
         project: Option<String>,
         /// Only agents whose process still exists.
@@ -235,6 +250,7 @@ enum MemoryCommand {
         /// Foreign results first, because the local ones you already had.
         #[arg(long, requires = "file")]
         across_repos: bool,
+        /// Search one other project's notes instead of this project's.
         #[arg(long)]
         project: Option<String>,
         /// Every project, not just this one.
@@ -628,11 +644,11 @@ fn run(cli: Cli) -> Result<(), Error> {
         }
 
         Command::Release { ref path } => {
-            claims::release(&conn, &me, path)?;
+            let stored = claims::release(&conn, &me, path)?;
             if cli.json {
-                print_json(&serde_json::json!({ "released": path }));
+                print_json(&serde_json::json!({ "released": stored }));
             } else {
-                println!("released {path}");
+                println!("released {stored}");
             }
         }
 
@@ -684,7 +700,10 @@ fn run(cli: Cli) -> Result<(), Error> {
                 // test can only redden for renderers it lists (its docstring says so). Routing
                 // through the guarded renderer puts watch inside that enumeration instead of
                 // beside it, and delivers the body, which the bare loop never did.
-                print!("{}", delivery::render_inbox(&found, &me.name, &me.project));
+                // `println!`, like the `inbox` arm above: `render_inbox` trims its tail, and
+                // `watch` is the monitor-mode primitive — a missing final newline concatenates
+                // the last mail line with whatever the caller prints next (U6).
+                println!("{}", delivery::render_inbox(&found, &me.name, &me.project));
             }
         }
 
@@ -1124,6 +1143,15 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
     // injected into the model's context — say so now rather than at the next turn boundary.
     if event == "PostToolUse" {
         return post_tool_use(&mut conn, &me, input);
+    }
+
+    // A session that ends lapses its claims now instead of running out their TTL (D109).
+    // Nothing is printed: the session is over, so there is no context to inject into, and
+    // the platform reads nothing from a SessionEnd hook. Best effort — a crash never fires
+    // this, and the TTL remains the backstop.
+    if event == "SessionEnd" {
+        claims::end_session(&conn, &me)?;
+        return Ok(());
     }
 
     // deliverable(), not inbox(): automatic injection spends context the agent did not ask to

@@ -221,6 +221,15 @@ pub fn history(conn: &Connection, id: &NoteId) -> Result<(Vec<Step>, Vec<Step>)>
             .map_err(sql("reading a link target"))
     };
 
+    // The subject must exist before its provenance is narrated. Without this, a typo'd id
+    // printed "stands alone — it replaced nothing, and nothing replaced it": a provenance
+    // command fabricating a clean history for a note that is not there, exit 0 — this
+    // project's failures are silences, and that was one (U5). Every other id-taking command
+    // answers a miss with the same error and exit 65.
+    if row(&id.display())?.is_none() {
+        return Err(Error::NoSuchNote(id.display()));
+    }
+
     // Forward: what replaced this, following `superseded_by` until nothing does.
     let mut descendants = Vec::new();
     let mut cur = id.clone();
@@ -497,10 +506,18 @@ pub fn sync_dir(
     // which is the false-mechanism class this project catalogues). What N commits do pay is N
     // wal-index lock acquisitions and N commit frames where one would do. Deferred, not
     // `IMMEDIATE`: the common pass finds nothing changed and never writes, so a read transaction
-    // takes no lock another session's hook would wait behind; the first upsert upgrades it, and
-    // `busy_timeout` covers that upgrade like any other write. `unchecked_transaction` because
-    // this function holds `&Connection`, and rusqlite's default drop behaviour is the rollback
-    // an early `?` wants.
+    // takes no lock another session's hook would wait behind; the first upsert upgrades it.
+    // `busy_timeout` covers that upgrade **only while nothing has committed since this
+    // transaction's first read** — against a stale snapshot the upgrade returns
+    // `SQLITE_BUSY_SNAPSHOT` immediately and the timeout is never consulted, because waiting
+    // cannot freshen a snapshot; the transaction would have to restart. (A previous version of
+    // this comment said the timeout covers it "like any other write" — false in exactly the
+    // racing case the deferred choice reasons about, the catalogued class again.) The lost race
+    // is accepted rather than retried: it needs two sessions syncing one vault in the same
+    // instant, the hook swallows the error, the index self-heals on the next hook pass, and
+    // D103's 2 s budget is better spent on the sync than on a retry loop.
+    // `unchecked_transaction` because this function holds `&Connection`, and rusqlite's default
+    // drop behaviour is the rollback an early `?` wants.
     let tx = conn
         .unchecked_transaction()
         .map_err(sql("opening the sync transaction"))?;
@@ -762,6 +779,30 @@ mod tests {
             title: "t".into(),
             status: ACTIVE.into(),
         }
+    }
+
+    /// U5: the renderer's "stands alone" sentence was written so absence would not print as
+    /// nothing — and then `history` never checked existence, so a typo'd id printed that same
+    /// sentence as a clean provenance, exit 0. The command must miss like every other
+    /// id-taking command before the renderer gets a say.
+    #[test]
+    fn history_of_a_nonexistent_note_is_a_miss_not_a_clean_lineage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let err = history(&conn, &NoteId::observation("nest", "no-such-note"))
+            .expect_err("an id that resolves to nothing");
+        assert!(matches!(err, Error::NoSuchNote(_)), "{err:?}");
+
+        conn.execute(
+            "INSERT INTO notes (slug, kind, scope, vault_path, title, status, created,
+                                mtime, indexed_at)
+             VALUES ('real', 'observation', 'nest', 'p/real.md', 't', 'active', 1.0, 1.0, 1.0)",
+            [],
+        )
+        .expect("seed");
+        let (before, after) = history(&conn, &NoteId::observation("nest", "real"))
+            .expect("a real note with no lineage is fine");
+        assert!(before.is_empty() && after.is_empty());
     }
 
     /// **Standing alone is a sentence.** Otherwise a note with no lineage and an id that does not

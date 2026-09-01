@@ -101,6 +101,38 @@ pub enum Error {
     )]
     BodyTooLarge { chars: usize, max: usize },
 
+    /// `subject`, claim `intent`, or a display `name` past its cap — `BodyTooLarge`'s reasoning
+    /// at header scale. One variant for the three siblings because the message is the same
+    /// sentence with a different noun, and three copies would drift (M28's rule for constants
+    /// holds for wordings too).
+    #[error(
+        "{field} is {chars} characters and the limit is {max} \u{2014} something that long \
+         belongs in the body, or in a file the recipient can choose to open"
+    )]
+    FieldTooLarge {
+        field: &'static str,
+        chars: usize,
+        max: usize,
+    },
+
+    /// The board file is unreadable as a database — the one failure where "delete it" is the
+    /// documented remedy, so the error says so at the moment it is needed (D15, U9) rather
+    /// than in a doc the person in trouble has not read.
+    #[error(
+        "the board at {path} is not readable as a database. The board is disposable (D15): \
+         move the file aside and it is recreated empty on the next command. Notes live in the \
+         vault and are unaffected."
+    )]
+    CorruptBoard { path: String },
+
+    /// A kind is rendered inside the message header's brackets, so it is a tag with a charset,
+    /// not free text (D107).
+    #[error(
+        "invalid kind {input:?}: a kind is a lowercase tag \u{2014} letters, digits, `_` or \
+         `-`, at most 20 characters"
+    )]
+    BadKind { input: String },
+
     #[error("a message needs a body: pass --body, or --body-file (use - for stdin)")]
     MissingBody,
 
@@ -194,6 +226,9 @@ impl Error {
             Error::InsideRepository { .. } => "inside_repository",
             Error::BadDuration { .. } => "bad_duration",
             Error::BodyTooLarge { .. } => "body_too_large",
+            Error::FieldTooLarge { .. } => "field_too_large",
+            Error::BadKind { .. } => "bad_kind",
+            Error::CorruptBoard { .. } => "corrupt_board",
             Error::MissingBody => "missing_body",
             Error::Io { .. } => "io",
             Error::Sqlite { .. } => "database",
@@ -224,6 +259,8 @@ impl Error {
             Error::BadAddress { .. }
             | Error::BadDuration { .. }
             | Error::BodyTooLarge { .. }
+            | Error::FieldTooLarge { .. }
+            | Error::BadKind { .. }
             | Error::MissingBody => exit::USAGE,
             Error::NoSuchMessage(_)
             | Error::NoSuchClaim(_)
@@ -233,7 +270,7 @@ impl Error {
             Error::AmbiguousNote { .. } | Error::InsideRepository { .. } => exit::USAGE,
             Error::NameTaken { .. } => exit::USAGE,
             Error::SchemaVersion { .. } => exit::CONFIG,
-            Error::Sqlite { .. } => exit::UNAVAILABLE,
+            Error::Sqlite { .. } | Error::CorruptBoard { .. } => exit::UNAVAILABLE,
             Error::Io { .. } => exit::CANTCREAT,
             Error::Json { .. } | Error::ClockBeforeEpoch => exit::SOFTWARE,
             Error::PragmaRefused { .. } => exit::UNAVAILABLE,

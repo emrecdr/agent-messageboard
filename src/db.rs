@@ -308,10 +308,32 @@ fn open_at_with(path: &Path, busy_ms: u64) -> Result<Connection> {
         }
     }
     let mut conn = Connection::open(path).map_err(sql(format!("opening {}", path.display())))?;
-    apply_pragmas(&conn, busy_ms)?;
-    migrate(&mut conn, path)?;
+    apply_pragmas(&conn, busy_ms).map_err(|e| corruption_hint(e, path))?;
+    migrate(&mut conn, path).map_err(|e| corruption_hint(e, path))?;
     restrict(path, ours);
     Ok(conn)
+}
+
+/// Rewrite a corruption-shaped failure into the one error that says what to do.
+///
+/// "file is not a database" is accurate and stops one sentence short of the fix, at the exact
+/// moment someone needs it (U9): the board is disposable (D15), and nothing else in the message
+/// said so. Only genuine corruption codes are rewritten — a locked or busy board keeps its own
+/// message, because "move the file aside" is destructive advice against a database that is
+/// merely in use.
+fn corruption_hint(e: Error, path: &Path) -> Error {
+    use rusqlite::ErrorCode::{DatabaseCorrupt, NotADatabase};
+    if let Error::Sqlite {
+        source: rusqlite::Error::SqliteFailure(f, _),
+        ..
+    } = &e
+        && matches!(f.code, DatabaseCorrupt | NotADatabase)
+    {
+        return Error::CorruptBoard {
+            path: path.display().to_string(),
+        };
+    }
+    e
 }
 
 /// SQLite's own consistency check, reduced to what a caller can act on: `None` means healthy.
@@ -904,8 +926,18 @@ pub fn apply_pragmas(conn: &Connection, busy_ms: u64) -> Result<()> {
     conn.busy_timeout(std::time::Duration::from_millis(busy_ms))
         .map_err(sql("setting busy_timeout"))?;
     engage_wal(conn)?;
-    conn.execute_batch("PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;")
-        .map_err(sql("setting synchronous and foreign_keys"))?;
+    // The standard long-lived-WAL hygiene: after a checkpoint, a `-wal` file larger than this
+    // is truncated instead of retained for reuse. A board pinned open by many concurrent
+    // readers can otherwise let the WAL grow without bound (checkpoint starvation) — not
+    // observed here at 745 KB of board, but the failure arrives silently and the pragma is a
+    // no-op until it matters. 4 MiB: several times the whole board today.
+    conn.execute_batch(
+        "PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON; \
+         PRAGMA journal_size_limit = 4194304;",
+    )
+    .map_err(sql(
+        "setting synchronous, foreign_keys and journal_size_limit",
+    ))?;
     Ok(())
 }
 
@@ -987,6 +1019,36 @@ pub fn now() -> Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The WAL truncation limit must actually be installed, read back off a real connection —
+    /// a stated ceiling nothing can check is a comment with a number in it (D95).
+    #[test]
+    fn the_wal_keeps_a_truncation_limit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = open_at(&dir.path().join("board.db")).expect("open");
+        let limit: i64 = conn
+            .query_row("PRAGMA journal_size_limit", [], |r| r.get(0))
+            .expect("readable");
+        assert_eq!(limit, 4_194_304);
+    }
+
+    /// U9: "file is not a database" is accurate and stops one sentence short of the fix. The
+    /// rewrite must fire only for corruption-shaped codes — a busy board rewritten this way
+    /// would hand out destructive advice ("move the file aside") against a database in use,
+    /// which is why `corruption_hint` matches codes and never message text.
+    #[test]
+    fn a_garbage_board_names_its_own_remedy() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("board.db");
+        std::fs::write(&path, "this was never a database").expect("write");
+        let err = open_at(&path).expect_err("garbage cannot open");
+        assert!(matches!(err, Error::CorruptBoard { .. }), "{err:?}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("disposable") && msg.contains("vault"),
+            "the remedy and the reassurance both belong in the message: {msg}"
+        );
+    }
 
     /// Each open variant must actually install its own wait budget, asserted through
     /// `PRAGMA busy_timeout` because rusqlite has no getter. This is what reddens if
