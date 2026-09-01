@@ -112,7 +112,6 @@ fn volume_of(path: &Path) -> Option<(String, Option<bool>)> {
     Some((name, Some(buf.f_flags & libc::MNT_LOCAL as u32 != 0)))
 }
 
-
 #[cfg(target_os = "linux")]
 fn volume_of(path: &Path) -> Option<(String, Option<bool>)> {
     use std::os::unix::ffi::OsStrExt;
@@ -948,7 +947,6 @@ fn engage_wal(conn: &Connection) -> Result<()> {
         backoff = (backoff * 2).min(std::time::Duration::from_millis(50));
     }
 }
-
 
 // `init_schema` used to live here and ran on every open. [`migrate`] replaced it: the schema is
 // now migration 0 -> 1, applied once and skipped thereafter.
