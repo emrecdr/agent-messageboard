@@ -677,9 +677,13 @@ fn run(cli: Cli) -> Result<(), Error> {
             } else if found.is_empty() {
                 println!("no mail within {timeout}s");
             } else {
-                for m in &found {
-                    println!("#{} [{}] {} — {}", m.id, m.scope(), m.sender(), m.subject);
-                }
+                // Through `render_inbox`, never a bare `println!` of sender-written fields. A
+                // raw loop here was the fourth renderer of `sender`/`subject` — the exact hole
+                // D90 closed in `render_inbox`, standing in this file because the enumeration
+                // test can only redden for renderers it lists (its docstring says so). Routing
+                // through the guarded renderer puts watch inside that enumeration instead of
+                // beside it, and delivers the body, which the bare loop never did.
+                print!("{}", delivery::render_inbox(&found, &me.name, &me.project));
             }
         }
 
@@ -865,6 +869,19 @@ fn hook_main(mode: &str) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    // **A Stop re-fire gets silence, whatever this hook has to say.** The runner counts a Stop
+    // hook that injects `additionalContext` as blocking the turn from ending: it wakes the model
+    // to read the context, the model answers, Stop fires again — and `stop_hook_active: true` is
+    // the runner saying this firing IS that wake. Answering it again is a loop. It happened, at
+    // machine scale: during a stale-binary window the arrival note printed on every Stop, so
+    // every session on the machine cycled banner → "Standing by." → banner, nine times each,
+    // until the platform's block cap overrode — in five projects at once, twice (2026-08-27 and
+    // 2026-08-31, both read out of the transcripts). Mail is unaffected: delivery is a log
+    // (D17), so anything not said on this firing is re-offered on the next real event.
+    if input.get("stop_hook_active").and_then(|v| v.as_bool()) == Some(true) {
+        return ExitCode::SUCCESS;
+    }
+
     // Memory is a separate entry in settings.json with its own timeout, so it is a separate
     // branch here: a memory layer that hangs must burn its own budget and take nothing with it.
     // D9's guarantee is structural, not a discipline (D41).
@@ -936,7 +953,7 @@ fn hook_memory(input: &serde_json::Value) -> Result<(), Error> {
         .and_then(|v| v.as_str())
         .unwrap_or("SessionStart");
     let me = identity::resolve()?;
-    let conn = db::open_at(&path)?;
+    let conn = db::open_at_for_hook(&path)?;
     let at = db::now()?;
 
     // Deliberately no `identity::touch` here. Memory is not a participant on the board, and this
@@ -1114,7 +1131,7 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
         .and_then(|v| v.as_str())
         .unwrap_or("SessionStart");
     let me = identity::resolve()?;
-    let mut conn = db::open_at(&path)?;
+    let mut conn = db::open_at_for_hook(&path)?;
     identity::touch(&conn, &me, None)?;
 
     // An edit that already happened: record the claim, and — since PostToolUse output *is*
@@ -1429,10 +1446,17 @@ fn run_memory(
             }
             if *direct {
                 if !*yes {
-                    println!(
-                        "direct promotion skips the derivation ledger entirely, so there is \
-                         nothing to read.\n  confirm with --direct --yes"
-                    );
+                    if cli.json {
+                        print_json(&serde_json::json!({
+                            "written": false,
+                            "confirm": "--direct --yes",
+                        }));
+                    } else {
+                        println!(
+                            "direct promotion skips the derivation ledger entirely, so there is \
+                             nothing to read.\n  confirm with --direct --yes"
+                        );
+                    }
                     return Ok(());
                 }
                 let promoted = memory::promote_direct(conn, me, &note_id, at)?;
@@ -1450,10 +1474,21 @@ fn run_memory(
                 // its derivations spelled out rather than counted, and no write until --yes.
                 // A batch with a single confirmation is a rubber stamp, and a rubber stamp is
                 // D16's defect with extra steps (D49).
-                print!(
-                    "{}",
-                    memory::render_offer(&candidate, &memory::destination(&candidate))
-                );
+                //
+                // `--json` too: the primer promises it on any command, and this gate was one of
+                // three arms that broke that promise — an agent parsing stdout got prose on
+                // exactly the human-gate paths. `written: false` is the load-bearing field; the
+                // gate survives the format.
+                let routed = memory::destination(&candidate);
+                if cli.json {
+                    print_json(&serde_json::json!({
+                        "written": false,
+                        "confirm": "--yes",
+                        "offer": memory::offer_json(&candidate, &routed),
+                    }));
+                } else {
+                    print!("{}", memory::render_offer(&candidate, &routed));
+                }
                 return Ok(());
             }
             let chosen = scope
@@ -1678,22 +1713,20 @@ fn run_memory(
             if !open && !reopen {
                 // Read only on the path that uses it — `window_open` does its own lookup, so
                 // fetching here unconditionally queried the row twice and discarded one.
-                print!(
-                    "{}",
-                    memory::render_window_report(
-                        memory::window_start(conn, memory::INJECTION_WINDOW)?,
-                        at
-                    )
-                );
+                let since = memory::window_start(conn, memory::INJECTION_WINDOW)?;
+                if cli.json {
+                    print_json(&serde_json::json!({ "open": since.is_some(), "since": since }));
+                } else {
+                    print!("{}", memory::render_window_report(since, at));
+                }
                 return Ok(());
             }
-            print!(
-                "{}",
-                memory::render_window_change(
-                    &memory::window_open(conn, memory::INJECTION_WINDOW, at, *reopen)?,
-                    at
-                )
-            );
+            let change = memory::window_open(conn, memory::INJECTION_WINDOW, at, *reopen)?;
+            if cli.json {
+                print_json(&change.to_json());
+            } else {
+                print!("{}", memory::render_window_change(&change, at));
+            }
         }
     }
     Ok(())

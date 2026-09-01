@@ -64,6 +64,19 @@ impl Mode {
 /// keep a session waiting.
 const HOOK_TIMEOUT_SECS: u64 = 5;
 
+// A hook's database wait must fit inside the wall-clock budget this module writes into
+// `settings.json`. The two constants live in different modules and describe the same 5 seconds:
+// this one is the platform's kill deadline, `db::HOOK_BUSY_TIMEOUT_MS` is how much of it an open
+// may burn parked on a lock. They were never reconciled — the wait was 30 s inside a 5 s budget,
+// so a contended hook was killed mid-wait rather than exiting 0, the one ending D9 forbids
+// (D103). At most half, so the work the hook opened the board *for* keeps a full wait's worth of
+// headroom. A `const` assertion rather than a test: the drift becomes a build failure, which is
+// the strongest red available.
+const _: () = assert!(
+    crate::db::HOOK_BUSY_TIMEOUT_MS <= HOOK_TIMEOUT_SECS * 1000 / 2,
+    "a hook may spend at most half its wall-clock budget waiting on a lock (D103)"
+);
+
 /// The outcome of planning an edit. `settings` is the file's new content.
 #[derive(Debug, Clone)]
 pub struct Plan {
@@ -848,6 +861,17 @@ pub fn apply(
     })
 }
 
+/// The temporary sibling one process writes before renaming over the settings file.
+///
+/// Deliberately NOT shared with `memory::write`'s twin: the two writers target disjoint files
+/// that can never collide with each other, and the half that carries the actual guarantee — the
+/// rename discipline around this name — differs between them (this one runs a compare-and-swap
+/// re-read first, that one chmods first). What each site needs is its own pid assertion, not a
+/// shared string builder; a function exists here only so a test can hold the property.
+fn settings_tmp(path: &Path) -> std::path::PathBuf {
+    path.with_extension(format!("json.amb-tmp.{}", std::process::id()))
+}
+
 /// Write settings back, but only if the file still holds `seen`. Returns whether it wrote.
 fn write_if_unchanged(path: &Path, value: &Value, seen: Option<&str>) -> Result<bool> {
     if let Some(parent) = path.parent() {
@@ -857,7 +881,7 @@ fn write_if_unchanged(path: &Path, value: &Value, seen: Option<&str>) -> Result<
         context: "serialising settings".into(),
         source,
     })?;
-    let tmp = path.with_extension(format!("json.amb-tmp.{}", std::process::id()));
+    let tmp = settings_tmp(path);
     std::fs::write(&tmp, format!("{body}\n")).map_err(io(format!("writing {}", tmp.display())))?;
 
     // **The backup is taken before the check, deliberately, and this ordering was measured.**
@@ -887,6 +911,21 @@ fn write_if_unchanged(path: &Path, value: &Value, seen: Option<&str>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The settings temp name must carry the pid, or two sessions interleave on one path.
+    ///
+    /// The higher-stakes twin of `memory::write`'s test: this file configures Claude Code for
+    /// every project on the machine, and the pid was assumed by the cleanup test above and
+    /// asserted by nothing.
+    #[test]
+    fn the_settings_temp_name_is_scoped_to_this_process() {
+        let tmp = settings_tmp(Path::new("/h/.claude/settings.json"));
+        let name = tmp.file_name().and_then(|n| n.to_str()).expect("utf8 name");
+        assert!(
+            name.ends_with(&format!(".amb-tmp.{}", std::process::id())),
+            "another session picks the same temp path: {name}"
+        );
+    }
 
     /// A payload missing the fields, or carrying the wrong types, must degrade rather than panic.
     ///

@@ -33,6 +33,35 @@ pub mod version;
 
 pub use error::{Error, Result};
 
+/// Assert a query's plan reaches the named index — for guards where the *plan* is the rule.
+///
+/// Two defects arrived in one audit that were invisible to every result-shaped assertion,
+/// because the rows were always right and only the access path was wrong: `claims::list`'s
+/// `(?1 IS NULL OR …)` idiom defeated `ix_claims_live` on the `PostToolUse` path, and the memory
+/// sync's per-file probe walked every note of a kind. `EXPLAIN QUERY PLAN` is the one surface
+/// that class shows on, so it gets the same treatment [`assert_rendered_shape`] gives rendered
+/// text: one helper, so the recipe — column 3 is `detail`, and EXPLAIN still counts the
+/// statement's parameters so placeholders must be bound — is written once.
+#[cfg(test)]
+pub(crate) fn assert_query_plan_uses(
+    conn: &rusqlite::Connection,
+    sql: &str,
+    binds: Vec<rusqlite::types::Value>,
+    index: &str,
+) {
+    let plan = format!("EXPLAIN QUERY PLAN {sql}");
+    let mut stmt = conn.prepare(&plan).expect("planning the query");
+    let details: Vec<String> = stmt
+        .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))
+        .expect("reading the plan")
+        .flatten()
+        .collect();
+    assert!(
+        details.iter().any(|d| d.contains(index)),
+        "the plan never reaches {index} — scanned instead: {details:?}"
+    );
+}
+
 /// Shape invariants every rendered artefact must satisfy, asserted as a class rather than as needles.
 ///
 /// **M24 is why this exists.** A wrapped string literal kept its indentation and rendered

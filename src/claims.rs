@@ -250,10 +250,14 @@ pub fn take(
 /// Live claims by other agents in this project that overlap `path`.
 ///
 /// Overlap is computed in Rust rather than SQL so it can use the segment-aware [`overlaps`]
-/// rule, which `LIKE 'prefix%'` cannot express. The table is tiny, so fetching the project's
-/// live claims and filtering costs nothing worth optimising.
+/// rule, which `LIKE 'prefix%'` cannot express. Liveness is filtered in SQL — this docstring
+/// said "live claims" for as long as it existed while the call below passed `live_only = false`
+/// and fetched every claim ever taken, lapsed ones included, then discarded them one line later.
+/// The result was right and the fetch was not, on the `PostToolUse` path, against the one table
+/// that only grows. The `is_live` filter below stays: `list` computes its own `now()`, this
+/// function is handed the caller's `at`, and the belt costs nothing.
 pub fn conflicts_with(conn: &Connection, me: &Identity, path: &str, at: f64) -> Result<Vec<Claim>> {
-    Ok(list(conn, Some(&me.project), false)?
+    Ok(list(conn, Some(&me.project), true)?
         .into_iter()
         .filter(|c| c.agent != me.id && c.is_live(at) && overlaps(&c.path, path))
         .collect())
@@ -341,19 +345,12 @@ pub fn edited_paths(conn: &Connection, project: &str) -> Result<Vec<EditedPath>>
 /// `RESEARCH.md` R1's specific complaint about the prior art.
 pub fn list(conn: &Connection, project: Option<&str>, live_only: bool) -> Result<Vec<Claim>> {
     let at = now()?;
+    let (query, binds) = list_sql(project, live_only.then_some(at));
     let mut stmt = conn
-        .prepare(
-            "SELECT c.path, c.agent, a.name, c.project, c.intent, c.source, c.taken_at,
-                    c.expires_at, a.pid, a.last_seen
-             FROM claims c
-             LEFT JOIN agents a ON a.id = c.agent
-             WHERE (?1 IS NULL OR c.project = ?1)
-               AND (?2 = 0 OR c.expires_at > ?3)
-             ORDER BY c.taken_at DESC",
-        )
+        .prepare(&query)
         .map_err(sql("preparing the claims query"))?;
     let rows = stmt
-        .query_map(params![project, i32::from(live_only), at], |r| {
+        .query_map(rusqlite::params_from_iter(binds), |r| {
             Ok(Claim {
                 path: r.get(0)?,
                 agent: r.get(1)?,
@@ -375,6 +372,48 @@ pub fn list(conn: &Connection, project: Option<&str>, live_only: bool) -> Result
         .map_err(sql("running the claims query"))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(sql("reading a claim row"))
+}
+
+/// The SQL [`list`] runs, with the WHERE assembled from plain equality clauses.
+///
+/// **The `(?1 IS NULL OR c.project = ?1)` idiom this replaces defeated the planner**, and it did
+/// so invisibly: SQLite cannot know at plan time that a parameter is non-NULL, so
+/// `ix_claims_live(project, expires_at)` — created for exactly this query — was never used, and
+/// every call scanned the whole table. That scan sits on the `PostToolUse` path via
+/// [`conflicts_with`], against a table whose primary key is `(path, agent)` with a per-session
+/// UUID in it, i.e. one that only ever grows. The contrast was one function up: [`edited_paths`]
+/// spells `WHERE project = ?1` plainly and got the index from day one.
+///
+/// Pulled out of [`list`] so a test can run `EXPLAIN QUERY PLAN` against the exact string the
+/// query uses — the guard is on the plan, not on the result, because the result was always
+/// correct. That is what made this invisible: nothing was wrong, only slow, and only at a table
+/// size the fixtures never reached.
+/// Each clause is pushed beside its bind, so the positional `?` order exists in exactly one
+/// place — an earlier form built the clauses here and the binds in [`list`], two `if` chains
+/// that had to agree with nothing checking that they did.
+fn list_sql(project: Option<&str>, live_at: Option<f64>) -> (String, Vec<rusqlite::types::Value>) {
+    let mut query = String::from(
+        "SELECT c.path, c.agent, a.name, c.project, c.intent, c.source, c.taken_at,
+                c.expires_at, a.pid, a.last_seen
+         FROM claims c
+         LEFT JOIN agents a ON a.id = c.agent",
+    );
+    let mut clauses: Vec<&str> = Vec::new();
+    let mut binds: Vec<rusqlite::types::Value> = Vec::new();
+    if let Some(p) = project {
+        clauses.push("c.project = ?");
+        binds.push(rusqlite::types::Value::Text(p.to_string()));
+    }
+    if let Some(at) = live_at {
+        clauses.push("c.expires_at > ?");
+        binds.push(rusqlite::types::Value::Real(at));
+    }
+    if !clauses.is_empty() {
+        query.push_str(" WHERE ");
+        query.push_str(&clauses.join(" AND "));
+    }
+    query.push_str(" ORDER BY c.taken_at DESC");
+    (query, binds)
 }
 
 /// One line per holder-and-directory, for display.
@@ -631,6 +670,22 @@ mod tests {
         // Otherwise a stray "" would silently claim the entire repository.
         assert!(!overlaps("", "src/main.rs"));
         assert!(!overlaps("src/main.rs", ""));
+    }
+
+    /// The claims query must reach `ix_claims_live`, and the guard is on the *plan*.
+    ///
+    /// The `(?1 IS NULL OR …)` idiom [`list_sql`] replaced returned correct rows while scanning
+    /// the whole table — invisible to every result-shaped assertion, at any fixture size, because
+    /// nothing was wrong with the rows. `EXPLAIN QUERY PLAN` is the only surface the defect shows
+    /// on, so that is the surface asserted. Reverting `list_sql` to the OR-NULL idiom reddens
+    /// this; so does dropping the index from the schema.
+    #[test]
+    fn the_project_filter_reaches_the_index() {
+        let (_dir, conn, _a, _b, _c) = board();
+        for live_at in [None, Some(0.0)] {
+            let (query, binds) = list_sql(Some("nest"), live_at);
+            crate::assert_query_plan_uses(&conn, &query, binds, "ix_claims_live");
+        }
     }
 
     /// A real board with three registered agents.

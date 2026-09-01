@@ -533,3 +533,37 @@ fn a_hook_invoked_with_arguments_this_build_cannot_parse_exits_zero_and_is_silen
     let (code, _) = b.hook("alice", "session", START);
     assert_eq!(code, 0, "a well-formed hook still runs");
 }
+
+/// A Stop re-fire (`stop_hook_active: true`) gets silence, even with mail waiting.
+///
+/// The runner counts a Stop hook that injects context as blocking the turn from ending: it wakes
+/// the model, the model answers, Stop fires again with `stop_hook_active: true`. Answering that
+/// firing loops — observed at machine scale during two stale-binary windows (2026-08-27 and
+/// 2026-08-31), when the arrival note printed on every Stop and five projects' sessions each
+/// cycled to the platform's nine-block cap. Nothing is lost to the silence: delivery is a log
+/// (D17), and the presence row below proves the first firing still speaks.
+#[test]
+fn a_stop_refire_is_answered_with_silence() {
+    let b = Board::new();
+    b.run("uuid-eve", &["send", "@", "--subject", "s", "--body", "b"]);
+
+    // Presence first (M27): the same board, the same mail, a *first* firing — the banner comes.
+    let (code, out) = b.hook("uuid-alice", "turn", r#"{"hook_event_name":"Stop"}"#);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("unread"),
+        "the first firing must deliver: {out}"
+    );
+
+    // The re-fire: mail is still unread (nothing acknowledged it), and the answer is nothing.
+    let (code, out) = b.hook(
+        "uuid-bob",
+        "turn",
+        r#"{"hook_event_name":"Stop","stop_hook_active":true}"#,
+    );
+    assert_eq!(code, 0, "silence must still be success — D9");
+    assert_eq!(
+        out, "",
+        "a re-fire answered with context is a wake loop: {out}"
+    );
+}

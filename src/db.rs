@@ -112,6 +112,7 @@ fn volume_of(path: &Path) -> Option<(String, Option<bool>)> {
     Some((name, Some(buf.f_flags & libc::MNT_LOCAL as u32 != 0)))
 }
 
+
 #[cfg(target_os = "linux")]
 fn volume_of(path: &Path) -> Option<(String, Option<bool>)> {
     use std::os::unix::ffi::OsStrExt;
@@ -248,6 +249,38 @@ Created by `amb`. Remove its hooks with `amb uninstall`.
 /// Open a specific path. Separate from [`open`] so tests can point at a temporary file without
 /// reaching through the environment.
 pub fn open_at(path: &Path) -> Result<Connection> {
+    open_at_with(path, INTERACTIVE_BUSY_TIMEOUT_MS)
+}
+
+/// How long an *interactive* open may wait on a busy board, in milliseconds.
+///
+/// Chosen for D30's first-open stampede: converting a fresh file to WAL takes a brief exclusive
+/// lock, twelve concurrent processes contend, and a human watching a prompt would rather wait
+/// than see "database is locked". A hook cannot afford this value — see
+/// [`HOOK_BUSY_TIMEOUT_MS`].
+pub const INTERACTIVE_BUSY_TIMEOUT_MS: u64 = 30_000;
+
+/// How long a *hook's* open may wait, in milliseconds — and it must be less than the budget.
+///
+/// The platform gives a hook entry 5 s of wall clock and then kills it. `busy_timeout` was one
+/// value for both callers, so under contention a hook could sit parked in a 30 s wait while its
+/// own budget lapsed — terminated mid-wait by the platform rather than exiting 0 on its own
+/// terms, which is the one ending D9 forbids. The wait has to be inside the open itself, not
+/// applied after: `migrate` runs during the open and takes the write lock, so an override set
+/// on the returned connection would arrive after the stall it exists to bound.
+///
+/// 2 s leaves most of the budget for the actual work. A lock still held after 2 s means another
+/// process is mid-migration; this event's delivery is lost and the next one finds a current
+/// board — losing one beat is recoverable, being killed is not ours to handle. Asserted against
+/// the hook budget by a `const` assertion beside `HOOK_TIMEOUT_SECS` in `hooks.rs`.
+pub const HOOK_BUSY_TIMEOUT_MS: u64 = 2_000;
+
+/// [`open_at`], with the wait budget a hook can actually afford.
+pub fn open_at_for_hook(path: &Path) -> Result<Connection> {
+    open_at_with(path, HOOK_BUSY_TIMEOUT_MS)
+}
+
+fn open_at_with(path: &Path, busy_ms: u64) -> Result<Connection> {
     guard_location(path)?;
 
     // Whether *we* brought the containing directory into existence. Load-bearing: it decides
@@ -265,10 +298,22 @@ pub fn open_at(path: &Path) -> Result<Connection> {
         }
     }
     let mut conn = Connection::open(path).map_err(sql(format!("opening {}", path.display())))?;
-    apply_pragmas(&conn)?;
+    apply_pragmas(&conn, busy_ms)?;
     migrate(&mut conn, path)?;
     restrict(path, ours);
     Ok(conn)
+}
+
+/// SQLite's own consistency check, reduced to what a caller can act on: `None` means healthy.
+///
+/// `quick_check(1)` — the first finding is enough, because the response to any finding is the
+/// same (D15: the board is disposable) and a full enumeration on a corrupt file can be slow
+/// exactly when the answer is already known.
+pub fn quick_check(conn: &Connection) -> Result<Option<String>> {
+    let verdict: String = conn
+        .query_row("PRAGMA quick_check(1)", [], |r| r.get(0))
+        .map_err(sql("running quick_check"))?;
+    Ok(if verdict == "ok" { None } else { Some(verdict) })
 }
 
 /// Record that something happened. Never fails a caller — a counter that could break the thing it
@@ -315,7 +360,7 @@ pub const PRUNE_AT_BYTES: u64 = 50 * 1024 * 1024;
 ///
 /// Equal to `MIGRATIONS.len()`, asserted by a test rather than computed, so that bumping one
 /// without the other is caught rather than silently accepted.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 /// Migrations, applied in order from whatever version the board is already at.
 ///
@@ -668,6 +713,27 @@ const MIGRATIONS: &[&str] = &[
        foreign_hits INTEGER NOT NULL DEFAULT 0
      );
      CREATE INDEX ix_searches_ts ON searches(ts);",
+    // 12 -> 13 · the index sync's per-file probe gets an index (audit round two).
+    //
+    // `sync_dir` asks `SELECT mtime FROM notes WHERE kind = ?1 AND vault_path = ?2` once per
+    // markdown file it scans, on the `SessionStart` hook path. The primary key is
+    // `(kind, scope, slug)`, so that probe seeks on `kind` and then walks every note of the kind
+    // to match `vault_path` — per file, so the pass is quadratic in vault size. Measured on a
+    // synthetic 5,000-note index: one 500-file hook pass costs 177 ms unindexed and 8 ms with
+    // this index (measured with the probe still re-prepared per file; `sync_dir` has since
+    // cached the statement, so 8 ms is an upper bound); a full reindex, 1.49 s. `AUTO_INDEX_LIMIT` bounds files per directory, not
+    // rows in `notes`, so a large vault taxes every repository's session start without it.
+    //
+    // The prune DELETEs key on the same `(kind, vault_path)` pair and get the index too. The
+    // prune *listing* does not — its `LIKE ?2 || '%'` is an expression, which the LIKE
+    // optimisation cannot see through — and stays a one-scan-per-directory cost on purpose:
+    // rewriting it as a range hack buys nothing the per-file probes did not already cost more.
+    //
+    // Not UNIQUE, deliberately. One file is one row today, but the schema's identity is
+    // `(kind, scope, slug)` and `sync_dir` rewrites scope from the directory; making a second
+    // claim about identity here would give conflicts two arbiters (D51's shape — a rule enforced
+    // in two places is enforced by whichever one fires first).
+    "CREATE INDEX ix_notes_vault ON notes(kind, vault_path);",
 ];
 
 /// Bring the board up to [`SCHEMA_VERSION`], or explain why it cannot be.
@@ -814,14 +880,17 @@ fn restrict(_path: &Path, _own_dir: bool) {}
 /// `journal_mode` returns a row, so it needs `query_row`; a plain `execute` fails with
 /// `ExecuteReturnedResults`. The result is checked rather than assumed — WAL silently failing to
 /// engage would turn the measured latency profile into the untuned one (M1) with no other sign.
-pub fn apply_pragmas(conn: &Connection) -> Result<()> {
+///
+/// `busy_ms` is the caller's wait budget — [`INTERACTIVE_BUSY_TIMEOUT_MS`] or
+/// [`HOOK_BUSY_TIMEOUT_MS`], whose doc carries the argument for there being two.
+pub fn apply_pragmas(conn: &Connection, busy_ms: u64) -> Result<()> {
     // **First, before anything that can block.** Converting a fresh file to WAL takes a brief
     // exclusive lock, so several processes opening a new board at the same moment contend — and
     // with no busy timeout yet in force the losers get `SQLITE_BUSY` immediately and the whole
     // command fails. Measured before the fix: **10 of 12 concurrent first-opens failed** with
     // "database error while setting journal_mode" (D30). The timeout was always here; it was
     // simply installed one statement too late.
-    conn.busy_timeout(std::time::Duration::from_millis(30_000))
+    conn.busy_timeout(std::time::Duration::from_millis(busy_ms))
         .map_err(sql("setting busy_timeout"))?;
     engage_wal(conn)?;
     conn.execute_batch("PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;")
@@ -880,6 +949,7 @@ fn engage_wal(conn: &Connection) -> Result<()> {
     }
 }
 
+
 // `init_schema` used to live here and ran on every open. [`migrate`] replaced it: the schema is
 // now migration 0 -> 1, applied once and skipped thereafter.
 
@@ -898,6 +968,25 @@ pub fn now() -> Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each open variant must actually install its own wait budget, asserted through
+    /// `PRAGMA busy_timeout` because rusqlite has no getter. This is what reddens if
+    /// [`open_at_for_hook`] stops overriding — the cross-constant test in `hooks.rs` checks the
+    /// *numbers* against the budget and cannot see whether either number is ever applied.
+    #[test]
+    fn each_open_variant_installs_its_own_wait_budget() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let read_timeout = |conn: &Connection| -> u64 {
+            let got: i64 = conn
+                .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+                .expect("reading busy_timeout");
+            got as u64
+        };
+        let cli = open_at(&dir.path().join("cli.db")).expect("interactive open");
+        assert_eq!(read_timeout(&cli), INTERACTIVE_BUSY_TIMEOUT_MS);
+        let hook = open_at_for_hook(&dir.path().join("hook.db")).expect("hook open");
+        assert_eq!(read_timeout(&hook), HOOK_BUSY_TIMEOUT_MS);
+    }
 
     /// **The kernel's answer is the authority on macOS, and nothing asserted that it was read.**
     ///

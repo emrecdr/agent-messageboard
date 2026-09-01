@@ -2238,3 +2238,43 @@ fn a_topic_note_stays_away_from_a_repository_that_is_not_that_topic() {
         "the count must describe the same population the query returned: {text}"
     );
 }
+
+/// The primer promises `--json` on any command; these were the three arms that broke it.
+///
+/// `memory window` (both branches) and both `promote` gates printed prose unconditionally, so an
+/// agent parsing stdout got unparseable text on exactly the human-gate paths — a false claim in
+/// the banner every session reads (audit round two). The gate itself must survive the format:
+/// `written: false` is the load-bearing field, and for the window, `changed` is what keeps
+/// D87's `AlreadyOpen`-is-not-`Opened` distinction alive in JSON.
+#[test]
+fn the_json_promise_holds_on_the_gate_arms() {
+    let b = Board::new();
+
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_str(&b.mem("uuid-alice", args)).expect("the arm answers in json")
+    };
+
+    let report = json(&["memory", "window", "--json"]);
+    assert_eq!(report["open"], serde_json::Value::Bool(false), "{report}");
+
+    let opened = json(&["memory", "window", "--open", "--json"]);
+    assert_eq!(opened["changed"], serde_json::Value::Bool(true), "{opened}");
+
+    // Re-running `--open` must still refuse to reset — and say so in JSON.
+    let again = json(&["memory", "window", "--open", "--json"]);
+    assert_eq!(again["changed"], serde_json::Value::Bool(false), "{again}");
+    assert_eq!(again["open"], serde_json::Value::Bool(true), "{again}");
+
+    // The direct-promotion gate needs a resolvable note — resolution runs before the gate — but
+    // what is under test is the refusal's format, not the promotion.
+    let recorded = b.mem(
+        "uuid-alice",
+        &["memory", "observe", "--title", "t", "--learned", "l"],
+    );
+    let id = recorded
+        .split_whitespace()
+        .nth(1)
+        .expect("observe names the id it recorded");
+    let gate = json(&["memory", "promote", id, "--direct", "--json"]);
+    assert_eq!(gate["written"], serde_json::Value::Bool(false), "{gate}");
+}

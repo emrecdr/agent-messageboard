@@ -89,9 +89,15 @@ run() {
   return 0
 }
 
+# `--locked` on everything that resolves dependencies. The 2026-08-20 crates.io incident —
+# a compromised maintainer account shipping build-time code execution through a typosquatted
+# proc-macro, exposure window ~90 minutes — is defended at this project's scale by exactly two
+# things: a committed lockfile that only moves when someone moves it, and the advisory check CI
+# runs. `--locked` is what makes the first one enforced rather than customary: a resolve that
+# wants to differ from Cargo.lock fails loudly instead of updating it as a side effect.
 run "cargo fmt --check"          cargo fmt --check
-run "cargo clippy --all-targets" cargo clippy --all-targets --all-features -- -D warnings
-run "cargo test"                 cargo test --quiet
+run "cargo clippy --locked --all-targets" cargo clippy --locked --all-targets --all-features -- -D warnings
+run "cargo test --locked"        cargo test --locked --quiet
 run "tools/check_docs.py"        python3 tools/check_docs.py
 run "tools/find_unread_fields.py" python3 tools/find_unread_fields.py
 run "tools/check_secret_literals.py" python3 tools/check_secret_literals.py

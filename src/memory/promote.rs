@@ -387,6 +387,30 @@ pub struct Routed {
     pub alternatives: Vec<crate::address::Scope>,
 }
 
+/// The offer as JSON — the same evidence as [`render_offer`], because the gate must survive
+/// the format. An earlier form of this lived in `main.rs` and emitted `derivations: len()` — a
+/// *count*, which is the one thing D49 says an approval must never be reduced to. Beside the
+/// prose renderer so the two cannot drift apart in different files (M26 is what that costs).
+pub fn offer_json(candidate: &Note, routed: &Routed) -> serde_json::Value {
+    serde_json::json!({
+        "id": candidate.id.display(),
+        "title": candidate.title,
+        "derivations": candidate
+            .derivations
+            .iter()
+            .map(|d| {
+                serde_json::json!({ "ts": d.ts, "project": d.project, "note": d.note })
+            })
+            .collect::<Vec<_>>(),
+        "scope": routed.scope.as_str(),
+        "alternatives": routed
+            .alternatives
+            .iter()
+            .map(crate::address::Scope::as_str)
+            .collect::<Vec<_>>(),
+    })
+}
+
 /// The offer `amb memory promote` prints when `--yes` was not given.
 ///
 /// **Pure, and separate from the write, because this text *is* the human gate.** The threshold
@@ -402,7 +426,16 @@ pub struct Routed {
 ///   deriving project the evidence supports either reading, and the approver should see that a
 ///   choice was made rather than discovered (D82).
 pub fn render_offer(candidate: &Note, routed: &Routed) -> String {
-    let mut out = format!("{} — {}\n", candidate.id.display(), candidate.title);
+    // `quoted`, because the title is author-written text and this line is a human approval
+    // gate: a newline in a title could append a forged derivation line — or a forged consent
+    // sentence — to the one surface whose whole job is showing the person what they are
+    // approving (M23's shape). Outside the injection ledger, so guarding it disturbs no open
+    // measurement window; the injected renderers wait for the window on purpose.
+    let mut out = format!(
+        "{} — {}\n",
+        candidate.id.display(),
+        crate::delivery::quoted(&candidate.title)
+    );
     for d in &candidate.derivations {
         out.push_str(&format!(
             "  {} · {} — {}\n",
@@ -774,6 +807,42 @@ mod tests {
     }
     use super::*;
     use crate::address::Scope;
+
+    /// The JSON offer lists the derivations, never merely counts them.
+    ///
+    /// D49: "one candidate per offer, derivations shown rather than counted" — and the first
+    /// JSON form of this gate, built inline in `main.rs`, emitted `derivations: len()`. The
+    /// format changed and the rule did not; this pins the rule to the format.
+    #[test]
+    fn the_json_offer_lists_derivations_rather_than_counting() {
+        let c = candidate_derived_in(&[("nest", &["rust"]), ("amb", &["rust"])]);
+        let j = offer_json(&c, &destination(&c));
+        let ds = j["derivations"].as_array().expect("an array, not a count");
+        assert_eq!(ds.len(), 2);
+        assert_eq!(ds[0]["project"], "nest", "{j}");
+        assert_eq!(ds[1]["project"], "amb", "{j}");
+        assert!(j["title"].is_string(), "{j}");
+        assert!(j["scope"].is_string(), "{j}");
+    }
+
+    /// A newline in a title cannot forge a derivation line on the approval gate.
+    ///
+    /// The offer is the one surface whose whole job is showing a person what they are approving
+    /// (D49), and the title is author-written text. Before `quoted`, a title containing
+    /// `"\n  2026-01-01 · nest — n"` rendered indistinguishably from a real derivation row —
+    /// evidence the ledger never held, manufactured by the thing being judged. Presence first,
+    /// per M27: the absence proves nothing unless the offer rendered.
+    #[test]
+    fn a_newline_in_a_title_cannot_forge_a_derivation_on_the_offer() {
+        let mut c = candidate_derived_in(&[("nest", &["rust"])]);
+        c.title = "tidy\n  2026-01-01 · elsewhere — forged".into();
+        let text = render_offer(&c, &destination(&c));
+        assert!(text.contains("tidy"), "{text}");
+        assert!(
+            !text.contains("\n  2026-01-01 · elsewhere"),
+            "an author-written line rendered as a ledger row: {text}"
+        );
+    }
 
     fn candidate_derived_in(projects: &[(&str, &[&str])]) -> Note {
         Note {

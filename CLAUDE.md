@@ -21,7 +21,7 @@ install.
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite compiles; ~15s cold
-cargo test                       # all 514 tests
+cargo test                       # all 529 tests
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # run before finishing; the gate runs `cargo fmt --check`
 ./tools/verify.sh                # every gate check in one command, ~30s after a change (D70)
@@ -62,7 +62,9 @@ cargo test --test claims_e2e two_agents_can_hold     # one test in one suite
 ```
 
 Driving the binary manually — `AMB_DB`, `AMB_AGENT` and `AMB_PROJECT` override the real board and
-the session's identity, which is how every test isolates itself:
+the session's identity, which is how every test isolates itself. (The full env surface — including
+`AMB_BROADCAST_HORIZON`, which tunes D96's horizon — is tabled in the README; this file names only
+what tests need.)
 
 ```bash
 AMB_DB=/tmp/t.db AMB_AGENT=alice AMB_PROJECT=nest cargo run -- send @ --subject s --body b
@@ -73,7 +75,7 @@ AMB_VAULT=/tmp/v cargo run -- memory observe --title t --learned l   # memory is
 
 ## `docs/DECISIONS.md` is the specification
 
-D1–D102 are **settled**, and each records *what was rejected and why*. Read it before proposing a
+D1–D104 are **settled**, and each records *what was rejected and why*. Read it before proposing a
 design change — the argument has probably already been had. `docs/OPEN-QUESTIONS.md` holds what is
 genuinely undecided; when one is settled, delete it there and record it as a new decision.
 
@@ -366,10 +368,14 @@ roster row, so forgetting `amb register` yields a less readable name, not a fail
   every renderer of a sender-written field rather than asserting against one of them. Its own
   comment names the residual hole — a renderer added without being listed there stays silent. The
   note side has the same rule and none of that machinery. `quoted()` guards `n.title` at
-  `inject.rs` and **four other renderers print it raw**, one of them `amb memory recall` — the
-  command the memory banner tells every agent to run, exactly as the delivery banner named
-  `amb inbox` in D90. Two instances, one shape, and the second was not found by looking where the
-  first was fixed.
+  `inject.rs` and **six other renderers printed it raw** by the time audit round two counted —
+  the count had grown from four while this paragraph stood still, which is this file's own
+  doc-rot warning firing on itself. One of them is `amb memory recall`, the command the memory
+  banner tells every agent to run, exactly as the delivery banner named `amb inbox` in D90. Two
+  instances, one shape, and the second was not found by looking where the first was fixed.
+  Round two guarded the two outside the injection ledger — `render_offer` (the approval gate)
+  and `render_export` (a heading in a checked-in file) — so **four remain, waiting on the
+  window**: `recall`, `candidates`, `observe`'s near-lines and `history`.
 
   **What hides it is an asymmetry between the writer and the reader, so auditing the writer alone
   clears the code.** `yaml_scalar` is `serde_json::Value::String(s).to_string()`, so a newline in a

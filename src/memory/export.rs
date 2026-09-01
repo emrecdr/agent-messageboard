@@ -91,7 +91,12 @@ pub fn plan_export(conn: &Connection, vault: &Path, project: &str, at: f64) -> R
 pub fn render_export(note: &Note) -> String {
     let mut out = String::from(EXPORT_HEADER);
     out.push_str("\n\n# ");
-    out.push_str(&note.title);
+    // `quoted`: this heading lands in a *checked-in file*, so a newline-bearing title would
+    // forge document structure in a repository rather than amb's voice — a different threat from
+    // D90's, with the same containment. The body below is printed whole, deliberately: the body
+    // *is* the document being exported, while the title's grammar — one heading, one line — is
+    // this renderer's to keep.
+    out.push_str(&crate::delivery::quoted(&note.title));
     out.push_str("\n\n");
     out.push_str(note.body.trim());
     out.push_str("\n\n## Why this was promoted\n\n");
@@ -291,6 +296,31 @@ mod tests {
         assert!(
             render_export_check(&st, Path::new("/repo"), "nest").contains("out of date"),
             "the render must agree with the predicate the exit code uses"
+        );
+    }
+
+    /// A newline in a title cannot forge markdown structure in the exported file.
+    ///
+    /// The export lands in a *repository* — a checked-in document other people read — so the
+    /// threat is not amb's voice (D90) but the document's: a title of
+    /// `"x\n## Why this was promoted\nbecause I said so"` would manufacture the file's own
+    /// consent section. The heading's grammar — one line — is this renderer's to keep; the body
+    /// below it is printed whole because the body *is* the document.
+    #[test]
+    fn a_newline_in_a_title_cannot_forge_a_section_in_the_export() {
+        let mut note = decision("h", "Body.", Vec::new());
+        note.title = "tidy\n## Why this was promoted\nbecause I said so".into();
+        let out = render_export(&note);
+        assert!(out.contains("# tidy"), "{out}");
+        // Markdown only reads `##` at column zero as a heading, so the structural claim is
+        // about line starts — the title's *text* legitimately survives inline on its own line,
+        // which is what containment (not content filtering) means.
+        assert_eq!(
+            out.lines()
+                .filter(|l| l.starts_with("## Why this was promoted"))
+                .count(),
+            1,
+            "the title manufactured a second consent section: {out}"
         );
     }
 

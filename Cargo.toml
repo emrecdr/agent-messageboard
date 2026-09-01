@@ -38,3 +38,14 @@ thiserror = "2.0.20"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Set explicitly rather than inherited, because the binary is invoked once per hook per tool
+# call and the published startup figures are measured against it (audit round two). `thin` LTO
+# and one codegen unit are the standard cheap wins for a small binary; `strip` matters because
+# this binary is copied to two places (`~/.cargo/bin`, `~/.local/bin`) on every install.
+# README's startup numbers were re-measured against this profile the day it landed — a profile
+# change is a measurement change (M-rule: repeat any measurement before quoting it).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -12,7 +12,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 514 tests, including multi-process concurrency and hook-safety
+**Status: built and working.** 529 tests, including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -823,7 +823,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 514 tests
+cargo test                       # all 529 tests
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -900,16 +900,22 @@ bump leaves `CHANGELOG.md` behind.
 Not throughput. SQLite already sustains roughly 1,000× the real message rate in any language.
 
 It is **process startup**, paid on every single invocation because agents shell out per operation —
-the term nobody measures. Re-measured 2026-08-29 against the **current** release binary on an M2,
-under load — 50 runs, median, repeated twice with both runs shown, by running
+the term nobody measures. Re-measured 2026-08-31 against the **current** release binary — now
+built with thin LTO, one codegen unit and stripped symbols, which is why the date moved — on an
+M2, under load — 50 runs, median, repeated twice with both runs shown, by running
 `bench/bench_startup.py`:
 
 | | median | |
 |---|---|---|
-| `python3 -c pass` | 16.0 / 16.2 ms | before it runs a single statement |
-| `/bin/echo` | 1.5 / 1.3 ms | the native floor |
-| **`amb --version`** | **2.2 / 2.4 ms** | ~7× cheaper than Python's floor |
-| **`amb inbox`** | **3.1 / 3.3 ms** | opens SQLite and renders — still ~5× cheaper |
+| `python3 -c pass` | 19.6 / 20.4 ms | before it runs a single statement |
+| `/bin/echo` | 2.3 / 1.7 ms | the native floor |
+| **`amb --version`** | **2.8 / 2.7 ms** | ~7× cheaper than Python's floor |
+| **`amb inbox`** | **5.6 / 4.3 ms** | opens SQLite and renders — still ~4× cheaper |
+
+Every row is higher than the 2026-08-29 table this replaces — including the Python and `/bin/echo`
+baselines, which no change to `amb` can touch — because these runs shared the machine with three
+concurrent agent sessions. The *ratios* are the stable claim; the absolute milliseconds are
+whatever the machine was doing that day, which is why the baselines are printed at all.
 
 Until 2026-08-29 that harness could not produce the last two rows — its `amb` candidate was
 commented out and its path wrong for a shared target directory — while these documents cited it.
@@ -953,7 +959,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D102, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D104, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

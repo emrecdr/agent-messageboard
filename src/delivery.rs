@@ -509,7 +509,11 @@ mod tests {
     ///
     /// A fourth renderer added without containment reddens this. One added without being listed
     /// here does not — which is the residual hole, and the reason the list is short and the three
-    /// renderers live in one file.
+    /// renderers live in one file. That hole was real once: the `watch` arm in `main.rs` printed
+    /// `sender` and `subject` through a bare `println!` for as long as the command existed, and
+    /// nothing here could see it (audit round two). It now routes through [`render_inbox`], and
+    /// `watch_cannot_be_forged_by_a_newline_in_a_subject` in `tests/cli_e2e.rs` pins that at the
+    /// binary — the layer this test cannot reach (M20).
     #[test]
     fn every_renderer_of_a_sender_written_field_contains_it() {
         let mut m = msg(1, Some("uuid-bob"), None);

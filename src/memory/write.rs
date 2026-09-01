@@ -150,6 +150,18 @@ fn free_slug(dir: &Path, date: &str, base: &str) -> (String, PathBuf) {
     }
 }
 
+/// The temporary sibling one process writes before renaming over `path`.
+///
+/// A function rather than an inline `format!` so the pid-scoping is a property a test can hold
+/// — the race it prevents needs two processes to demonstrate, the name needs none.
+fn tmp_for(path: &Path) -> std::path::PathBuf {
+    path.with_extension(format!(
+        "{}.amb-tmp.{}",
+        path.extension().and_then(|e| e.to_str()).unwrap_or("md"),
+        std::process::id()
+    ))
+}
+
 /// Write a note readable only by its owner.
 ///
 /// **The file mode is ours to choose; the directory's is not (D31).** `amb` creates files inside
@@ -170,10 +182,14 @@ fn free_slug(dir: &Path, date: &str, base: &str) -> (String, PathBuf) {
 /// The mode is set on the temporary file *before* the rename, so the note is never briefly
 /// world-readable under a name anything is watching.
 pub(crate) fn write_private(path: &Path, contents: &str) -> Result<()> {
-    let tmp = path.with_extension(format!(
-        "{}.amb-tmp",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("md")
-    ));
+    // Pid-scoped, like the settings writer in `hooks.rs` and unlike this line until audit round
+    // two. A fixed temp name means two processes rewriting the same note interleave on one path
+    // — writer A's rename can publish writer B's half-written bytes — and `observe` and
+    // `supersede` take no board lock, so nothing upstream prevents that. The settings writer
+    // pid-scoped its temp on purpose the day it was written; this one is the sibling that was
+    // left standing (D86/D88/D90's shape). An orphaned `.amb-tmp.<pid>` from a crash is inert:
+    // the index scans only `.md` files.
+    let tmp = tmp_for(path);
     std::fs::write(&tmp, contents).map_err(io(format!("writing {}", tmp.display())))?;
     #[cfg(unix)]
     {
@@ -299,6 +315,21 @@ pub fn render_written(w: &Written, derived: Option<&Derived>, near: &[IndexedNot
 
 #[cfg(test)]
 mod tests {
+    /// The temp name must carry the pid, or two writers interleave on one path.
+    ///
+    /// Asserted on the constructed name rather than on a race: forcing the race takes two
+    /// processes and a scheduler's cooperation, while the property that prevents it is a string
+    /// this test can hold. Removing the pid from [`super::tmp_for`] reddens this.
+    #[test]
+    fn the_temp_name_is_scoped_to_this_process() {
+        let tmp = super::tmp_for(std::path::Path::new("/v/notes/a-slug.md"));
+        let name = tmp.file_name().and_then(|n| n.to_str()).expect("utf8 name");
+        assert!(
+            name.ends_with(&format!(".amb-tmp.{}", std::process::id())),
+            "another process picks the same temp path: {name}"
+        );
+    }
+
     use super::*;
 
     fn written() -> Written {

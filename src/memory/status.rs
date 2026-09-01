@@ -373,7 +373,11 @@ pub fn status(conn: &Connection, since: Option<f64>) -> Result<Status> {
 /// candidates and decisions reported them as absent — and `status` compared that against an index
 /// count restricted the same way, so the two agreed while both understated. The same defect as the
 /// "2 of 1 note(s)" header: a count that does not describe what it claims to (D54).
-fn count_on_disk(vault: &Path) -> usize {
+///
+/// `pub` because `amb doctor` prints a note count too, and a second walk with its own coverage
+/// would be D54 again — two numbers with one phrasing describing different populations. One walk
+/// (`note_files`), every counter derived from it.
+pub fn count_on_disk(vault: &Path) -> usize {
     note_files(vault).len()
 }
 

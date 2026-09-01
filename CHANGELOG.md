@@ -11,6 +11,97 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`amb doctor` can now say the board is corrupt, and what the vault actually holds** (audit
+  round two). No `quick_check` ran anywhere, so corruption surfaced as whatever query failed
+  first — usually inside a hook that swallows errors by contract (D9). And the vault line was an
+  unconditional `Ok` echoing a path: the *disposable* board was guarded against synced volumes
+  and size-checked while the *irreplaceable* vault had no existence check at all, so a typo'd
+  `AMB_VAULT` reported healthy while every observe failed. `integrity` reports `quick_check`
+  with the response attached (a corrupt board is deletable, D15 — no note is lost, D34); `vault`
+  is a verdict carrying the note count.
+
+- **`--locked` on every dependency-resolving step in the gate and CI, and an explicit release
+  profile.** The 2026-08-20 crates.io incident — a compromised maintainer account shipping
+  build-time code execution through a typosquatted proc-macro, ~90-minute window — is defended
+  at this project's scale by a committed lockfile that fails loudly instead of updating as a
+  side effect, plus the advisory check CI already runs. The evaluated-and-declined `cargo-deny`
+  position in `ci.yml` stands: its escalation condition (crates.io publication) has not fired.
+  `[profile.release]` adds thin LTO, one codegen unit and symbol stripping; the README's startup
+  figures are re-measured against the new profile, per this project's measurement rule.
+
+### Fixed
+
+- **A Stop re-fire is now answered with silence, which ends the machine-wide wake loop.** The
+  runner counts a Stop hook that injects `additionalContext` as blocking the turn from ending:
+  it wakes the model to read the context, the model answers, Stop fires again — with
+  `stop_hook_active: true`, which is the runner saying "this firing is that wake". `amb` never
+  read the flag, so any *persistent* condition with something to say looped: during two
+  stale-binary windows (2026-08-27 and 2026-08-31, read out of the session transcripts) the
+  arrival note printed on every Stop, and sessions in five projects each cycled banner →
+  "Standing by." → banner to the platform's nine-block cap. `hook_main` now returns success,
+  silently, on any payload carrying the flag — before dispatch, so it covers delivery, the
+  arrival note, and every future speaker. Nothing is lost: delivery is a log (D17), and the next
+  real event re-offers whatever silence withheld. The forensic note: yesterday's audit probed
+  this hook's *exit code* against the blocking question and pronounced it innocent — the wrong
+  instrument, since context injection blocks at exit 0. The transcripts were the instrument that
+  could answer, and they implicated us.
+
+- **`amb watch`'s human output was an unguarded fourth renderer of sender-written fields**
+  (audit round two). `main.rs` printed `sender` and `subject` through a bare `println!` for as
+  long as the command existed — the exact forgery D90 closed in `render_inbox`, standing because
+  the enumeration test can only redden for renderers it lists, and its own docstring named that
+  residual hole. Found by grepping the field literal rather than the fixed function, which is
+  this file's own rule. Watch now routes through `render_inbox` (gaining bodies and the
+  `UNTRUSTED` sentence), and `watch_cannot_be_forged_by_a_newline_in_a_subject` pins it at the
+  binary — the layer the library test cannot reach (M20).
+
+- **The claims query defeated its own index on the hottest hook path.** `claims::list`'s
+  `(?1 IS NULL OR c.project = ?1)` idiom is invisible to the planner — it cannot know a
+  parameter is non-NULL at plan time — so `ix_claims_live` was never used and every
+  `PostToolUse` scanned the whole table, one whose per-session-UUID key means it only grows.
+  Worse, `conflicts_with` passed `live_only = false` under a docstring saying "live", fetching
+  every lapsed claim ever taken and discarding them one line later. The WHERE is now assembled
+  from plain equality clauses, `conflicts_with` filters in SQL, and the guard is on the *plan*:
+  `the_project_filter_reaches_the_index` asserts `EXPLAIN QUERY PLAN` names the index, because
+  the rows were always right and no result-shaped test can see this defect.
+
+- **The memory index probed an unindexed column once per file, in autocommit** (migration 13).
+  `sync_dir`'s per-file mtime probe seeked on `kind` and then walked every note of that kind —
+  quadratic in vault size, on `SessionStart`. Synthetic measurement at 5,000 notes: 177 ms per
+  hook pass, 8 ms with `ix_notes_vault(kind, vault_path)`. The pass now also runs in one
+  deferred transaction instead of an autocommit per statement, and the prune's membership test
+  is a `HashSet` instead of a linear walk. Schema 12 → 13; run `./tools/install.sh` after
+  pulling, or every hook on the machine fails silently against the migrated board (D94's shape).
+
+- **A hook could wait 30 seconds on a lock inside a 5-second budget** (D103). `busy_timeout`
+  served the interactive CLI and the hooks with one value chosen for D30's first-open stampede,
+  so a contended hook was killed by the platform mid-wait — the one ending D9's exit-0
+  guarantee cannot absorb. Hook entry points now open with `db::open_at_for_hook` (2 s, inside
+  the open because `migrate` stalls before any post-open override could apply), asserted against
+  the budget by a test so the two constants cannot drift apart again.
+
+- **The vault's temp file was not pid-scoped, while the settings writer's deliberately is.**
+  Two processes rewriting one note interleaved on a single `.amb-tmp` path — writer A's rename
+  could publish writer B's half-written bytes, and `observe`/`supersede` take no lock that would
+  prevent it. The sibling-left-standing shape (D86/D88/D90) landing on the one store that is
+  irreplaceable. The name now carries the pid, asserted by test.
+
+- **The primer promises `--json` on any command, and three arms broke it.** `memory window`
+  (both branches) and both `promote` gates printed prose unconditionally — an agent parsing
+  stdout got unparseable text on exactly the human-gate paths. All three answer in JSON now;
+  `written: false` carries the gate, and `changed` keeps D87's `AlreadyOpen`-is-not-`Opened`
+  distinction alive in the format.
+
+- **A newline in a note title could forge a derivation row on the promotion offer, or a
+  section heading in an exported file.** The two note-title renderers *outside* the injection
+  ledger — `render_offer`, the human approval gate, and `render_export`, which writes a `# `
+  heading into a checked-in repository file — now route the title through `quoted()`. The four
+  injected renderers (`recall`, `candidates`, `observe`'s near-lines, `history`) stay raw on
+  purpose until the open measurement window closes: changing what a note renders mid-window
+  changes what sessions cite (M23's deferral, still standing, now four wide instead of six).
+
+### Changed
+
 - **`src/identity.rs` mutation-tested — 97.7%, a new high** (M43). 92 mutants, 2 missed, 0 timeout.
   Both survivors were one rule at its two call sites: forcing `is_unique_violation` to `true` in
   `reclaim` and in `register` reddened nothing.

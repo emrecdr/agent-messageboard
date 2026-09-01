@@ -83,7 +83,8 @@ pub struct Report {
 }
 
 impl Report {
-    /// The worst health in the report — what the exit code and the summary line are built on.
+    /// The worst health in the report — the verdict `--json` reports as `worst`. It is never an
+    /// exit code: `amb doctor` always exits 0 (D73), so a script reads this field, not `$?`.
     pub fn worst(&self) -> Health {
         if self.checks.iter().any(|c| c.health == Health::Bad) {
             Health::Bad
@@ -377,6 +378,66 @@ pub fn size_check(bytes: u64) -> Check {
     }
 }
 
+/// Whether SQLite's own consistency check passed, and what to do when it did not.
+///
+/// **A corrupted board previously had no way to say so** — no `quick_check` ran anywhere, so
+/// corruption surfaced as whatever query failed first, usually inside a hook that swallows
+/// errors by contract (D9). `quick_check` rather than `integrity_check`: it skips the
+/// index-content verification, which keeps doctor quick on a D83-sized board, and what it can
+/// miss there is repaired by `REINDEX`, not lost.
+///
+/// The outer `Option` is "could the check run at all" — an unopenable board is a `Warn` here
+/// because the schema check beside it already reports the opening failure in its own terms.
+pub fn integrity_check(finding: Option<Option<String>>) -> Check {
+    match finding {
+        None => Check::new(
+            "integrity",
+            Health::Warn,
+            "quick_check could not run — see the schema line for why the board did not open",
+        ),
+        Some(None) => Check::new("integrity", Health::Ok, "quick_check passed"),
+        Some(Some(ref err)) => Check::new(
+            "integrity",
+            Health::Bad,
+            format!(
+                "quick_check: {err} — the board is corrupt. It is the disposable half (D15): \
+                 delete board.db and its sidecars, and no note is lost (D34)"
+            ),
+        ),
+    }
+}
+
+/// The vault line, which was an unconditional `Ok` printing only the path.
+///
+/// The asymmetry this repairs: the *disposable* board is guarded against synced volumes and
+/// checked for size, while the *irreplaceable* vault had no existence check at all — a typo'd
+/// `AMB_VAULT` reported healthy while every observe failed and recall answered empty (audit
+/// round two).
+pub fn vault_check(path: &std::path::Path, is_dir: bool, notes: usize) -> Check {
+    if is_dir {
+        Check::new(
+            "vault",
+            Health::Ok,
+            format!(
+                "{} — {} note(s), and the half worth backing up: the board is disposable (D15), \
+                 this is not (D34)",
+                path.display(),
+                notes
+            ),
+        )
+    } else {
+        Check::new(
+            "vault",
+            Health::Bad,
+            format!(
+                "AMB_VAULT names {} and no directory is there — observe will fail and recall \
+                 answers empty",
+                path.display()
+            ),
+        )
+    }
+}
+
 /// Every byte the board occupies, including the WAL sidecars. Unreadable files count as zero,
 /// because a doctor that refuses to report a number it partly knows is less useful than one that
 /// under-reports and keeps going.
@@ -466,18 +527,23 @@ pub fn gather(now: f64) -> Report {
         Err(e) => checks.push(Check::new("board", Health::Warn, e.to_string())),
         Ok(path) => {
             checks.push(location_check(&path));
-            // Once: the schema check and the size check ask the same question of the same path.
+            // One connection for the schema and integrity questions; the freshness block below
+            // still opens its own, which predates this and is a doctor-only cost.
             let exists = path.exists();
-            let on_disk = if exists {
-                db::open_at(&path).ok().and_then(|c| {
-                    c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                        .ok()
-                })
+            let conn = if exists {
+                db::open_at(&path).ok()
             } else {
                 None
             };
+            let on_disk = conn.as_ref().and_then(|c| {
+                c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .ok()
+            });
             checks.push(schema_check(on_disk, db::SCHEMA_VERSION));
             if exists {
+                checks.push(integrity_check(
+                    conn.as_ref().and_then(|c| db::quick_check(c).ok()),
+                ));
                 checks.push(size_check(board_bytes(&path)));
             }
         }
@@ -491,7 +557,11 @@ pub fn gather(now: f64) -> Report {
             "AMB_VAULT unset — memory is off, which is the default (D35)",
         )),
         Some(v) => {
-            checks.push(Check::new("vault", Health::Ok, format!("{}", v.display())));
+            checks.push(vault_check(
+                &v,
+                v.is_dir(),
+                crate::memory::count_on_disk(&v),
+            ));
             let memory_on = settings
                 .as_ref()
                 .ok()
@@ -556,6 +626,51 @@ mod tests {
         assert!(d.contains("50 MB"), "the threshold is missing: {d}");
         assert!(d.contains("0.0 MB"), "the current size is missing: {d}");
         assert!(d.contains("D83"), "nothing points at the decision: {d}");
+    }
+
+    /// All three integrity verdicts, as a truth table — one presence row per health (M27).
+    ///
+    /// The `Bad` arm must carry the *response*, not just the diagnosis: the one useful fact
+    /// about a corrupt board is that deleting it loses nothing (D15/D34), and a corruption
+    /// message without it reads as data loss to exactly the person it lands on.
+    #[test]
+    fn every_integrity_verdict_says_what_it_means() {
+        let unknowable = integrity_check(None);
+        assert_eq!(unknowable.health, Health::Warn);
+
+        let healthy = integrity_check(Some(None));
+        assert_eq!(healthy.health, Health::Ok);
+
+        let hurt = integrity_check(Some(Some("row 12 missing from index".into())));
+        assert_eq!(hurt.health, Health::Bad);
+        assert!(hurt.detail.contains("row 12"), "{}", hurt.detail);
+        assert!(
+            hurt.detail.contains("no note is lost"),
+            "corruption without the response reads as data loss: {}",
+            hurt.detail
+        );
+        for c in [unknowable, healthy, hurt] {
+            crate::assert_rendered_shape("integrity_check", &c.detail);
+        }
+    }
+
+    /// The vault line was an unconditional `Ok`; both directions now assert.
+    ///
+    /// A quick check on the real defect: `AMB_VAULT` pointing at nothing must be `Bad` and say
+    /// what fails, and a healthy vault must carry its note count — the number that makes drift
+    /// against the index askable at all.
+    #[test]
+    fn the_vault_line_is_a_verdict_rather_than_an_echo() {
+        let gone = vault_check(std::path::Path::new("/v/typo"), false, 0);
+        assert_eq!(gone.health, Health::Bad);
+        assert!(gone.detail.contains("observe will fail"), "{}", gone.detail);
+
+        let there = vault_check(std::path::Path::new("/v/real"), true, 21);
+        assert_eq!(there.health, Health::Ok);
+        assert!(there.detail.contains("21 note(s)"), "{}", there.detail);
+        for c in [gone, there] {
+            crate::assert_rendered_shape("vault_check", &c.detail);
+        }
     }
 
     /// The size the row prints is the size the board is, at a value where being wrong shows.
@@ -650,14 +765,16 @@ mod tests {
         assert_eq!(Health::Bad.glyph().trim(), "BAD");
     }
 
-    /// `worst` is the exit code, and the JSON surface carries every check.
+    /// `worst` is the verdict a script reads — the process always exits 0 (D73) — and the JSON
+    /// surface carries every check.
     ///
     /// **Found by mutation: `Report::to_json` could return `Default::default()` — an empty
     /// value — and nothing went red.** Five keys, none asserted anywhere. `doctor --json` is what
     /// a script reads to decide whether this machine is healthy, so an empty document is a
     /// health check that answers every question with silence.
     ///
-    /// `worst` is asserted through all three levels because it drives the exit code: reporting
+    /// `worst` is asserted through all three levels because it is the one field automation can
+    /// read — `amb doctor` always exits 0 (D73): reporting
     /// `Bad` as `Ok` is the failure that matters, and it needs the precedence to be wrong in only
     /// one direction to happen.
     #[test]

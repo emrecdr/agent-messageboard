@@ -58,9 +58,12 @@ jobs:
       # Caching (Swatinem/rust-cache) is on by default.
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
+      # `--locked` mirrors the gate (D70): a resolve that disagrees with Cargo.lock fails
+      # rather than silently updating it — the lockfile is the exposure bound against a
+      # compromised dependency release, and it only works if nothing moves it as a side effect.
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked
 
       # **Advisories, Linux only.** `cargo-audit` over `Cargo.lock` against the RustSec database.
       #

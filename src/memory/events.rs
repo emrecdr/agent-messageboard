@@ -641,6 +641,21 @@ pub fn receipt(conn: &Connection, since: Option<f64>) -> Result<Receipt> {
 /// 3d ago" have opposite consequences for every ratio `status` prints, and the reader who most
 /// needs telling is the one who never opened one — so the no-window case says what `status` is
 /// actually counting, not merely that a row is missing (D87).
+impl WindowChange {
+    /// The change as JSON. `changed` is D87's distinction surviving the format — `AlreadyOpen`
+    /// must not read like `Opened` here any more than it may in prose. Beside the prose
+    /// renderer, because `Counts::to_json` above carries M26: the last time one command's two
+    /// formats were maintained in two places, the human path was updated and this one was not.
+    pub fn to_json(&self) -> serde_json::Value {
+        let (changed, previous) = match self {
+            WindowChange::Opened => (true, None),
+            WindowChange::AlreadyOpen(w) => (false, Some(*w)),
+            WindowChange::Reopened { from } => (true, Some(*from)),
+        };
+        serde_json::json!({ "open": true, "changed": changed, "previous_start": previous })
+    }
+}
+
 pub fn render_window_report(opened: Option<f64>, at: f64) -> String {
     match opened {
         Some(w) => format!(
@@ -680,6 +695,37 @@ pub fn render_window_change(change: &WindowChange, at: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// All three window outcomes stay distinct in JSON — D87's rule surviving the format.
+    ///
+    /// A truth table with presence rows (M27): `changed` is what separates `Opened` from
+    /// `AlreadyOpen`, and `previous_start` is what makes `Reopened` accountable for what it
+    /// discarded.
+    #[test]
+    fn every_window_change_is_distinct_in_json() {
+        let opened = WindowChange::Opened.to_json();
+        assert_eq!(opened["changed"], serde_json::Value::Bool(true), "{opened}");
+        assert!(opened["previous_start"].is_null(), "{opened}");
+
+        let already = WindowChange::AlreadyOpen(7.0).to_json();
+        assert_eq!(
+            already["changed"],
+            serde_json::Value::Bool(false),
+            "{already}"
+        );
+        assert_eq!(already["previous_start"], 7.0, "{already}");
+
+        let reopened = WindowChange::Reopened { from: 3.0 }.to_json();
+        assert_eq!(
+            reopened["changed"],
+            serde_json::Value::Bool(true),
+            "{reopened}"
+        );
+        assert_eq!(
+            reopened["previous_start"], 3.0,
+            "what a reopen discarded must be visible: {reopened}"
+        );
+    }
 
     /// **"No window is open" must say what `status` is therefore counting.**
     ///

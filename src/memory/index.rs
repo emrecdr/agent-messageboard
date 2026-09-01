@@ -491,23 +491,36 @@ pub fn sync_dir(
         return Ok(stats);
     }
 
+    // One transaction per directory rather than one autocommit per statement — a 1,000-note
+    // reindex was 1,000+ separate WAL commits. Not fsyncs: under WAL with `synchronous=NORMAL`
+    // a commit deliberately skips the sync (an earlier draft of this comment claimed otherwise,
+    // which is the false-mechanism class this project catalogues). What N commits do pay is N
+    // wal-index lock acquisitions and N commit frames where one would do. Deferred, not
+    // `IMMEDIATE`: the common pass finds nothing changed and never writes, so a read transaction
+    // takes no lock another session's hook would wait behind; the first upsert upgrades it, and
+    // `busy_timeout` covers that upgrade like any other write. `unchecked_transaction` because
+    // this function holds `&Connection`, and rusqlite's default drop behaviour is the rollback
+    // an early `?` wants.
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(sql("opening the sync transaction"))?;
     let prefix = format!("{rel_dir}/");
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for file in files {
         let Some(stem) = file.file_stem().and_then(|s| s.to_str()) else {
             stats.unreadable += 1;
             continue;
         };
         let rel = format!("{prefix}{stem}.md");
-        seen.push(rel.clone());
+        seen.insert(rel.clone());
         let mtime = file_mtime(&file);
+        // `prepare_cached`: this runs once per file, and migration 13's index fixed the
+        // *execution* while the prepare was still being paid per iteration — the same
+        // eight-token SELECT compiled up to `AUTO_INDEX_LIMIT` times per hook pass.
         let known: Option<f64> = conn
-            .query_row(
-                "SELECT mtime FROM notes WHERE kind = ?1 AND vault_path = ?2",
-                params![kind, rel],
-                |r| r.get(0),
-            )
-            .ok();
+            .prepare_cached("SELECT mtime FROM notes WHERE kind = ?1 AND vault_path = ?2")
+            .ok()
+            .and_then(|mut s| s.query_row(params![kind, rel], |r| r.get(0)).ok());
         if known == Some(mtime) {
             stats.unchanged += 1;
             continue;
@@ -555,6 +568,7 @@ pub fn sync_dir(
             stats.pruned += 1;
         }
     }
+    tx.commit().map_err(sql("committing the sync"))?;
     Ok(stats)
 }
 
@@ -771,6 +785,28 @@ mod tests {
         assert_eq!(out.matches('↓').count(), 2, "one arrow per hop: {out}");
     }
 
+    /// The per-file probe must reach `ix_notes_vault`, and the guard is on the *plan*.
+    ///
+    /// `sync_dir` runs this SELECT once per markdown file, on the `SessionStart` hook path.
+    /// Before migration 13 it seeked on `kind` via the primary key and then walked every note of
+    /// that kind per probe — quadratic in vault size, and invisible to every result-shaped
+    /// assertion because the rows were always right. Dropping the index from the migration
+    /// reddens this.
+    #[test]
+    fn the_sync_probe_reaches_the_vault_index() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        crate::assert_query_plan_uses(
+            &conn,
+            "SELECT mtime FROM notes WHERE kind = ?1 AND vault_path = ?2",
+            vec![
+                "observation".to_string().into(),
+                "nest/x.md".to_string().into(),
+            ],
+            "ix_notes_vault",
+        );
+    }
+
     fn stats(unreadable: usize) -> IndexStats {
         IndexStats {
             scanned: 10,
@@ -797,6 +833,58 @@ mod tests {
 
         let broken = render_index(&stats(2), &[], &[]);
         assert!(broken.contains("2 file(s) could not be read"), "{broken}");
+    }
+
+    /// **The decline above the limit is written here and read two layers away, and only the
+    /// readers were tested.** `index_is_behind` is asserted on a hand-built `IndexStats` (D78)
+    /// and the banner renders from its answer — but no test called `sync_dir` with a limit at
+    /// all, so the write at the top of that chain could vanish and everything downstream stayed
+    /// green while a 501-note vault reported itself empty again (D45). M20's arithmetic: three
+    /// layers carry the rule, and the untested one was the writer.
+    ///
+    /// Three rows and an omission: over the limit declines and says how big the vault is, *at*
+    /// the limit indexes (the bound is `>`, and that row is what reddens `>=`), and a declined
+    /// pass prunes nothing — the prune below the gate compares the index to a scan that never
+    /// happened, and the early return is all that protects it.
+    #[test]
+    fn a_vault_past_the_limit_declines_loudly_and_prunes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let vault = dir.path().join("vault");
+        let notes_dir = vault.join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&notes_dir).expect("vault dir");
+        for slug in ["a", "b", "c"] {
+            std::fs::write(
+                notes_dir.join(format!("{slug}.md")),
+                "---\nscope: nest\ntitle: t\n---\nbody\n",
+            )
+            .expect("note");
+        }
+
+        // Seed without a limit, so the declined pass below has rows it could damage.
+        let seeded = sync_dir(&conn, &vault, OBSERVATION, "nest", 1.0, None).expect("seed");
+        assert_eq!((seeded.indexed, seeded.skipped), (3, false));
+
+        let declined =
+            sync_dir(&conn, &vault, OBSERVATION, "nest", 2.0, Some(2)).expect("declined");
+        assert!(declined.skipped, "3 files over a limit of 2 must decline");
+        assert_eq!(
+            declined.scanned, 3,
+            "the decline still reports the size it declined at"
+        );
+        assert_eq!(declined.indexed, 0);
+        let kept: i64 = conn
+            .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(
+            kept, 3,
+            "a declined pass must not prune the index against an empty scan"
+        );
+
+        // The bound is `>`: a vault exactly at the limit is indexed, not declined.
+        let at_limit =
+            sync_dir(&conn, &vault, OBSERVATION, "nest", 3.0, Some(3)).expect("at limit");
+        assert_eq!((at_limit.skipped, at_limit.unchanged), (false, 3));
     }
 
     /// Two warning classes, two markers, and neither may be mistaken for the other: `!` is a link

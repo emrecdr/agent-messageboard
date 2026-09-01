@@ -5406,3 +5406,54 @@ nobody reads. Deterministic means a red run is red again on the next one.
 
 **More iterations.** 200,000 costs 6.7 s against a 3.3 s suite; 20,000 costs 0.25 s and reaches
 every branch with an order of magnitude of margin. Measured, not assumed.
+
+## D103 · A hook's database wait is budgeted separately, because 30 seconds does not fit inside 5
+
+**Decided 2026-08-31, audit round two.** `db::open_at_for_hook` opens the board with a 2-second
+`busy_timeout` (`db::HOOK_BUSY_TIMEOUT_MS`); the interactive open keeps 30 seconds
+(`db::INTERACTIVE_BUSY_TIMEOUT_MS`). Both hook entry points in `main.rs` — delivery and memory —
+use the hook variant.
+
+**The defect was two constants describing the same five seconds without ever being reconciled.**
+`hooks.rs` writes `HOOK_TIMEOUT_SECS = 5` into `settings.json` as the platform's kill deadline.
+`db.rs` waited up to 30 s on a busy board — a value chosen for D30's first-open stampede, where a
+human is watching a prompt and waiting is the right answer. Under contention a hook therefore sat
+parked inside `busy_timeout` while its own budget lapsed, and was killed by the platform
+mid-wait. D9 requires a hook to exit 0 whatever happens; a SIGKILL is the one ending that
+guarantee cannot absorb, and it was reachable through a wait we chose.
+
+**The budget has to live inside the open, not after it.** `migrate` runs during `open_at` and
+takes the write lock, so setting a shorter timeout on the returned connection would arrive after
+the stall it exists to bound. That is why the fix is a second open function rather than one extra
+`busy_timeout` call at the call sites.
+
+**Why 2 s:** at most half the budget parked on a lock, the rest for the work the hook opened the
+board for — asserted, not aspirational (`a_hook_wait_fits_inside_the_hook_budget` reddens if the
+constants drift apart; D95 is why a stated ceiling must be checkable). A lock still held after
+2 s means another process is mid-migration; the lost delivery beat is re-offered on the next
+event, which is the recovery the log-not-queue design already provides (D17).
+
+**Rejected: lowering the interactive timeout too.** D30 measured 10-of-12 concurrent first-opens
+failing before the 30 s wait existed; an interactive caller has no kill deadline and no reason to
+prefer an error over a pause.
+
+## D104 · No color, and it is a decision rather than an omission
+
+**Decided 2026-08-31, audit round two.** The binary emits no ANSI codes: no color, no styling,
+no TTY detection, no `NO_COLOR` handling — because there is nothing to switch off. The escape
+codes in `tools/*.sh` are for humans running tools and are unaffected.
+
+**The majority consumer is a model reading hook stdout.** Delivery output is injected into a
+session's context (D25); escape codes there are token noise at best and envelope corruption at
+worst. The minority consumer — a person running `amb inbox` in a terminal — reads aligned plain
+text that every terminal renders identically. Color would need TTY-gating to be safe for the
+majority case, and would then style only the minority one: machinery whose whole benefit lands
+where the tool is least used. `clig.dev` recommends color *with* `NO_COLOR`/TTY discipline for
+human-first CLIs; this is not one.
+
+**Recorded because unrecorded negative decisions are this project's most-fixed defect class.**
+Zero ANSI reads as an oversight to anyone arriving with CLI conventions in hand, and CLAUDE.md's
+catalogue is explicit that deliberate omissions left undocumented get "helpfully" repaired (D2,
+D5, D10, D11, D16 all carry the same warning). If a styled human surface is ever wanted, the
+escalation is the `anstream`/`anstyle` stack cargo itself uses — with the injected surfaces
+excluded byte-for-byte, asserted the way `delivery::UNTRUSTED` asserts containment.
