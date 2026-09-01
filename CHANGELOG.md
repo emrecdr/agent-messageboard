@@ -11,6 +11,15 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **The reached-assertion audit, run over every limit-like constant** (D102's discipline applied
+  outside the property file). Twenty-three caps and thresholds swept against how their tests size
+  fixtures: the property suite's seven floors are complete, `sync_dir`'s bound is
+  parameter-tested, the horizon and back-off are covered, and caps fail loud on drift. Two fixes:
+  `history`'s two cycle breaks had never been reached by any fixture — a hand-editable
+  `superseded_by` cycle on the `SessionStart` path — and a cycle test now reddens if either break
+  is deleted; the kind cap's 21-x literal is sized off `MAX_KIND + 1` so a grown cap cannot
+  quietly turn the refusal row into a valid kind.
+
 - **`memory/write.rs` under exhaustive mutation: the whole missed set was `free_slug`** (M50).
   Eight of eight survivors sat in the collision loop whose docstring calls silent overwrite "the
   one thing this design promises never to do" — no test had ever collided two same-day same-title

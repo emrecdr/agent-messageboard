@@ -785,6 +785,49 @@ mod tests {
     /// nothing — and then `history` never checked existence, so a typo'd id printed that same
     /// sentence as a clean provenance, exit 0. The command must miss like every other
     /// id-taking command before the renderer gets a say.
+    /// **A supersession cycle is answered, bounded, and short — by the cycle break, not the
+    /// budget.** Neither guard in [`history`]'s walks had ever been reached: every fixture was a
+    /// straight chain, so the explicit `any(|s| s.id == step.id)` break and the `MAX_STEPS`
+    /// budget behind it were both unobserved (the reached-assertion audit, D102's discipline
+    /// applied outside the property file). Links come from frontmatter a person can hand-edit,
+    /// and this runs on the `SessionStart` path — unbounded here is a hook burning its whole
+    /// budget on every fire.
+    ///
+    /// The `<= 2` is the teeth: deleting either cycle break keeps this green on termination but
+    /// turns the answer into `MAX_STEPS` repeated rows, and the length bound reddens. The
+    /// presence row proves the walk engaged the cycle rather than stopping at the door.
+    #[test]
+    fn a_supersession_cycle_terminates_the_walk_without_flooding_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let proj = dir.path().join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&proj).expect("vault dir");
+        std::fs::write(
+            proj.join("a.md"),
+            "---\nscope: nest\ntitle: t\nstatus: superseded\nsuperseded_by: nest/b\n---\nbody\n",
+        )
+        .expect("a");
+        std::fs::write(
+            proj.join("b.md"),
+            "---\nscope: nest\ntitle: t\nstatus: superseded\nsuperseded_by: nest/a\n---\nbody\n",
+        )
+        .expect("b");
+        crate::memory::reindex(&conn, dir.path(), 0.0).expect("index");
+
+        let (ancestors, descendants) =
+            history(&conn, &NoteId::observation("nest", "a")).expect("a cycle is answered");
+        assert!(
+            descendants.iter().any(|s| s.id == "nest/b"),
+            "the walk engaged the cycle: {descendants:?}"
+        );
+        assert!(
+            descendants.len() <= 2 && ancestors.len() <= 2,
+            "the cycle break answers, not the step budget: {} down, {} up",
+            descendants.len(),
+            ancestors.len()
+        );
+    }
+
     #[test]
     fn history_of_a_nonexistent_note_is_a_miss_not_a_clean_lineage() {
         let dir = tempfile::tempdir().expect("tempdir");

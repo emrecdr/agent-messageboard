@@ -960,7 +960,11 @@ mod tests {
             thread: None,
             ext_id: None,
         };
-        for bad in ["Bad Kind", "", "question!", "xxxxxxxxxxxxxxxxxxxxx"] {
+        // Sized off the constant, so the cap can move without this row silently becoming a
+        // valid kind (the reached-assertion audit: a fixture that drifts under a grown cap
+        // stops testing refusal, and only loudly if it asserts refusal — this one does).
+        let over_cap = "x".repeat(MAX_KIND + 1);
+        for bad in ["Bad Kind", "", "question!", over_cap.as_str()] {
             let err = send(&mut conn, &bob, &Outgoing { kind: bad, ..base })
                 .expect_err("outside the charset");
             assert!(matches!(err, Error::BadKind { .. }), "{bad:?}: {err:?}");
