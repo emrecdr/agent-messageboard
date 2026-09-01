@@ -257,7 +257,7 @@ pub fn take(
 /// that only grows. The `is_live` filter below stays: `list` computes its own `now()`, this
 /// function is handed the caller's `at`, and the belt costs nothing.
 pub fn conflicts_with(conn: &Connection, me: &Identity, path: &str, at: f64) -> Result<Vec<Claim>> {
-    Ok(list(conn, Some(&me.project), true)?
+    Ok(list(conn, &me.project, true)?
         .into_iter()
         .filter(|c| c.agent != me.id && c.is_live(at) && overlaps(&c.path, path))
         .collect())
@@ -343,11 +343,17 @@ pub fn edited_paths(conn: &Connection, project: &str) -> Result<Vec<EditedPath>>
 /// `live_only = false` the lapsed rows come too, so a lapse degrades into a lead — "alice held
 /// this until 40 minutes ago" — rather than the claim silently vanishing, which is
 /// `RESEARCH.md` R1's specific complaint about the prior art.
-pub fn list(conn: &Connection, project: Option<&str>, live_only: bool) -> Result<Vec<Claim>> {
+pub fn list(conn: &Connection, project: &str, live_only: bool) -> Result<Vec<Claim>> {
     let at = now()?;
-    let (query, binds) = list_sql(project, live_only.then_some(at));
+    // Beside the same branch that appends `?2` in [`list_sql`], so the positional order lives
+    // in one screen.
+    let binds: Vec<rusqlite::types::Value> = if live_only {
+        vec![project.to_string().into(), at.into()]
+    } else {
+        vec![project.to_string().into()]
+    };
     let mut stmt = conn
-        .prepare(&query)
+        .prepare(&list_sql(live_only))
         .map_err(sql("preparing the claims query"))?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(binds), |r| {
@@ -374,7 +380,7 @@ pub fn list(conn: &Connection, project: Option<&str>, live_only: bool) -> Result
         .map_err(sql("reading a claim row"))
 }
 
-/// The SQL [`list`] runs, with the WHERE assembled from plain equality clauses.
+/// The SQL [`list`] runs.
 ///
 /// **The `(?1 IS NULL OR c.project = ?1)` idiom this replaces defeated the planner**, and it did
 /// so invisibly: SQLite cannot know at plan time that a parameter is non-NULL, so
@@ -388,32 +394,24 @@ pub fn list(conn: &Connection, project: Option<&str>, live_only: bool) -> Result
 /// query uses — the guard is on the plan, not on the result, because the result was always
 /// correct. That is what made this invisible: nothing was wrong, only slow, and only at a table
 /// size the fixtures never reached.
-/// Each clause is pushed beside its bind, so the positional `?` order exists in exactly one
-/// place — an earlier form built the clauses here and the binds in [`list`], two `if` chains
-/// that had to agree with nothing checking that they did.
-fn list_sql(project: Option<&str>, live_at: Option<f64>) -> (String, Vec<rusqlite::types::Value>) {
+///
+/// The project clause is unconditional: every caller has one, and an earlier form assembled
+/// clause and bind lists to keep a `None` case nothing could reach — ~25 lines of machinery
+/// generalising over an axis that does not exist. `?1` is always the project; `?2`, present only
+/// when `live`, is the liveness instant, and [`list`] builds its binds beside the same branch.
+fn list_sql(live: bool) -> String {
     let mut query = String::from(
         "SELECT c.path, c.agent, a.name, c.project, c.intent, c.source, c.taken_at,
                 c.expires_at, a.pid, a.last_seen
          FROM claims c
-         LEFT JOIN agents a ON a.id = c.agent",
+         LEFT JOIN agents a ON a.id = c.agent
+         WHERE c.project = ?1",
     );
-    let mut clauses: Vec<&str> = Vec::new();
-    let mut binds: Vec<rusqlite::types::Value> = Vec::new();
-    if let Some(p) = project {
-        clauses.push("c.project = ?");
-        binds.push(rusqlite::types::Value::Text(p.to_string()));
-    }
-    if let Some(at) = live_at {
-        clauses.push("c.expires_at > ?");
-        binds.push(rusqlite::types::Value::Real(at));
-    }
-    if !clauses.is_empty() {
-        query.push_str(" WHERE ");
-        query.push_str(&clauses.join(" AND "));
+    if live {
+        query.push_str(" AND c.expires_at > ?2");
     }
     query.push_str(" ORDER BY c.taken_at DESC");
-    (query, binds)
+    query
 }
 
 /// One line per holder-and-directory, for display.
@@ -538,7 +536,7 @@ fn notice_exhausted(conn: &Connection, me: &Identity, c: &Claim) -> Result<bool>
 
 pub fn my_conflicts(conn: &Connection, me: &Identity) -> Result<Vec<Claim>> {
     let at = now()?;
-    let all = list(conn, Some(&me.project), true)?;
+    let all = list(conn, &me.project, true)?;
     let mine: Vec<&Claim> = all.iter().filter(|c| c.agent == me.id).collect();
     if mine.is_empty() {
         return Ok(Vec::new());
@@ -682,9 +680,12 @@ mod tests {
     #[test]
     fn the_project_filter_reaches_the_index() {
         let (_dir, conn, _a, _b, _c) = board();
-        for live_at in [None, Some(0.0)] {
-            let (query, binds) = list_sql(Some("nest"), live_at);
-            crate::assert_query_plan_uses(&conn, &query, binds, "ix_claims_live");
+        for live in [false, true] {
+            let mut binds: Vec<rusqlite::types::Value> = vec!["nest".to_string().into()];
+            if live {
+                binds.push(0.0.into());
+            }
+            crate::assert_query_plan_uses(&conn, &list_sql(live), binds, "ix_claims_live");
         }
     }
 

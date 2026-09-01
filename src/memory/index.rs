@@ -518,9 +518,9 @@ pub fn sync_dir(
         // *execution* while the prepare was still being paid per iteration — the same
         // eight-token SELECT compiled up to `AUTO_INDEX_LIMIT` times per hook pass.
         let known: Option<f64> = conn
-            .prepare_cached("SELECT mtime FROM notes WHERE kind = ?1 AND vault_path = ?2")
-            .ok()
-            .and_then(|mut s| s.query_row(params![kind, rel], |r| r.get(0)).ok());
+            .prepare_cached(SYNC_PROBE_SQL)
+            .and_then(|mut s| s.query_row(params![kind, rel], |r| r.get(0)))
+            .ok();
         if known == Some(mtime) {
             stats.unchanged += 1;
             continue;
@@ -571,6 +571,11 @@ pub fn sync_dir(
     tx.commit().map_err(sql("committing the sync"))?;
     Ok(stats)
 }
+
+/// The per-file probe [`sync_dir`] runs, held as a named constant because its plan test must
+/// assert the exact string production prepares — a re-typed copy in the test would stay green
+/// against a query nothing runs (`claims::list_sql` records the same rule, same commit).
+const SYNC_PROBE_SQL: &str = "SELECT mtime FROM notes WHERE kind = ?1 AND vault_path = ?2";
 
 pub(crate) fn file_mtime(p: &Path) -> f64 {
     std::fs::metadata(p)
@@ -798,7 +803,7 @@ mod tests {
         let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
         crate::assert_query_plan_uses(
             &conn,
-            "SELECT mtime FROM notes WHERE kind = ?1 AND vault_path = ?2",
+            SYNC_PROBE_SQL,
             vec![
                 "observation".to_string().into(),
                 "nest/x.md".to_string().into(),

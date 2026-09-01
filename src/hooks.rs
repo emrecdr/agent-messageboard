@@ -497,7 +497,6 @@ fn push_entry(
     added.push(format!("{event}{label}"));
 }
 
-/// Plan the removal of every hook entry belonging to us, leaving other tools' alone.
 /// The two fields every file-scoped hook reads out of a Claude Code payload.
 ///
 /// **One copy.** Three call sites in `src/main.rs` each dug `tool_name` and
@@ -516,6 +515,20 @@ pub fn tool_and_file(input: &Value) -> (&str, Option<&str>) {
         .and_then(|t| t.get("file_path"))
         .and_then(Value::as_str);
     (tool, file)
+}
+
+/// True when this Stop firing is the wake the hook's own previous output caused.
+///
+/// The runner counts a Stop hook that injects `additionalContext` as blocking the turn from
+/// ending: it wakes the model to read the context, the model answers, Stop fires again — and
+/// `stop_hook_active: true` is the runner saying this firing IS that wake. Answering it again is
+/// a loop, and it happened at machine scale: during a stale-binary window the arrival note
+/// printed on every Stop, so every session on the machine cycled banner → "Standing by." →
+/// banner until the platform's block cap overrode — five projects at once, twice (2026-08-27 and
+/// 2026-08-31, both read out of the transcripts). Only a literal `true` counts: absent, `false`
+/// or wrongly-typed fields are a first firing, and this schema is not ours to assume more about.
+pub fn is_stop_refire(input: &Value) -> bool {
+    input.get("stop_hook_active").and_then(Value::as_bool) == Some(true)
 }
 
 /// Every hook entry that belongs to us, as `(event, executable)`.
@@ -556,6 +569,7 @@ pub fn our_hook_exes(settings: &Value) -> Vec<(String, String)> {
     out
 }
 
+/// Plan the removal of every hook entry belonging to us, leaving other tools' alone.
 pub fn plan_uninstall(existing: &Value) -> Plan {
     let mut settings = existing.clone();
     let mut removed = Vec::new();
@@ -942,6 +956,24 @@ mod tests {
             tool_and_file(&json!({"tool_name": "Edit", "tool_input": {"file_path": "src/a.rs"}})),
             ("Edit", Some("src/a.rs"))
         );
+    }
+
+    /// Only the runner's literal `true` is a re-fire; everything else is a first firing.
+    ///
+    /// Both directions in one table (M27): the `true` row kills an always-deliver guard, the
+    /// rest kill always-silent — and the wrongly-typed row pins that a schema this project does
+    /// not own degrades toward delivering, never toward dropping mail.
+    #[test]
+    fn only_a_true_stop_hook_active_reads_as_a_refire() {
+        for (payload, expected) in [
+            (json!({"stop_hook_active": true}), true),
+            (json!({"stop_hook_active": false}), false),
+            (json!({"hook_event_name": "Stop"}), false),
+            (json!({"stop_hook_active": "true"}), false),
+            (Value::Null, false),
+        ] {
+            assert_eq!(is_stop_refire(&payload), expected, "{payload}");
+        }
     }
 
     /// A partial install must not say "NOT INSTALLED", and every state must describe itself.

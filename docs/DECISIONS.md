@@ -5428,8 +5428,10 @@ the stall it exists to bound. That is why the fix is a second open function rath
 `busy_timeout` call at the call sites.
 
 **Why 2 s:** at most half the budget parked on a lock, the rest for the work the hook opened the
-board for — asserted, not aspirational (`a_hook_wait_fits_inside_the_hook_budget` reddens if the
-constants drift apart; D95 is why a stated ceiling must be checkable). A lock still held after
+board for — asserted, not aspirational: a `const` assertion beside `HOOK_TIMEOUT_SECS` in
+`hooks.rs` turns drift into a build failure, the strongest red available, and
+`each_open_variant_installs_its_own_wait_budget` in `db.rs` reads the installed waits back off
+real connections (D95 is why a stated ceiling must be checkable). A lock still held after
 2 s means another process is mid-migration; the lost delivery beat is re-offered on the next
 event, which is the recovery the log-not-queue design already provides (D17).
 

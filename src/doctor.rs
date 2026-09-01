@@ -386,17 +386,28 @@ pub fn size_check(bytes: u64) -> Check {
 /// index-content verification, which keeps doctor quick on a D83-sized board, and what it can
 /// miss there is repaired by `REINDEX`, not lost.
 ///
-/// The outer `Option` is "could the check run at all" — an unopenable board is a `Warn` here
-/// because the schema check beside it already reports the opening failure in its own terms.
-pub fn integrity_check(finding: Option<Option<String>>) -> Check {
+/// What the probe was able to say. Three named verdicts rather than the `Option<Option<String>>`
+/// an earlier form took — the nesting encoded these positionally, its own test had to write
+/// `integrity_check(Some(None))` for "healthy", and the caller composed two different failure
+/// sources into one unlabelled shape.
+pub enum Integrity {
+    /// The probe never answered — the board did not open, or `quick_check` itself errored. A
+    /// `Warn`, not a `Bad`: when the cause is the board, the schema line beside this reports
+    /// the opening failure in its own terms.
+    CouldNotRun,
+    Passed,
+    Failed(String),
+}
+
+pub fn integrity_check(finding: Integrity) -> Check {
     match finding {
-        None => Check::new(
+        Integrity::CouldNotRun => Check::new(
             "integrity",
             Health::Warn,
-            "quick_check could not run — see the schema line for why the board did not open",
+            "quick_check could not run — if the board did not open, the schema line says why",
         ),
-        Some(None) => Check::new("integrity", Health::Ok, "quick_check passed"),
-        Some(Some(ref err)) => Check::new(
+        Integrity::Passed => Check::new("integrity", Health::Ok, "quick_check passed"),
+        Integrity::Failed(ref err) => Check::new(
             "integrity",
             Health::Bad,
             format!(
@@ -413,8 +424,12 @@ pub fn integrity_check(finding: Option<Option<String>>) -> Check {
 /// checked for size, while the *irreplaceable* vault had no existence check at all — a typo'd
 /// `AMB_VAULT` reported healthy while every observe failed and recall answered empty (audit
 /// round two).
-pub fn vault_check(path: &std::path::Path, is_dir: bool, notes: usize) -> Check {
-    if is_dir {
+///
+/// `notes` is `None` when the path is not a directory. One parameter rather than an `is_dir`
+/// flag beside a count: the pair let a caller assert a note count for a vault that does not
+/// exist, and made the caller walk the vault even when the verdict could not use the number.
+pub fn vault_check(path: &std::path::Path, notes: Option<usize>) -> Check {
+    if let Some(notes) = notes {
         Check::new(
             "vault",
             Health::Ok,
@@ -523,28 +538,32 @@ pub fn gather(now: f64) -> Report {
     checks.push(sqlite_check(crate::version::sqlite()));
 
     // --- the board ---------------------------------------------------------------------
-    match db::db_path() {
+    // One connection for every question the board answers — schema and integrity here, the
+    // freshness lanes in the memory block below. An earlier form opened a second one for
+    // freshness, which paid the whole open (and `migrate`'s version pass) twice per run.
+    let board_path = db::db_path();
+    let conn = board_path
+        .as_ref()
+        .ok()
+        .filter(|p| p.exists())
+        .and_then(|p| db::open_at(p).ok());
+    match &board_path {
         Err(e) => checks.push(Check::new("board", Health::Warn, e.to_string())),
         Ok(path) => {
-            checks.push(location_check(&path));
-            // One connection for the schema and integrity questions; the freshness block below
-            // still opens its own, which predates this and is a doctor-only cost.
-            let exists = path.exists();
-            let conn = if exists {
-                db::open_at(&path).ok()
-            } else {
-                None
-            };
+            checks.push(location_check(path));
             let on_disk = conn.as_ref().and_then(|c| {
                 c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .ok()
             });
             checks.push(schema_check(on_disk, db::SCHEMA_VERSION));
-            if exists {
-                checks.push(integrity_check(
-                    conn.as_ref().and_then(|c| db::quick_check(c).ok()),
-                ));
-                checks.push(size_check(board_bytes(&path)));
+            if path.exists() {
+                let finding = match conn.as_ref().map(db::quick_check) {
+                    None | Some(Err(_)) => Integrity::CouldNotRun,
+                    Some(Ok(None)) => Integrity::Passed,
+                    Some(Ok(Some(err))) => Integrity::Failed(err),
+                };
+                checks.push(integrity_check(finding));
+                checks.push(size_check(board_bytes(path)));
             }
         }
     }
@@ -559,18 +578,14 @@ pub fn gather(now: f64) -> Report {
         Some(v) => {
             checks.push(vault_check(
                 &v,
-                v.is_dir(),
-                crate::memory::count_on_disk(&v),
+                v.is_dir().then(|| crate::memory::count_on_disk(&v)),
             ));
             let memory_on = settings
                 .as_ref()
                 .ok()
                 .map(|s| hooks::memory_hooks(s).1.is_empty())
                 .unwrap_or(false);
-            if let Ok(path) = db::db_path()
-                && path.exists()
-                && let Ok(conn) = db::open_at(&path)
-            {
+            if let Some(conn) = conn.as_ref() {
                 for (name, event) in [
                     ("inject:session", "injected"),
                     ("inject:file", "injected_file"),
@@ -635,13 +650,13 @@ mod tests {
     /// message without it reads as data loss to exactly the person it lands on.
     #[test]
     fn every_integrity_verdict_says_what_it_means() {
-        let unknowable = integrity_check(None);
+        let unknowable = integrity_check(Integrity::CouldNotRun);
         assert_eq!(unknowable.health, Health::Warn);
 
-        let healthy = integrity_check(Some(None));
+        let healthy = integrity_check(Integrity::Passed);
         assert_eq!(healthy.health, Health::Ok);
 
-        let hurt = integrity_check(Some(Some("row 12 missing from index".into())));
+        let hurt = integrity_check(Integrity::Failed("row 12 missing from index".into()));
         assert_eq!(hurt.health, Health::Bad);
         assert!(hurt.detail.contains("row 12"), "{}", hurt.detail);
         assert!(
@@ -661,11 +676,11 @@ mod tests {
     /// against the index askable at all.
     #[test]
     fn the_vault_line_is_a_verdict_rather_than_an_echo() {
-        let gone = vault_check(std::path::Path::new("/v/typo"), false, 0);
+        let gone = vault_check(std::path::Path::new("/v/typo"), None);
         assert_eq!(gone.health, Health::Bad);
         assert!(gone.detail.contains("observe will fail"), "{}", gone.detail);
 
-        let there = vault_check(std::path::Path::new("/v/real"), true, 21);
+        let there = vault_check(std::path::Path::new("/v/real"), Some(21));
         assert_eq!(there.health, Health::Ok);
         assert!(there.detail.contains("21 note(s)"), "{}", there.detail);
         for c in [gone, there] {

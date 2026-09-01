@@ -2250,31 +2250,27 @@ fn a_topic_note_stays_away_from_a_repository_that_is_not_that_topic() {
 fn the_json_promise_holds_on_the_gate_arms() {
     let b = Board::new();
 
-    let json = |args: &[&str]| -> serde_json::Value {
-        serde_json::from_str(&b.mem("uuid-alice", args)).expect("the arm answers in json")
-    };
-
-    let report = json(&["memory", "window", "--json"]);
+    let report = b.mem_json("uuid-alice", &["memory", "window"]);
     assert_eq!(report["open"], serde_json::Value::Bool(false), "{report}");
 
-    let opened = json(&["memory", "window", "--open", "--json"]);
+    let opened = b.mem_json("uuid-alice", &["memory", "window", "--open"]);
     assert_eq!(opened["changed"], serde_json::Value::Bool(true), "{opened}");
 
     // Re-running `--open` must still refuse to reset — and say so in JSON.
-    let again = json(&["memory", "window", "--open", "--json"]);
+    let again = b.mem_json("uuid-alice", &["memory", "window", "--open"]);
     assert_eq!(again["changed"], serde_json::Value::Bool(false), "{again}");
     assert_eq!(again["open"], serde_json::Value::Bool(true), "{again}");
 
     // The direct-promotion gate needs a resolvable note — resolution runs before the gate — but
-    // what is under test is the refusal's format, not the promotion.
-    let recorded = b.mem(
+    // what is under test is the refusal's format, not the promotion. The id comes from the JSON
+    // field, not a scrape of the prose renderer's word order.
+    let recorded = b.mem_json(
         "uuid-alice",
         &["memory", "observe", "--title", "t", "--learned", "l"],
     );
-    let id = recorded
-        .split_whitespace()
-        .nth(1)
-        .expect("observe names the id it recorded");
-    let gate = json(&["memory", "promote", id, "--direct", "--json"]);
+    let id = recorded["id"]
+        .as_str()
+        .expect("observe answers with its id");
+    let gate = b.mem_json("uuid-alice", &["memory", "promote", id, "--direct"]);
     assert_eq!(gate["written"], serde_json::Value::Bool(false), "{gate}");
 }

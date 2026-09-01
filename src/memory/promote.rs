@@ -411,6 +411,20 @@ pub fn offer_json(candidate: &Note, routed: &Routed) -> serde_json::Value {
     })
 }
 
+/// The refusal envelope every promote gate answers with under `--json`.
+///
+/// `written: false` is the load-bearing field — the machine-readable statement that the gate
+/// held (D49) — and it is spelled in exactly one place so a third gate arm cannot spell it
+/// differently. `confirm` names the flags that would open this particular gate; the offer rides
+/// along when there is one to show (M26 is what two copies of this in `main.rs` would cost).
+pub fn gate_json(confirm: &str, offer: Option<serde_json::Value>) -> serde_json::Value {
+    let mut refusal = serde_json::json!({ "written": false, "confirm": confirm });
+    if let Some(o) = offer {
+        refusal["offer"] = o;
+    }
+    refusal
+}
+
 /// The offer `amb memory promote` prints when `--yes` was not given.
 ///
 /// **Pure, and separate from the write, because this text *is* the human gate.** The threshold
@@ -823,6 +837,20 @@ mod tests {
         assert_eq!(ds[1]["project"], "amb", "{j}");
         assert!(j["title"].is_string(), "{j}");
         assert!(j["scope"].is_string(), "{j}");
+    }
+
+    /// Both gates refuse in one voice: `written: false` from one place, `confirm` verbatim.
+    #[test]
+    fn the_gate_envelope_refuses_in_one_voice() {
+        let bare = gate_json("--direct --yes", None);
+        assert_eq!(bare["written"], serde_json::Value::Bool(false), "{bare}");
+        assert_eq!(bare["confirm"], "--direct --yes", "{bare}");
+        assert!(bare.get("offer").is_none(), "{bare}");
+
+        let c = candidate_derived_in(&[("nest", &["rust"])]);
+        let with = gate_json("--yes", Some(offer_json(&c, &destination(&c))));
+        assert_eq!(with["written"], serde_json::Value::Bool(false), "{with}");
+        assert!(with["offer"]["derivations"].is_array(), "{with}");
     }
 
     /// A newline in a title cannot forge a derivation line on the approval gate.

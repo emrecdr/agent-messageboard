@@ -640,7 +640,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             live,
             raw,
         } => {
-            let rows = claims::list(&conn, project.as_deref().or(Some(&me.project)), live)?;
+            let rows = claims::list(&conn, project.as_deref().unwrap_or(&me.project), live)?;
             let at = db::now()?;
             if cli.json {
                 let items: Vec<_> = rows.iter().map(|c| c.to_json(at)).collect();
@@ -869,16 +869,11 @@ fn hook_main(mode: &str) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // **A Stop re-fire gets silence, whatever this hook has to say.** The runner counts a Stop
-    // hook that injects `additionalContext` as blocking the turn from ending: it wakes the model
-    // to read the context, the model answers, Stop fires again — and `stop_hook_active: true` is
-    // the runner saying this firing IS that wake. Answering it again is a loop. It happened, at
-    // machine scale: during a stale-binary window the arrival note printed on every Stop, so
-    // every session on the machine cycled banner → "Standing by." → banner, nine times each,
-    // until the platform's block cap overrode — in five projects at once, twice (2026-08-27 and
-    // 2026-08-31, both read out of the transcripts). Mail is unaffected: delivery is a log
-    // (D17), so anything not said on this firing is re-offered on the next real event.
-    if input.get("stop_hook_active").and_then(|v| v.as_bool()) == Some(true) {
+    // A Stop re-fire gets silence, whatever this hook has to say — answering the wake our own
+    // output caused is a loop; `hooks::is_stop_refire` carries the full story. Mail is
+    // unaffected: delivery is a log (D17), so anything not said on this firing is re-offered on
+    // the next real event.
+    if hooks::is_stop_refire(&input) {
         return ExitCode::SUCCESS;
     }
 
@@ -1447,10 +1442,7 @@ fn run_memory(
             if *direct {
                 if !*yes {
                     if cli.json {
-                        print_json(&serde_json::json!({
-                            "written": false,
-                            "confirm": "--direct --yes",
-                        }));
+                        print_json(&memory::gate_json("--direct --yes", None));
                     } else {
                         println!(
                             "direct promotion skips the derivation ledger entirely, so there is \
@@ -1481,11 +1473,10 @@ fn run_memory(
                 // gate survives the format.
                 let routed = memory::destination(&candidate);
                 if cli.json {
-                    print_json(&serde_json::json!({
-                        "written": false,
-                        "confirm": "--yes",
-                        "offer": memory::offer_json(&candidate, &routed),
-                    }));
+                    print_json(&memory::gate_json(
+                        "--yes",
+                        Some(memory::offer_json(&candidate, &routed)),
+                    ));
                 } else {
                     print!("{}", memory::render_offer(&candidate, &routed));
                 }
@@ -1715,7 +1706,7 @@ fn run_memory(
                 // fetching here unconditionally queried the row twice and discarded one.
                 let since = memory::window_start(conn, memory::INJECTION_WINDOW)?;
                 if cli.json {
-                    print_json(&serde_json::json!({ "open": since.is_some(), "since": since }));
+                    print_json(&memory::window_report_json(since));
                 } else {
                     print!("{}", memory::render_window_report(since, at));
                 }

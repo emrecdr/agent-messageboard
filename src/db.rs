@@ -726,7 +726,8 @@ const MIGRATIONS: &[&str] = &[
     // 12 -> 13 · the index sync's per-file probe gets an index (audit round two).
     //
     // `sync_dir` asks `SELECT mtime FROM notes WHERE kind = ?1 AND vault_path = ?2` once per
-    // markdown file it scans, on the `SessionStart` hook path. The primary key is
+    // markdown file it scans, on the `SessionStart` hook path (the string lives once, as
+    // `SYNC_PROBE_SQL` beside `sync_dir`, and the plan test asserts that copy). The primary key is
     // `(kind, scope, slug)`, so that probe seeks on `kind` and then walks every note of the kind
     // to match `vault_path` — per file, so the pass is quadratic in vault size. Measured on a
     // synthetic 5,000-note index: one 500-file hook pass costs 177 ms unindexed and 8 ms with

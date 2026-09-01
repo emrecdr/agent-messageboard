@@ -9,6 +9,25 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Changed
+
+- **A simplify pass over audit round two, by its own rules.** Four review lanes over the four
+  fresh commits found the diff's own patterns applied to half their instances, and the fixes
+  finish them: the sync probe's SQL is one named constant asserted by its plan test (the
+  `claims::list_sql` rule, which the probe's test had broken by re-typing the string); the
+  Stop-refire predicate moved from the binary into `hooks::is_stop_refire` with a truth table
+  (D78's pull, caught one commit later this time); the window *report* and both promote-gate
+  refusals now take their JSON from the library beside their prose twins (M26, which the same
+  commit had argued and half-applied); `doctor` holds one connection for every board question
+  instead of opening a second for freshness, and `integrity`/`vault` take three named verdicts
+  and an `Option<usize>` instead of `Option<Option<String>>` and an `is_dir`-beside-count pair
+  that could assert a note count for a vault that does not exist. `claims::list` takes the
+  project every caller has — the clause/bind assembler generalised over a `None` axis nothing
+  could reach. Two doc blocks hijacked by mechanical insertion — `render_window_report`'s D87
+  argument documenting an `impl`, `plan_uninstall`'s summary stranded on `tool_and_file` — are
+  reattached; D103 now names the guards that exist (the `const` assertion and the db.rs
+  read-back test) instead of a test name that never did.
+
 ### Added
 
 - **`amb doctor` can now say the board is corrupt, and what the vault actually holds** (audit

@@ -641,21 +641,6 @@ pub fn receipt(conn: &Connection, since: Option<f64>) -> Result<Receipt> {
 /// 3d ago" have opposite consequences for every ratio `status` prints, and the reader who most
 /// needs telling is the one who never opened one — so the no-window case says what `status` is
 /// actually counting, not merely that a row is missing (D87).
-impl WindowChange {
-    /// The change as JSON. `changed` is D87's distinction surviving the format — `AlreadyOpen`
-    /// must not read like `Opened` here any more than it may in prose. Beside the prose
-    /// renderer, because `Counts::to_json` above carries M26: the last time one command's two
-    /// formats were maintained in two places, the human path was updated and this one was not.
-    pub fn to_json(&self) -> serde_json::Value {
-        let (changed, previous) = match self {
-            WindowChange::Opened => (true, None),
-            WindowChange::AlreadyOpen(w) => (false, Some(*w)),
-            WindowChange::Reopened { from } => (true, Some(*from)),
-        };
-        serde_json::json!({ "open": true, "changed": changed, "previous_start": previous })
-    }
-}
-
 pub fn render_window_report(opened: Option<f64>, at: f64) -> String {
     match opened {
         Some(w) => format!(
@@ -667,6 +652,13 @@ pub fn render_window_report(opened: Option<f64>, at: f64) -> String {
                  mean to measure. `--open` starts one from now\n"
             .into(),
     }
+}
+
+/// The report as JSON — the same two facts as [`render_window_report`], beside it because one
+/// command's two formats drift when they live in two files (M26; `WindowChange::to_json` below
+/// is the same rule for the `--open` arm).
+pub fn window_report_json(opened: Option<f64>) -> serde_json::Value {
+    serde_json::json!({ "open": opened.is_some(), "since": opened })
 }
 
 /// What [`window_open`] did, as text.
@@ -689,6 +681,21 @@ pub fn render_window_change(change: &WindowChange, at: f64) -> String {
              measured is discarded\n",
             age(*from, at)
         ),
+    }
+}
+
+impl WindowChange {
+    /// The change as JSON. `changed` is D87's distinction surviving the format — `AlreadyOpen`
+    /// must not read like `Opened` here any more than it may in prose. Beside the prose
+    /// renderer, because `Counts::to_json` above carries M26: the last time one command's two
+    /// formats were maintained in two places, the human path was updated and this one was not.
+    pub fn to_json(&self) -> serde_json::Value {
+        let (changed, previous) = match self {
+            WindowChange::Opened => (true, None),
+            WindowChange::AlreadyOpen(w) => (false, Some(*w)),
+            WindowChange::Reopened { from } => (true, Some(*from)),
+        };
+        serde_json::json!({ "open": true, "changed": changed, "previous_start": previous })
     }
 }
 
@@ -725,6 +732,18 @@ mod tests {
             reopened["previous_start"], 3.0,
             "what a reopen discarded must be visible: {reopened}"
         );
+    }
+
+    /// Open and absent stay distinct in the report's JSON, with a presence row each (M27).
+    #[test]
+    fn the_report_json_says_open_and_since_in_both_directions() {
+        let closed = window_report_json(None);
+        assert_eq!(closed["open"], serde_json::Value::Bool(false), "{closed}");
+        assert!(closed["since"].is_null(), "{closed}");
+
+        let open = window_report_json(Some(12.5));
+        assert_eq!(open["open"], serde_json::Value::Bool(true), "{open}");
+        assert_eq!(open["since"], 12.5, "{open}");
     }
 
     /// **"No window is open" must say what `status` is therefore counting.**
