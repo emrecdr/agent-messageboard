@@ -150,7 +150,8 @@ enum Command {
     /// Internal: invoked by the installed hooks. Never fails, never blocks a session.
     #[command(hide = true)]
     Hook {
-        /// The installed mode: session, turn or monitor.
+        /// The installed entry: session, turn or monitor for delivery, memory for the
+        /// memory lanes (D41 registers those as their own entry, so the mode names it).
         mode: String,
     },
     /// Record and recall what past sessions learned. Needs `AMB_VAULT` — unset means off.

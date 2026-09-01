@@ -492,6 +492,8 @@ receipt: 1 injected · 0 cited · ratio 0.00 over 1 session(s)
   by path (before a file):    0/0 · 0.00  in 0 session(s)
   ! the lanes are not directly comparable — recency fired in 1 session(s), path in 0. `PreToolUse` fires only on a Read/Edit/Write tool call, so a session that reads files through Bash raises the first denominator and not the second (D74)
   unprompted (never shown, used anyway): 0
+  as advice  : 0/1 · 0.00
+  verdict: too early — needs 29 more session(s) and 49 more injection(s) before D59's floor means anything
 phase 4b: `--across-repos` run 0 time(s) (the explicit surface)
   recall: run 2 time(s) across 1 session(s), 1 answered — notes were found and none was cited
   cross-repo: 0 of 2 search(es) returned a note from another repository
@@ -747,14 +749,17 @@ thing that checks the one failure this project has hit most often.
 ```console
 $ amb doctor
 BAD   binary          the PostToolUse hook runs /Users/you/.local/bin/amb
-         which reports  0.1.0 (4d58c16 2026-08-30, schema 11, sqlite 3.53.2)
-         but this build is  0.1.0 (f9f79f9 2026-08-31, schema 12, sqlite 3.53.2)
+         which reports  0.1.0 (f9f79f9 2026-08-31, schema 12, sqlite 3.53.2)
+         but this build is  0.2.0 (16d672b 2026-09-01, schema 13, sqlite 3.53.2)
          Manual commands work and every hook is stale. Copy it: cp "$(command -v amb)" /Users/you/.local/bin/amb
+ok    hook dupes      no amb hook is registered in more than one settings scope
 ok    hooks           memory hooks installed on SessionStart, PreToolUse, PostToolUseFailure
 ok    sqlite          bundled sqlite 3.53.2, past the 3.51.3 WAL-reset fix
 ok    board           /Users/you/.agent-messageboard/board.db
-ok    schema          board and binary agree at 12
-ok    vault           /Users/you/vault
+ok    schema          board and binary agree at 13
+ok    integrity       quick_check passed
+ok    size            0.8 MB of the 50 MB at which D83 builds pruning
+ok    vault           /Users/you/vault — 85 note(s), and the half worth backing up: the board is disposable (D15), this is not (D34)
 ok    inject:session  last event 12 minute(s) ago
 ok    inject:file     last event 2.1 hour(s) ago
 ```
