@@ -574,4 +574,74 @@ mod tests {
         );
         assert!(detail.chars().all(|c| c == 'é'), "no character was split");
     }
+
+    /// A vault directory holding `notes`, each declaring `files` in its frontmatter, indexed by
+    /// the production writer — [`concerning`] and [`resolve`] read what `reindex` wrote, not
+    /// hand-built rows that could drift from the schema.
+    fn indexed_vault(notes: &[(&str, &str)]) -> (tempfile::TempDir, Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let notes_dir = dir.path().join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&notes_dir).expect("vault dir");
+        for (slug, file) in notes {
+            std::fs::write(
+                notes_dir.join(format!("{slug}.md")),
+                format!("---\nscope: nest\ntitle: t\nfiles:\n  - {file}\n---\nbody\n"),
+            )
+            .expect("note");
+        }
+        crate::memory::reindex(&conn, dir.path(), 0.0).expect("index");
+        (dir, conn)
+    }
+
+    /// **Below the window the count is exact, and a string prefix is not a match.**
+    ///
+    /// Two mutants lived through everything else here, and they are the two halves of the
+    /// windowing rule. `PATH_LOOKUP_WINDOW`'s `* 8` became `+ 8` and nothing noticed, because no
+    /// fixture held more notes than any mis-spelling of the bound — the window was a size nothing
+    /// had ever measured. And `exhausted`'s `==` became `!=`, so the count(*) fallback ran on
+    /// every ordinary vault and `total` silently switched to the coarse predicate — observable
+    /// only when coarse and filtered disagree, and no fixture had a note whose glob shares a
+    /// string prefix with the path without sharing a segment boundary.
+    ///
+    /// So the fixture is the middle state both mutants need (M27's rule, from the other side):
+    /// more matching notes than `MAX_INJECTED + 8`, fewer than `MAX_INJECTED * 8`, plus the
+    /// docstring's own `src/auth`-vs-`src/authz.rs` shape. The first assertion reddens the
+    /// shrunken window, the second reddens the always-exhausted flip.
+    #[test]
+    fn a_lookup_below_the_window_is_exact_and_a_prefix_is_not_a_match() {
+        let n = MAX_INJECTED + 9;
+        let mut notes: Vec<(String, &str)> = (0..n)
+            .map(|i| (format!("2026-08-01-n{i:02}"), "src/deep/thing.rs"))
+            .collect();
+        // Coarse-matches the path (`src/deep/thing.rs` LIKE 'src/deep/thing' || '%'), and
+        // `overlaps` rejects it: `thing` against `thing.rs` is no segment boundary.
+        notes.push(("2026-08-01-prefix".into(), "src/deep/thing"));
+        let borrowed: Vec<(&str, &str)> = notes.iter().map(|(s, f)| (s.as_str(), *f)).collect();
+        let (_dir, conn) = indexed_vault(&borrowed);
+
+        let (found, total) = concerning(&conn, "src/deep/thing.rs").expect("lookup");
+        assert_eq!(
+            found.len(),
+            n,
+            "every note on the path, none truncated by a mis-sized window"
+        );
+        assert_eq!(
+            total, n,
+            "below the window the total is found.len(), never the coarse count"
+        );
+    }
+
+    /// **A unique bare slug resolves.** The `1 =>` arm of [`resolve`]'s match was the one arm no
+    /// test reached: deleting it sent a unique slug to the ambiguity error, turning every
+    /// `--cites <slug>` on the vault's ordinary shape into a refusal. The zero and many arms were
+    /// already guarded; this is the presence row that proves the happy path exists.
+    #[test]
+    fn a_unique_bare_slug_resolves_rather_than_reading_as_ambiguous() {
+        let (_dir, conn) = indexed_vault(&[("2026-08-01-only-here", "src/a.rs")]);
+        assert_eq!(
+            resolve(&conn, "2026-08-01-only-here").expect("one match is a resolution"),
+            NoteId::observation("nest", "2026-08-01-only-here"),
+        );
+    }
 }

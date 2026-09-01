@@ -11,6 +11,14 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`memory/query.rs` under exhaustive mutation: 48 mutants, three missed, all three now
+  guarded** (M48). Two were halves of the path-lookup windowing rule — a window no fixture had
+  ever filled and a count fallback that could fire on every vault without the total moving — and
+  one was `resolve`'s unique-bare-slug arm, the path every ordinary `--cites <slug>` takes,
+  which no test reached. One production-writer fixture (files through `reindex`, not hand-built
+  rows) kills the first two; a presence row kills the third. Each mutant re-applied by hand and
+  seen red.
+
 - **A second simplify pass, over the first one's own commits.** Four review lanes over the four
   unpushed commits — including the pass below — converged on one shape: a rule the diff itself
   states, applied to half its instances. `claims::list_sql` returns clause and binds as one pair

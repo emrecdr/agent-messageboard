@@ -3849,3 +3849,30 @@ why rather than prescribing the delete-and-retry that just failed twice.
 - **Every M46 kill was re-made by the machine**: the diff included this session's db.rs changes,
   and statfs, tighten and the engage_wal cluster all sit in the 54 caught — the hand-confirmed
   evidence now has an independent machine pass agreeing with it.
+
+## M48 · query.rs exhaustively: three missed, and two of them are halves of one rule
+
+**2026-09-01.** `tools/mutants.sh src/memory/query.rs` — the retrieval module, exhaustively:
+`recall`'s search, the path lookup, id resolution, and the D45/D88 history. Coordinated on the
+board (#121/#122); the peer held cargo, quiet machine, 10s baseline, **zero timeouts** — the
+first pass this session with nothing to resolve by hand.
+
+**48 mutants in 5m: 40 caught, 3 missed, 5 unviable.** The three missed:
+
+- **`PATH_LOOKUP_WINDOW`'s `* 8` became `+ 8`** and nothing noticed — the window was a size no
+  fixture had ever filled, so the bound on the hottest hook in the system was unobserved in both
+  directions.
+- **`concerning`'s `exhausted: == → !=`** ran the count(*) fallback on every ordinary vault,
+  silently switching `total` to the coarse predicate. Observable only when coarse and filtered
+  disagree, and no fixture held the docstring's own `src/auth`-vs-`src/authz.rs` shape.
+- **`resolve`'s `1 =>` arm deleted** sent every *unique* bare slug to the ambiguity error. The
+  zero and many arms were guarded; the arm every ordinary `--cites <slug>` traverses was the one
+  nothing reached — the commonest call shape was the untested one, D88's pattern of a mechanism
+  failing exactly where its traffic is.
+
+One fixture kills the first two, because they are halves of the same windowing rule needing the
+same middle state (M27's doctrine from the other side): more matching notes than any additive
+mis-spelling of the window, fewer than the multiplicative truth, plus one prefix-not-a-segment
+note that makes exact and coarse counts disagree. The resolve arm gets the presence row its match
+was missing. All three re-applied by hand after writing the guards and seen red; reverts
+byte-identical.
