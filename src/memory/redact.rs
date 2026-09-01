@@ -379,6 +379,18 @@ mod tests {
         let sha = "8fd3787abc1234567890abcdef1234567890abcd";
         assert_eq!(sha.len(), 40);
         assert_eq!(redact(sha).removed, 0);
+
+        // Reach proof: the same forty bytes with one case flipped clear the mixed-case bar, so
+        // the row above tests the tri-class rule and not some earlier gate. If the length or
+        // charset gate ever drifts, this row reddens — without it, the assertion above would
+        // quietly become a statement about the gate instead (M17's fixture rule; the length
+        // check on `sha` covers only the gate as it is spelled today).
+        let flipped = "8fd3787Abc1234567890abcdef1234567890abcd";
+        assert_eq!(
+            redact(flipped).removed,
+            1,
+            "one case flip must cross the entropy bar"
+        );
     }
     #[test]
     fn a_long_mixed_case_opaque_run_is_redacted() {

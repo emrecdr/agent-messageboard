@@ -3586,9 +3586,17 @@ error, a plausible wrong answer.
 ### The predicate is broader than its name, and that shaped the test
 
 `is_unique_violation` matches **any** `ErrorCode::ConstraintViolation`, not specifically a unique
-one. Correct by the current schema — the primary key is absorbed by `ON CONFLICT(id) DO UPDATE`
-and the only other constraint is the unique name index — but the name asserts more than the code
-checks, and a future `NOT NULL` or `CHECK` would be silently read as a name clash.
+one. Correct by the current schema, checked rather than assumed: `agents` carries a primary
+key, four `NOT NULL` columns and one unique index. The primary key is absorbed by
+`ON CONFLICT(id) DO UPDATE`; the `NOT NULL`s are unreachable because `register` constructs every
+value it writes and `name` goes in through `COALESCE(?7, agents.name)`, which cannot yield NULL.
+That leaves `ux_agents_name` as the only constraint able to fire — so the guard is right today.
+The name overstated what the match does and is since renamed `is_constraint_violation`, with
+this schema argument as its docstring; the record keeps the name it had when the finding was
+made.
+
+The name still asserts more than the code checks, and what would break it is a new column fed from
+an `Option`, or a `CHECK`. Neither exists; both are cheap to add without noticing this.
 
 It is also why the test induces failure with a trigger whose body names a missing table rather than
 with `RAISE(ABORT)`: `RAISE` *is* a constraint violation, so it would have satisfied the mutated
@@ -3608,3 +3616,108 @@ silently mutating nothing, which is the reason to count anchors instead of trust
 proposed that having never been mutated is what predicts a low score. `identity.rs` refutes it.
 The honest version is that **nothing available so far predicts the score**, which is a weaker claim
 and a better argument for running it on every module than any triage heuristic would be.
+
+## M44 · The morning-after simulation, and what doctor actually prints
+
+**2026-08-31.** Q14 filed the distribution question around one hazard: `brew upgrade` is D94's
+stale-hook condition with a worse trigger, and its own text ends on "whatever ships has to answer
+what `amb doctor` reports the morning after an unattended upgrade". The text then *asserted* the
+answer — "D73 built `doctor`'s fingerprint comparison for exactly this question, so the detector
+already exists" — which is D95's shape: a claim about an instrument, with the instrument never run
+on the condition the claim is about. This run converts the assertion into a measurement.
+
+### Method
+
+Everything sandboxed, nothing touched: a copy of the real board (`sqlite3 .backup`, the WAL rule
+M32 records), a fake `$HOME` whose `.claude/settings.json` is the real one with every amb hook
+command rewritten to a binary at another fingerprint, and the real installed binary running
+`doctor` against it. The second fingerprint cost nothing — the mutation baseline for the db.rs run
+in flight was built at `a57c610` while the installed binary is at `4529eeb`. The stale side is
+played by the *newer* commit; the comparison is symmetric, and what is under observation is the
+sentence, not the direction. The donor binary is only ever invoked with `--version`.
+
+### The first take was wrong, and the way it was wrong is documented behavior
+
+The donor was first copied to `stale-amb`, and `doctor` reported **"no amb hooks are installed"**
+— ten rows of a healthy-looking machine with two warns, on a settings file with six amb hooks in
+it. `command_is_ours` matches the executable's *name*, exactly as D73 records. A rename is outside
+the brew scenario (every packager in Q14's survey installs the binary under its own name), but the
+take is kept here because it is the demonstration: a hook whose binary is renamed does not go
+stale, it goes *invisible*, and the ten remaining rows read as a clean bill.
+
+### Result, verbatim
+
+```
+BAD   binary          the PostToolUse hook runs …/staledir/amb
+         which reports  0.2.0 (a57c610 2026-08-31 dirty, schema 12, sqlite 3.53.2)
+         but this build is  0.2.0 (4529eeb 2026-08-31, schema 12, sqlite 3.53.2)
+         Manual commands work and every hook is stale. Copy it: cp "$(command -v amb)" …/staledir/amb
+```
+
+Every other row `ok`. The condition is named in one sentence, both fingerprints are shown, and the
+remedy is the literal command. Q14's main objection — an unattended upgrade breaking every hook
+silently — is detected, named and remediable the morning after, **provided someone runs `doctor`**.
+
+### What the run exposed that nobody was looking for
+
+The process exited **0** with a `BAD` row on screen. That is D73's decision — a diagnosis is not
+itself a failure, and `--json` carries the verdict in `worst` — but `doctor.rs` said otherwise in
+three doc comments: "what the exit code and the summary line are built on", "`worst` is the exit
+code", "it drives the exit code". None was true, and there is no summary line in the text output at
+all. The comments described a design D73 explicitly rejected — the fifth instance of the false-
+comment class (`sync_dir`, `recall`, the bench harness, D95), and on the exact field an unattended
+check would be built on: a reader trusting them would write `amb doctor || alert` and alert never.
+All three now state the true contract: `worst` is the verdict `--json` carries, the exit code is
+always 0, and automation reads the field, not `$?`.
+
+## M45 · The reached-assertion audit: two holes in seventeen constants, and neither was a threshold
+
+**2026-08-31.** The audit item said: a test that can silently stop exercising its subject needs to
+assert that it reached it — find the fixtures that could drift out of range. The sweep: every
+numeric gate constant in `src/` (seventeen of them — caps, budgets, TTLs, thresholds), classified
+by whether any test references it **by name** (self-adjusting) or only by literal; then the known
+upstream-filter sites read by hand, because M17's class is filters, not constants.
+
+### The refinement the sweep forced
+
+A fixture literal-coupled to a threshold usually fails **loud** on drift: it lands on the wrong
+side of the comparison and an equality assertion breaks. `MAX_CONFLICT_NOTICES` has no test naming
+it, and is fine — `the_same_conflict_is_announced_three_times_across_every_path_and_then_stops`
+counts to three and reddens the moment the constant moves. The silent class is narrower and worse:
+
+- **an assertion of absence behind a gate**, where the early return produces the same absence the
+  test expects, so gate drift changes the test's subject without changing its verdict; and
+- **a writer no test reaches**, where the readers are all asserted on hand-built values.
+
+### The two holes
+
+**`sync_dir`'s decline branch had no test caller at all.** Production passes
+`Some(AUTO_INDEX_LIMIT)`; `reindex` passes `None`; no test anywhere passed `Some`. The rule "above
+the limit, decline and say so" passes through three layers — `sync_dir` writes `skipped`,
+`index_is_behind` derives from it (tested, on a hand-built `IndexStats`, per D78), the banner
+renders the answer — and the untested layer was the writer, exactly M20's arithmetic and exactly
+D45's defect site: delete the branch and every test stays green while a 501-note vault reports
+itself empty again. It also returns *before* the prune, and only that return stops a declined pass
+from pruning the whole index against a scan that never happened — an omission nothing asserted.
+Now `a_vault_past_the_limit_declines_loudly_and_prunes_nothing`: over-limit declines and reports
+its size, at-limit indexes (the row that reddens `>` → `>=`), and a declined pass leaves the index
+intact.
+
+**The git-sha test could go vacuous on gate drift.** `a_git_sha_is_not_mistaken_for_a_secret`
+asserts an absence — `removed == 0` — and `is_high_entropy`'s length gate returns exactly that
+absence early. The fixture is 40 characters and the gate is `< 40`: raise it and the test silently
+stops testing the tri-class rule its comment names, while the mixed-case positive control (44
+chars) stays green. The closure is a control **at the same forty bytes**: one case flip crosses
+the tri-class bar, so `redact(flipped).removed == 1` proves the fixture sits one bit from the
+boundary — any drifted gate reddens the flip row rather than widening the absence row.
+
+### Cleared, and why
+
+`nearest`'s tie arm (repaired in M17 with an in-budget second candidate), promote's TTL fixtures
+(M25/M26's confirming pass), `tests/properties.rs` (floors asserted, an order of magnitude under
+observed rates), `VERDICT_MIN_INJECTED` (the tree's one existing `const { assert! }` coupling),
+and the twelve remaining constants either name-coupled in tests or literal-coupled in the loud
+direction. The wiring `main.rs` performs — passing `AUTO_INDEX_LIMIT` as the argument — remains
+asserted by nothing but D70's thin-binary rule, noted here rather than closed: the e2e cost is a
+501-file fixture, and the parameterised test above covers every decision the wiring delivers.
+

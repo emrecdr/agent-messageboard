@@ -251,7 +251,7 @@ fn reclaim(conn: &Connection, who: &Identity, name: &str, at: f64) -> Result<Opt
         params![fallback, id],
     ) {
         Ok(_) => Ok(Some(fallback)),
-        Err(e) if is_unique_violation(&e) => Ok(None),
+        Err(e) if is_constraint_violation(&e) => Ok(None),
         Err(e) => Err(Error::Sqlite {
             context: "renaming a session that has ended".into(),
             source: e,
@@ -283,8 +283,8 @@ pub fn register(
     for (i, candidate) in candidates.iter().enumerate() {
         match try_touch(conn, who, candidate, explicit_name, at, pid) {
             Ok(()) => break,
-            Err(e) if is_unique_violation(&e) && i < last => continue,
-            Err(e) if is_unique_violation(&e) => {
+            Err(e) if is_constraint_violation(&e) && i < last => continue,
+            Err(e) if is_constraint_violation(&e) => {
                 // The holder may be a session that has ended. `ux_agents_name` is right — D18
                 // needs a name to resolve to exactly one agent — but nothing ever reaped the
                 // roster, so before this every name a session had ever used was consumed
@@ -354,7 +354,14 @@ fn try_touch(
     Ok(())
 }
 
-fn is_unique_violation(e: &rusqlite::Error) -> bool {
+/// Any SQLite constraint violation — not only a unique one, and the breadth is deliberate.
+///
+/// Every caller reads `true` as "the name is taken", which is sound *by the current schema*, not
+/// by this match: `ux_agents_name` is the only constraint reachable through `try_touch`, because
+/// the PRIMARY KEY is absorbed by `ON CONFLICT(id)` and `register` constructs every NOT NULL
+/// value itself (M43). A schema change that adds a reachable constraint widens what "taken"
+/// means here without touching this function — the tests below are what would notice.
+fn is_constraint_violation(e: &rusqlite::Error) -> bool {
     matches!(
         e,
         rusqlite::Error::SqliteFailure(
@@ -710,7 +717,7 @@ mod tests {
 
     /// Only a constraint violation is a name collision.
     ///
-    /// **Found by mutation: `is_unique_violation` could return `true` for every error.** Its two
+    /// **Found by mutation: `is_constraint_violation` could return `true` for every error.** Its two
     /// call sites use it as a match guard to decide whether to retry under a different name, so
     /// treating an unrelated failure — a missing table, a locked board — as a name clash would
     /// rename an agent in response to something that has nothing to do with its name.
@@ -727,13 +734,13 @@ mod tests {
         let clash = conn
             .execute("INSERT INTO t VALUES ('taken')", [])
             .expect_err("a duplicate must fail");
-        assert!(is_unique_violation(&clash), "{clash:?}");
+        assert!(is_constraint_violation(&clash), "{clash:?}");
 
         let unrelated = conn
             .execute("INSERT INTO no_such_table VALUES ('x')", [])
             .expect_err("a missing table must fail");
         assert!(
-            !is_unique_violation(&unrelated),
+            !is_constraint_violation(&unrelated),
             "a missing table is not a name clash, and retrying under a new name cannot fix it"
         );
     }
@@ -743,7 +750,7 @@ mod tests {
     /// **That test was itself found by mutation, and it guarded the predicate only** (M43). Its
     /// docstring says exactly what would go wrong — *"its two call sites use it as a match guard
     /// … treating an unrelated failure as a name clash would rename an agent in response to
-    /// something that has nothing to do with its name"* — and then checks `is_unique_violation`
+    /// something that has nothing to do with its name"* — and then checks `is_constraint_violation`
     /// against a synthetic table. Forcing either guard to `true` reddened nothing.
     ///
     /// M20's arithmetic, on a rule whose predicate layer was already guarded: count the layers a
@@ -789,7 +796,7 @@ mod tests {
     /// The trigger is how a failure is induced on the `UPDATE` while the `SELECT` above it still
     /// succeeds: its body names a table that does not exist, so it raises `SQLITE_ERROR` rather
     /// than a constraint violation. `RAISE(ABORT)` would not work here — that *is* a constraint
-    /// violation, and `is_unique_violation` matches any of them, which is worth knowing given the
+    /// violation, and `is_constraint_violation` matches any of them, which is worth knowing given the
     /// function's name says unique.
     #[test]
     fn a_failed_reclamation_is_an_error_and_not_a_name_that_stays_taken() {
@@ -905,7 +912,7 @@ mod tests {
     /// and the caller reports `NameTaken` as before. Failing closed is right: the point is to free
     /// a name, not to start a cascade of renames."*
     ///
-    /// Mutation found the half that matters. With `is_unique_violation` forced to `false` in that
+    /// Mutation found the half that matters. With `is_constraint_violation` forced to `false` in that
     /// match, the clash stops being an ordinary outcome and becomes a raw SQLite error — so an
     /// agent asking for a taken name gets an internal failure instead of D18's clash, on the one
     /// path that is supposed to fail closed.

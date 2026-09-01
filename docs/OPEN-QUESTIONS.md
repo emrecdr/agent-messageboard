@@ -303,6 +303,15 @@ just done.**
   `amb doctor` reports the morning after an unattended upgrade — and D73 built `doctor`'s
   fingerprint comparison for exactly this question, so the detector already exists.
 
+  **Simulated and answered, 2026-08-31** (M44): under a sandboxed `$HOME` whose hooks invoke a
+  binary at another fingerprint, `doctor` prints `BAD`, names the hook, shows both fingerprints,
+  states the condition in one sentence — *"Manual commands work and every hook is stale"* — and
+  gives the literal `cp` that fixes it. The main objection to distributing is therefore detected,
+  named and remediable the morning after. Two caveats are the residue: detection requires a person
+  to *run* `doctor` (it exits 0 by D73, so anything unattended must read `--json`'s `worst`, not
+  `$?`), and the comparison keys on the executable being *named* `amb` — true for Homebrew and
+  every packager in Q14's survey, but a rename makes the hooks invisible rather than stale.
+
 **Not urgent and deliberately undecided.** Nobody has tried to install it. This is filed because
 publication made the gap real and because the answer is cheap, not because there is evidence of
 demand — and Q10's lesson is that shipping a mechanism before anything can evaluate it is how this
