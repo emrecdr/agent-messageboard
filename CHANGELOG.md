@@ -55,6 +55,17 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **`quick_check` could be always-healthy and nothing reddened.** The diff pass over the four
+  fresh commits (M47) found all four mutants of doctor's new integrity check surviving — the row
+  D15's "the board is disposable" advice hangs from, rendered from nothing. A two-verdict test
+  pins both directions; the corrupt fixture is one overwritten page.
+
+- **`tools/mutants.sh`'s target directory moves out of `$TMPDIR`.** macOS's age-based cleaner
+  was eating `libsqlite3-sys`'s generated `bindgen.rs` *mid-run* — the bundled file carries its
+  packaged 2006 mtime and is eligible for eviction the moment it lands. Two consecutive baseline
+  failures with a delete in between proved the cleaner concurrent. Now under `~/.cache`, and the
+  header records the mechanism instead of prescribing the delete-and-retry that failed twice.
+
 - **A Stop re-fire is now answered with silence, which ends the machine-wide wake loop.** The
   runner counts a Stop hook that injects `additionalContext` as blocking the turn from ending:
   it wakes the model to read the context, the model answers, Stop fires again — with

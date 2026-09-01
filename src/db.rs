@@ -1006,6 +1006,37 @@ mod tests {
         assert_eq!(read_timeout(&hook), HOOK_BUSY_TIMEOUT_MS);
     }
 
+    /// Both verdicts of SQLite's own consistency check, because all four of its mutants
+    /// survived the diff pass over the commit that added it (M47): always-healthy,
+    /// always-corrupt and a flipped comparison all render doctor's integrity row from nothing.
+    ///
+    /// The corrupt fixture is one overwritten page. `quick_check` answers it with a finding
+    /// row, not an error — probed with the sqlite3 CLI before this test relied on it.
+    #[test]
+    fn quick_check_tells_a_healthy_board_from_a_corrupted_page() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path().join("board.db");
+        let conn = open_at(&p).expect("open");
+        assert_eq!(quick_check(&conn).expect("healthy check"), None);
+        drop(conn);
+
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&p)
+            .expect("reopen");
+        f.seek(SeekFrom::Start(4096)).expect("seek");
+        f.write_all(&[0xff; 4096]).expect("corrupt one page");
+        drop(f);
+
+        let conn = Connection::open(&p).expect("raw open; open_at would rightly flinch");
+        let verdict = quick_check(&conn).expect("the check answers corruption, not errors on it");
+        assert!(
+            verdict.is_some(),
+            "a corrupted page must not read as healthy"
+        );
+    }
+
     /// The kernel flag word is one bit; only `&` reads that bit alone. `|` and `^` both answer
     /// "local" for a remote volume's word — the two mutants that survived while this arithmetic
     /// lived inline, unreachable because no test can mount a network share (M46).

@@ -3810,3 +3810,42 @@ comparison, the decline deletion and the drifted entropy gate — files reverted
 after each. With the four named residues and the upstream-guard equivalence, that is 16 of 16
 real survivors accounted for: 12 killed with each kill observed, 4 accepted with the reason
 written where the guard lives, 1 equivalent recorded so nobody chases it again.
+
+## M47 · The diff pass over four fresh commits: the survivors were the newest function, and the cleaner eats mid-run
+
+**2026-09-01.** `tools/mutants.sh --diff a57c610` — every line the last four commits changed: the
+peer session's audit round two (never under mutation) and this session's db.rs closures (machine
+corroboration for M46's hand-confirmed kills). Coordinated on the board; the peer held cargo.
+
+### Two dead instruments before one live one, and the second death was the proof
+
+The first attempt failed its baseline on a missing `bindgen.rs`; the header's trap said delete
+the target directory and accept a cold build. The second attempt failed on the **same missing
+file with the directory freshly deleted in between** — which is the observation that mattered,
+because it proves macOS's TMPDIR cleaner is concurrent, not nightly: `libsqlite3-sys` writes its
+generated bindings with their **packaged 2006 mtime**, so the file is eligible for age-based
+eviction the moment it lands, and the cleaner takes it between the build script and the compile.
+The remedy in the header was treatment for the symptom. The fix is the mechanism: the private
+target directory now lives under `~/.cache`, where no cleaner runs, and the trap's text records
+why rather than prescribing the delete-and-retry that just failed twice.
+
+### The run, once it could run
+
+**73 mutants in 9m: 54 caught, 6 missed, 11 unviable, 2 timeouts** — quiet machine, 7s baseline,
+17× timeout headroom.
+
+- **Both timeouts are the designed detection working.** `budget_spent → false` makes
+  `engage_wal`'s loop never give up; the refusal test hangs and the harness timeout is the alarm.
+  M46's test comment predicted exactly this before any run confirmed it.
+- **Two missed are the named Err-arm residue** — reachable only by losing a real race — accepted
+  in M46 and unchanged here. A prediction that holds across a second instrument is the cheapest
+  confirmation there is.
+- **Four missed were all in `quick_check`**, the youngest function in the diff: doctor's new
+  integrity check could be replaced with always-healthy, always-corrupt, or a flipped comparison,
+  and nothing reddened — the row on the page D15's "delete the board" advice hangs from, rendered
+  from nothing. Killed with a two-verdict test; the corrupt fixture is one overwritten page,
+  probed with the sqlite3 CLI first (`quick_check` answers corruption with a finding row, not an
+  error). Both mutant classes re-applied by hand and seen red.
+- **Every M46 kill was re-made by the machine**: the diff included this session's db.rs changes,
+  and statfs, tighten and the engage_wal cluster all sit in the 54 caught — the hand-confirmed
+  evidence now has an independent machine pass agreeing with it.

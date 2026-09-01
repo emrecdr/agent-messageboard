@@ -41,10 +41,15 @@
 #     cargo-mutants exits 2 when mutants survive and 101-ish when the baseline breaks; both are
 #     information, and a pipe throws them away. Redirect with `>` if you need the output in a file.
 #
-#   - **The private target directory lives under `$TMPDIR`, which macOS prunes.** A partially
-#     evicted `libsqlite3-sys` leaves cargo treating the build-script output directory as fresh
-#     while its generated `bindgen.rs` is gone, and the baseline fails with what reads as a broken
-#     dependency. `rm -rf "${TMPDIR}/amb-mutants-target"` and accept one cold build.
+#   - **The private target directory must not live under `$TMPDIR`, and the reason is an mtime
+#     from 2006.** It used to, and macOS's age-based cleaner ate `libsqlite3-sys`'s generated
+#     `bindgen.rs` — not merely between runs but *mid-run*: the bundled build script writes that
+#     file with its packaged 2006 timestamp, so it is perpetually eligible for eviction the
+#     moment it lands. Two consecutive baselines failed on the same missing file with the
+#     directory freshly deleted in between (2026-09-01), which is what proved the cleaner was
+#     concurrent rather than nightly. The directory now lives under `~/.cache`, where no cleaner
+#     runs; if a baseline ever fails on a missing generated file again, delete the directory and
+#     check nothing has moved it back under `$TMPDIR`.
 #
 # Usage:
 #   tools/mutants.sh src/claims.rs [src/other.rs ...]   one or more modules, exhaustively
@@ -66,7 +71,7 @@ fi
 
 # Private, so a mutant can never land in the shared target directory. Kept between runs: a cold
 # build costs ~90s and the incremental rebuild per mutant is most of what makes this affordable.
-export CARGO_TARGET_DIR="${AMB_MUTANTS_TARGET:-${TMPDIR:-/tmp}/amb-mutants-target}"
+export CARGO_TARGET_DIR="${AMB_MUTANTS_TARGET:-${XDG_CACHE_HOME:-$HOME/.cache}/amb-mutants-target}"
 
 # `--copy-vcs true` or `build.rs` cannot fingerprint the repository and the BASELINE fails before
 # a single mutant runs — the first symptom anyone hits, and it looks like a broken test suite.
