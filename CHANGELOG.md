@@ -11,6 +11,13 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **The primer teaches `--kind`, on a count rather than an impression** (U9). A session counted
+  its own board: ten messages, ten `note`s — among them a decision, a factual correction, a
+  blocking constraint and two open questions, all arriving identically. The banner has rendered
+  `[direct·proposal]` all along, so the label was visible and only the flag that sets it was
+  not; the sole sender who ever set it was the one who had just read `--help` in order to report
+  that nobody reads `--help`.
+
 - **`amb read <id>` shows the message before it acknowledges it** (U9). The verb was the bug: a
   banner says "1 unread", `amb read 3` is the obvious thing to type, and it printed
   `marked #3 read` and nothing else — while the acknowledgement dropped the message out of

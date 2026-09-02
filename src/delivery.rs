@@ -25,12 +25,19 @@ use std::fmt::Write as _;
 /// starting) appeared anywhere an agent reads, so the proactive half of D5 was reachable only
 /// by a human with `--help` open. Two lines of permanent context tax, spent because a
 /// capability nobody can invoke is not a capability.
+///
+/// **`--kind` is here on a measurement, not an impression** (U9). A session counted its own
+/// board: ten messages, ten `note`s — among them a decision, a factual correction, a blocking
+/// constraint and two open questions, all arriving identically. The field is documented, takes
+/// any tame word, and renders as `[direct·proposal]`; the only sender who ever set it was the
+/// one who had just read `--help` to write a report about `--help` being unread. An optional
+/// field at 100% default usage is not a neutral default, it is an unreachable feature.
 pub const PRIMER: &str = "\
 [amb] You are on the agent messageboard. Other Claude sessions on this machine can reach you.
   amb inbox [--unread]           what is waiting for you (--unread hides what you have read)
   amb read <id>                  show one and acknowledge it (only this marks it read)
   amb reply <id> --body \"...\"     answer its sender
-  amb send <to> --subject S --body B      (--body-file F for anything long or multi-line)
+  amb send <to> --subject S --body B   (--kind question|proposal · --body-file F if long)
       <to> is  alice  ·  alice@otherproject  ·  @  (everyone here)  ·  @@  (everyone, everywhere)
   amb agents                     who else is on the board
   amb claims                     who else is editing these files right now
@@ -996,7 +1003,16 @@ mod tests {
     /// blocks nobody will either over-trust the list or avoid the feature (D5).
     #[test]
     fn the_primer_teaches_the_verbs_an_agent_cannot_find_anywhere_else() {
-        for taught in ["amb claims", "amb claim <path>", "--unread", "--body-file"] {
+        for taught in [
+            "amb claims",
+            "amb claim <path>",
+            "--unread",
+            "--body-file",
+            // Ten of ten messages on a real board were the default kind, while the banner has
+            // rendered `[direct·proposal]` all along: the label was visible and the flag that
+            // sets it was not (U9).
+            "--kind",
+        ] {
             assert!(
                 PRIMER.contains(taught),
                 "{taught:?} exists, is agent-runnable, and appears nowhere an agent reads: \
