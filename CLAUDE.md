@@ -618,9 +618,10 @@ roster row, so forgetting `amb register` yields a less readable name, not a fail
   `/Users/emrec/.local/bin/amb`; `cargo install --path .` writes `~/.cargo/bin/amb`, which is also
   what `PATH` resolves first. So after a schema change **manual `amb` commands work perfectly while
   every hook on the machine fails silently** — which is exactly why it goes unnoticed. Observed a
-  fourth time on 2026-08-28, with `~/.local/bin/amb` at schema 4 against a board at 5. Copy it:
-  `cp ~/.cargo/bin/amb ~/.local/bin/amb`, then check `amb --version` reports the same commit from
-  both paths. The fingerprint (D56) exists to make that comparison possible at all — before it,
+  fourth time on 2026-08-28, with `~/.local/bin/amb` at schema 4 against a board at 5. Fix it with
+  `./tools/install.sh` (or by hand: `rm` the stale copy first, then `cp` — an in-place `cp` onto
+  a cached signature leaves macOS SIGKILLing the copy), then check `amb --version` reports the
+  same commit from both paths. The fingerprint (D56) exists to make that comparison possible at all — before it,
   both printed `amb 0.1.0`.
 
   **`./tools/install.sh` is the fix, and `amb doctor` is only the detector** (D94). Detection
