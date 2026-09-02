@@ -11,6 +11,16 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **A vendor can now be added by dropping one JSON file — no rebuild, no code change** (D111
+  phase 3). `~/.config/amb/vendors/*.json` (or `$AMB_VENDORS`) is read at startup and appended to
+  the shipped list; `amb install --vendor copilot-cli` then writes that CLI's own event
+  vocabulary into the file its manifest names, and a session of it is identified by the
+  environment variable the manifest declares. JSON rather than TOML: `serde_json` is already a
+  dependency because the files `amb` installs into are JSON, and this project hand-writes parsers
+  rather than taking supply chain. Every parser rule is a refusal — an incomplete manifest is
+  never completed with a guessed event spelling — and `amb doctor` grows a `vendors` row naming
+  any manifest it refused, since the loader may not fail on the hook path (D9).
+
 - **The primer teaches `--kind`, on a count rather than an impression** (U9). A session counted
   its own board: ten messages, ten `note`s — among them a decision, a factual correction, a
   blocking constraint and two open questions, all arriving identically. The banner has rendered

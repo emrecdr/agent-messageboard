@@ -5687,6 +5687,41 @@ project messaging a Claude session in another is asserted end to end through the
 because every failure on that path is a silence: a session `amb` cannot identify looks exactly
 like a session with no mail.
 
+### Phase 3: a vendor a user adds, with no rebuild
+
+`~/.config/amb/vendors/*.json` (or `$AMB_VENDORS`) — one manifest per CLI, exactly the struct
+above, loaded at startup and appended to the shipped list. `amb install --vendor <id>` and
+identity detection both consult it, so adding GitHub Copilot CLI is dropping one file.
+
+**JSON, reversing this decision's own first plan, which said TOML.** TOML reads better and costs
+a dependency; `serde_json` is already here because the files `amb` installs into *are* JSON. On a
+project that hand-writes a civil calendar "thirty lines against a dependency" and declined
+`proptest` after measuring it (D102), the readability argument did not survive the cost.
+
+**Every rule in the parser is a refusal rather than a default.** A manifest missing `turn_end`
+describes a vendor whose mail never arrives; completing it with a guess would install an entry
+the runtime ignores in silence — the failure reading Gemini's binary caught. A manifest may not
+take a shipped vendor's id, because silent shadowing moves where `amb install` writes with
+nothing saying so.
+
+**The loader collects problems; it never raises them.** It runs on the hook path, where nothing
+may fail (D9), so a broken manifest is ignored there and reported by `amb doctor` — the only
+surface that says a file was skipped. Without it, a typo'd key would surface as "unknown vendor"
+with the real reason nowhere.
+
+**Cost, measured rather than asserted**: the load is once per process behind a `OnceLock`, and
+the common case is a `stat` on a directory that does not exist. Median startup with a manifest
+present was indistinguishable from without it across two runs of 40 and 60 invocations
+(deltas −0.13 ms and −0.27 ms on a debug binary — noise, in the direction that proves there is
+no cost to find).
+
+**The truth table caught a live defect in this very phase**, which is worth recording because the
+defect had already printed itself and been read past: `tool_failed` was looked up at the document
+root instead of under `events`, so every manifest silently lost its capture lane while the
+install still succeeded — a dry-run showed two memory lanes where three were declared, and the
+number went unnoticed until a test asserted it. A "did it install" check does not catch that; a
+count does.
+
 ### Rejected
 
 **A trait with per-vendor implementations.** Above: the variation is data.

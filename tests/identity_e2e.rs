@@ -552,3 +552,101 @@ fn a_gemini_session_can_message_a_claude_session_in_another_project() {
         "and be handed an address that resolves from here, not a bare name: {json}"
     );
 }
+
+/// **A vendor `amb` has never heard of, added by dropping one file** (D111 phase 3).
+///
+/// This is the requirement in its strongest form: no rebuild, no code change, no entry in any
+/// list inside the binary. It runs through the real process because that is the only thing that
+/// proves the loader is reached on the paths that matter — installation *and* identity — and
+/// because `OnceLock` makes the load per-process, which a unit test cannot exercise twice.
+///
+/// The `postToolUseFailure` assertion is not decoration: the first version of the parser read
+/// `tool_failed` from the document root instead of from `events`, so every manifest silently
+/// lost its capture lane while the install still succeeded and printed two lanes where three
+/// were declared. A count of installed lanes is what catches that; a "did it install" check is
+/// not.
+#[test]
+fn a_vendor_amb_never_heard_of_installs_from_a_dropped_in_manifest() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vendors = dir.path().join("vendors");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&vendors).expect("mkdir");
+    std::fs::create_dir_all(&home).expect("mkdir");
+    std::fs::write(
+        vendors.join("acme.json"),
+        r#"{
+          "id": "acme-cli",
+          "label": "ACME CLI",
+          "config_dir": ".acme",
+          "settings_file": "hooks/amb.json",
+          "events": {
+            "session_start": "Begin", "turn_end": "Done", "tool_post": "AfterTool",
+            "session_end": "Finish", "tool_pre": "BeforeTool", "tool_failed": "ToolBroke"
+          },
+          "session_env": ["ACME_SESSION_ID"]
+        }"#,
+    )
+    .expect("write manifest");
+
+    let run = |args: &[&str], extra: &[(&str, &str)]| -> String {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_amb"));
+        c.args(args)
+            .current_dir(dir.path())
+            .env("HOME", &home)
+            .env("AMB_VENDORS", &vendors)
+            .env("AMB_DB", dir.path().join("board.db"))
+            .env("AMB_PROJECT", "acme-proj")
+            .env_remove("AMB_AGENT")
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .env_remove("GEMINI_SESSION_ID")
+            .env_remove("CLAUDE_CODE_MESSAGING_SOCKET")
+            .env_remove("AMB_VAULT");
+        for (k, v) in extra {
+            c.env(k, v);
+        }
+        let out = c.output().expect("amb runs");
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // It installs, into its own file, with its own spellings — none of them Claude's.
+    let plan = run(
+        &[
+            "install", "--vendor", "acme-cli", "--mode", "turn", "--memory",
+        ],
+        &[],
+    );
+    for mine in [
+        "Begin",
+        "Done",
+        "AfterTool",
+        "Finish",
+        "BeforeTool",
+        "ToolBroke",
+    ] {
+        assert!(plan.contains(mine), "{mine} missing from the plan: {plan}");
+    }
+    assert!(
+        !plan.contains("SessionStart") && !plan.contains("PostToolUse"),
+        "Claude's vocabulary leaked into a manifest vendor: {plan}"
+    );
+    let written = std::fs::read_to_string(home.join(".acme").join("hooks").join("amb.json"))
+        .expect("it wrote to the path the manifest named");
+    assert!(written.contains("ToolBroke"), "{written}");
+
+    // And a session of that vendor is identified by the variable the manifest named.
+    let who = run(
+        &["register", "--name", "roadrunner"],
+        &[("ACME_SESSION_ID", "acme-1")],
+    );
+    assert!(
+        who.contains("roadrunner"),
+        "a manifest vendor's session must get an identity: {who}"
+    );
+}

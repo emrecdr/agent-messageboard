@@ -358,6 +358,39 @@ pub fn location_check(path: &std::path::Path) -> Check {
 /// Fires **at** the threshold and not one byte past it. A strict `>` would make the number D83
 /// actually names the last value that does *not* trigger, which reads wrong to everyone who has
 /// only read the decision.
+/// Whether any user-added vendor manifest was refused, and which.
+///
+/// **A refused manifest is otherwise a silence, and a loud one is the point** (D111): the loader
+/// collects rather than raises, because it runs on the hook path where nothing may fail (D9), so
+/// this is the only surface that ever says a file was ignored. A person who wrote
+/// `~/.config/amb/vendors/copilot.json` and typoed a key would otherwise see `amb install
+/// --vendor copilot-cli` report an unknown vendor, with the actual reason nowhere.
+pub fn vendors_check(problems: &[crate::vendors::Problem], loaded: usize) -> Check {
+    if problems.is_empty() {
+        return Check::new(
+            "vendors",
+            Health::Ok,
+            format!(
+                "{loaded} vendor(s) available{}",
+                match loaded.saturating_sub(crate::vendors::VENDORS.len()) {
+                    0 => String::new(),
+                    n => format!(" — {n} from ~/.config/amb/vendors"),
+                }
+            ),
+        );
+    }
+    let detail = problems
+        .iter()
+        .map(|p| format!("{}: {}", p.file, p.detail))
+        .collect::<Vec<_>>()
+        .join("\n         ");
+    Check::new(
+        "vendors",
+        Health::Warn,
+        format!("{} manifest(s) ignored\n         {detail}", problems.len()),
+    )
+}
+
 pub fn size_check(bytes: u64) -> Check {
     let mb = bytes as f64 / (1024.0 * 1024.0);
     let limit = db::PRUNE_AT_BYTES as f64 / (1024.0 * 1024.0);
@@ -585,6 +618,10 @@ pub fn gather(now: f64) -> Report {
             }
         }
     }
+    checks.push(vendors_check(
+        crate::vendors::problems(),
+        crate::vendors::all().len(),
+    ));
 
     // --- the memory layer, and whether its lanes are actually firing --------------------
     match crate::memory::vault_path() {
@@ -631,6 +668,43 @@ pub fn gather(now: f64) -> Report {
 
 #[cfg(test)]
 mod tests {
+
+    /// **A refused manifest must be visible, and a healthy one must not nag.** The loader
+    /// collects problems rather than raising them (D9 forbids failing on the hook path), so this
+    /// check is the only thing that ever says a file was ignored — and both rows matter, because
+    /// a warning that fires on every run is one nobody reads by the third time.
+    #[test]
+    fn a_refused_vendor_manifest_is_reported_and_a_clean_load_is_quiet() {
+        let clean = vendors_check(&[], crate::vendors::VENDORS.len());
+        assert_eq!(clean.health, Health::Ok);
+        assert!(
+            !clean.detail.contains("~/.config"),
+            "with nothing added, the path is noise: {}",
+            clean.detail
+        );
+
+        let added = vendors_check(&[], crate::vendors::VENDORS.len() + 2);
+        assert!(
+            added.detail.contains("2 from ~/.config/amb/vendors"),
+            "a user-added vendor is worth naming: {}",
+            added.detail
+        );
+
+        let broken = vendors_check(
+            &[crate::vendors::Problem {
+                file: "copilot.json".into(),
+                detail: "missing or empty \"config_dir\"".into(),
+            }],
+            crate::vendors::VENDORS.len(),
+        );
+        assert_eq!(broken.health, Health::Warn);
+        assert!(broken.detail.contains("copilot.json"), "{}", broken.detail);
+        assert!(
+            broken.detail.contains("config_dir"),
+            "the reason travels with the file name, or the person cannot fix it: {}",
+            broken.detail
+        );
+    }
     use super::*;
 
     /// Every probe shape lands on the verdict its Check will name — all four rows, because the

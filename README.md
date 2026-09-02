@@ -12,7 +12,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 611 tests (613 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 614 tests (616 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -687,6 +687,7 @@ working default.
 | `AMB_AGENT` | `$CLAUDE_CODE_SESSION_ID` | Who you are |
 | `AMB_PROJECT` | the **git working-tree root**'s name | Which project you are in |
 | `AMB_VAULT` | **none — unset means memory is off** | Where your notes live (see below) |
+| `AMB_VENDORS` | `~/.config/amb/vendors/` | Where **user-added agent CLIs** live: one JSON manifest per vendor, read at startup, no rebuild (D111). `amb doctor` names any it refused |
 | `AMB_BROADCAST_HORIZON` | `24h` | How long a **broadcast** stays on the delivery path (D96). `amb inbox` is unaffected and direct mail never expires |
 
 **Why a broadcast expires and a direct message does not** (D96). The delivery back-off bounds how
@@ -853,7 +854,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 611 tests (613 on Linux)
+cargo test                       # all 614 tests (616 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
