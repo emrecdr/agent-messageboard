@@ -146,6 +146,11 @@ run_and_classify() {
     echo
     # Root-relative rather than $0-relative: this script cd'd to the repo root at line 2, so a
     # `dirname $0` here resolves to "." whenever it is invoked from inside tools/ itself.
+    #
+    # The self-test runs first and costs milliseconds. A classifier nobody re-checks is one that
+    # can rot into always saying "all real" — which is silently the status quo it replaced, and
+    # is this project's own recurring defect pointed at its newest instrument (M35, M40).
+    python3 tools/cfg_phantoms.py --self-test || true
     python3 tools/cfg_phantoms.py mutants.out || true
   fi
   exit $status
