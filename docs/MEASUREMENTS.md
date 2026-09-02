@@ -4051,3 +4051,41 @@ The pattern now has three instances this week — `Redacted.removed` (M27), the 
 (M51), and this — and one shape: **a counter whose writer works and whose only reader is a
 human report.** The find-unread-fields tool cannot see it (the field IS read — by the print),
 and only a count assertion at the caller's distance catches it.
+
+## M55 · The tail in one pass: eight modules, 360 mutants, and the crate-wide inventory closes
+
+**2026-09-02.** `tools/mutants.sh` over every module never exhaustively mutated —
+memory/{id,text,topics,config}, address, duration, version, error — 1,912 lines in one
+invocation: one cold build, one baseline, deliberately, because the machine hit ENOSPC three
+times today and disk churn is the scarce resource. **360 mutants in 66m: 305 caught, 10
+unviable, 45 missed, zero timeouts.** topics.rs and version.rs came back clean.
+
+The 45 clustered into stories, each now a truth table or a pinned vector:
+
+- **The calendar had no round-trip.** Eight arithmetic mutants in Hinnant's civil-date
+  conversions survived because nothing drove the pair as an identity; a sweep across two
+  million days plus the epoch anchor kills any single flip.
+- **`content_hash` could degrade from XOR to OR and export staleness would read stale as
+  current.** Pinned to FNV-1a's published vectors — an analytic kill no fixture family matches.
+- **Every render boundary was off-by-one-able**: `age` and `humanise` at 60s/60m/24h/365d and
+  90s/90m/48h, the slug cap at exactly 48, `parse_ts` at exactly ten bytes. Exact-boundary rows
+  in both directions, M27's discipline.
+- **The id grammar's guards** (`parse_id`'s three-part exclusions, `split_id`'s emptiness) and
+  **the topic charset chain** each get row-per-operator tables.
+- **Two more env shells got the M51 seam extraction**: `threshold` and `skip_tools` were
+  untestable behind `std::env::var`, and their parse/refusal/default rows now run injected.
+- **`Error::causes` was printed and never read** — the "caused by:" lines the binary shows on
+  every failure could be fabricated or empty; one wrapped-source row reads them.
+
+**One mutant is equivalent, and one equivalence claim of mine was wrong — in the good
+direction.** `age`'s negative-delta guard is unreachable in effect (every negative delta also
+renders "just now" through the `mins < 1` arm; verified by hand against the full suite) and is
+kept as a fail-safe first decision with the reasoning in the test. The `safe_component` flip
+isolating `'-'` — a character whose replacement is itself — looked equivalent by the same style
+of reasoning, and hand-applying it reddened the suite: the conjunction also un-whitelists `'_'`,
+which mangles visibly. The lesson is the session's oldest one pointed at its own analysis:
+reasoning says "plausible", only the applied mutant says "confirmed".
+
+Fourteen representative kills hand-applied and seen red, one equivalence hand-confirmed, every
+revert byte-identical. No batch machine re-run — three ENOSPC events today make per-mutant hand
+verification both the stronger standard and the only responsible one.

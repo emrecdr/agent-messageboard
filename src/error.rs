@@ -277,3 +277,18 @@ impl Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// `causes` walks the real source chain — the constant-replacement mutants returned an
+    /// empty or fabricated chain and nothing noticed, because the binary prints these lines
+    /// ("  caused by: …") and no test read them (M55).
+    #[test]
+    fn the_cause_chain_carries_the_inner_error_outermost_first() {
+        let inner = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "inner-detail");
+        let err = crate::error::io("opening the board".to_string())(inner);
+        let causes = err.causes();
+        assert_eq!(causes.len(), 1, "one wrapped source, one cause");
+        assert!(causes[0].contains("inner-detail"), "{causes:?}");
+    }
+}

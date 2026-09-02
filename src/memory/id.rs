@@ -176,6 +176,30 @@ impl IndexedNote {
 mod tests {
     use super::*;
 
+    /// The three-part arm's guard, row by row (M55): the two excluded kinds fall through to
+    /// `None` — an observation is `scope/slug` and a candidate `candidate/slug`, so their
+    /// three-part spellings are refusals, not parses — and an unknown kind refuses too. Each
+    /// `&&` flip and the guard-to-`true` mutant admits exactly one of these rows.
+    #[test]
+    fn a_three_part_id_parses_only_for_the_kinds_that_have_three_parts() {
+        assert!(
+            parse_id("decision/nest/x").is_some(),
+            "the reach row: a real scoped kind parses"
+        );
+        assert!(parse_id("observation/nest/x").is_none());
+        assert!(parse_id("candidate/nest/x").is_none());
+        assert!(parse_id("nonsense/nest/x").is_none());
+    }
+
+    /// `split_id`'s emptiness guard: a leading or trailing slash is not a qualifier, and the
+    /// `&&` flips would each manufacture one from half an id.
+    #[test]
+    fn an_empty_half_around_a_slash_is_no_qualifier_at_all() {
+        assert_eq!(split_id("a/b"), (Some("a".into()), "b".into()));
+        assert_eq!(split_id("/x"), (None, "/x".into()));
+        assert_eq!(split_id("x/"), (None, "x/".into()));
+    }
+
     #[test]
     fn an_id_is_always_qualified_and_splits_back() {
         let id = NoteId::observation("nest", "2026-08-27-thing");

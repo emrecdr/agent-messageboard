@@ -54,6 +54,22 @@ pub fn humanise(delta_secs: f64) -> String {
 mod tests {
     use super::*;
 
+    /// `humanise` at its exact unit boundaries: every `<` that relaxed or hardened in M55 moves
+    /// one of these rows into the wrong unit.
+    #[test]
+    fn every_humanise_boundary_lands_in_the_coarser_unit() {
+        assert_eq!(humanise(90.0), "in 2m", "90s is minutes, not '90s'");
+        assert_eq!(humanise(89.0), "in 89s");
+        assert_eq!(humanise(5_400.0), "in 2h", "90m is hours");
+        assert_eq!(
+            humanise(100.0),
+            "in 2m",
+            "and 100s stays minutes — the `==` flip would leap to hours"
+        );
+        assert_eq!(humanise(172_800.0), "in 2d", "48h is days");
+        assert_eq!(humanise(172_700.0), "in 48h");
+    }
+
     #[test]
     fn parses_each_unit() {
         assert_eq!(parse("30s").expect("s"), Duration::from_secs(30));

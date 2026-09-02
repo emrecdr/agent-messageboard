@@ -11,6 +11,14 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **The mutation inventory closes: every module in the crate has now been exhaustively
+  mutation-tested** (M55). The final eight ran as one pass — 360 mutants, 45 missed, all
+  guarded or named: calendar round-trips, FNV-1a pinned to published vectors, exact-boundary
+  rows for every render unit, id-grammar truth tables, two more env-shell seam extractions,
+  and the error cause-chain read for the first time. One equivalent mutant kept with its
+  reasoning; one wrong equivalence claim of mine caught by applying the mutant instead of
+  believing the argument.
+
 - **`memory/export.rs` under exhaustive mutation: one missed of 26 viable, and it was the
   exporter's own receipt** (M54). `written += 1` could become `*=` and the person running
   `amb memory export` would be told nothing was written while every file landed — the

@@ -216,6 +216,19 @@ fn non_empty(s: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// Each forbidden character refuses a topic on its own — the `||` chain's flips would let
+    /// one through whenever its neighbour is absent (M55).
+    #[test]
+    fn each_forbidden_character_alone_refuses_a_topic() {
+        for bad in ["#a#b", "#a@b", "#a/b"] {
+            assert!(parse_scope(bad).is_err(), "{bad:?} must refuse");
+        }
+        assert!(
+            parse_scope("#retry").is_ok(),
+            "the reach row: a clean topic parses"
+        );
+    }
+
     #[test]
     fn bare_name_is_an_agent_in_my_project() {
         let a = parse("alice").expect("should parse");

@@ -139,9 +139,14 @@ pub const PROMOTION_THRESHOLD: usize = 3;
 /// the plan says so — and a guess that cannot be changed without a rebuild is not a threshold, it
 /// is a decision pretending to be a parameter.
 pub fn threshold() -> usize {
-    std::env::var("AMB_MEMORY_THRESHOLD")
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
+    threshold_from(std::env::var("AMB_MEMORY_THRESHOLD").ok())
+}
+
+/// The env shell's decision, injected — M51's seam pattern: the parse, the zero-refusal and the
+/// default were all mutable while only the shell existed, because a test cannot set process env
+/// without racing the parallel runner.
+fn threshold_from(raw: Option<String>) -> usize {
+    raw.and_then(|v| v.trim().parse().ok())
         .filter(|n| *n > 0)
         .unwrap_or(PROMOTION_THRESHOLD)
 }
@@ -224,14 +229,19 @@ pub fn require_vault() -> Result<PathBuf> {
 /// The skip list, overridable for a session that wants a different one.
 pub fn skip_tools() -> Vec<String> {
     match std::env::var("AMB_MEMORY_SKIP_TOOLS") {
-        Ok(s) => s
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect(),
+        Ok(s) => parse_skip_list(&s),
         Err(_) => SKIP_TOOLS.iter().map(|s| (*s).to_string()).collect(),
     }
+}
+
+/// Split and tidy one comma-separated skip list — the emptiness filter lived behind env and its
+/// `!` could vanish silently (M55).
+fn parse_skip_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Whether a tool call is one memory ignores.
@@ -242,6 +252,34 @@ pub fn should_skip(tool: &str, skip: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D64's ordering as arithmetic: rule outranks decision outranks everything else, by the
+    /// exact weights the ORDER BY consumes. Deleting either named arm or constant-replacing the
+    /// function collapses a distinction the injection cap then silently reorders (M55).
+    #[test]
+    fn the_force_ranks_are_distinct_and_ordered_rule_first() {
+        assert_eq!(force_rank(RULE), 0);
+        assert_eq!(force_rank(FORCE_DECISION), 1);
+        assert_eq!(force_rank(ADVICE), 2);
+        assert_eq!(force_rank("anything-else"), 2);
+    }
+
+    /// The threshold seam, row by row: absent means the default, a real number wins, zero and
+    /// garbage are refused back to the default. The zero row is the `> 0` guard (M55).
+    #[test]
+    fn a_threshold_comes_from_env_except_when_env_is_unusable() {
+        assert_eq!(threshold_from(None), PROMOTION_THRESHOLD);
+        assert_eq!(threshold_from(Some(" 5 ".into())), 5);
+        assert_eq!(threshold_from(Some("0".into())), PROMOTION_THRESHOLD);
+        assert_eq!(threshold_from(Some("junk".into())), PROMOTION_THRESHOLD);
+    }
+
+    /// The skip list drops empties rather than keeping only them (the deleted `!`, M55).
+    #[test]
+    fn a_skip_list_is_split_trimmed_and_never_carries_an_empty_entry() {
+        assert_eq!(parse_skip_list("a, b ,,c,"), vec!["a", "b", "c"]);
+        assert!(parse_skip_list(",, ,").is_empty());
+    }
 
     #[test]
     fn noisy_tools_are_skipped_and_file_tools_are_not() {
