@@ -4374,3 +4374,18 @@ delivery path. So the audit's rule generalises past `env`: **a decision that can
 by arranging the process's own environment will not be tested, and the fix is extraction rather
 than a cleverer test.** Every guard added here is a truth table over an injected argument, and
 each was confirmed by mutating the decision and watching it redden.
+
+## M61 · vendors.rs: the descriptor module, clean on its first pass
+
+**Modules:** `src/vendors.rs`
+
+**2026-09-02.** D111's new module, run the moment `tools/check_mutation_coverage.py` named it —
+the checker written this morning doing the job it was written for, on code committed an hour
+earlier. **Clean: every viable mutant caught, zero missed, zero timeouts.**
+
+The reason is worth recording because it is an argument for the architecture rather than for the
+tests: a descriptor module is mostly `const` data, and data has no surviving mutants when
+something asserts the values. What logic it has — detection precedence and the blank-id filter —
+was written with the environment injected (M51's rule) *before* a mutation pass could find it
+untestable, which is the first time on this project that lesson was applied ahead of the finding
+rather than after it.
