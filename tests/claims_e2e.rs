@@ -602,3 +602,40 @@ fn a_session_end_hook_lapses_that_sessions_claims_and_only_those() {
     // The lead survives: expiry, not deletion (D13's degrade).
     assert_eq!(b.json("uuid-bob", &["claims"])["count"], 2);
 }
+
+/// **The advisory sentence must appear when there is somebody to message, and only then** (M56).
+/// `!taken.conflicts.is_empty()` guards the one line that tells an agent what a conflict *means*
+/// — claims are advisory (D5), so the line is the whole remedy the tool offers. Dropping the `!`
+/// survived mutation: the advice would then print on every uncontended claim, where there is
+/// nobody to message, and go silent on exactly the claim that has a holder to warn about.
+///
+/// Both rows, because each direction is a distinct defect and the positive one proves the line
+/// is reachable at all.
+#[test]
+fn the_advisory_sentence_appears_only_when_somebody_else_holds_the_path() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run("uuid-bob", &["register", "--name", "bob"]);
+
+    let uncontended = b.run(
+        "uuid-alice",
+        &["claim", "src/auth/", "--intent", "refactor"],
+    );
+    assert!(
+        !uncontended.contains("claims are advisory"),
+        "nobody to message, so no advice to give: {uncontended:?}"
+    );
+
+    let contended = b.run(
+        "uuid-bob",
+        &["claim", "src/auth/", "--intent", "also refactor"],
+    );
+    assert!(
+        contended.contains("also claimed by"),
+        "the holder is named: {contended:?}"
+    );
+    assert!(
+        contended.contains("claims are advisory — message the holder before continuing"),
+        "and the one remedy the tool offers is stated: {contended:?}"
+    );
+}

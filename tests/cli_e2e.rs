@@ -549,3 +549,60 @@ fn watch_output_ends_with_a_newline_on_the_mail_path() {
         String::from_utf8_lossy(&out.stdout)
     );
 }
+
+/// **A snapshot's scope word and its contents are one decision passed to two places, and either
+/// could be inverted alone** (M56). `!all` reaches `messages::inbox` to choose *what* is
+/// collected and `delivery::snapshot` to choose whether the document calls itself `Unread` or
+/// `All mail`; dropping either `!` survived the whole suite.
+///
+/// The two failures are different and both are M28's shape — an artefact describing itself with
+/// something that has rotted. Invert the fetch and a file headed `Unread` lists mail already
+/// acknowledged; invert the label and a file headed `All mail` is missing everything read. This
+/// asserts the pair together, because either alone leaves the other free.
+#[test]
+fn a_snapshot_says_which_scope_it_rendered_and_renders_that_scope() {
+    let b = Board::new();
+    b.run("uuid-a", &["register", "--name", "alice"]);
+    b.run("uuid-b", &["register", "--name", "bob"]);
+    for subject in ["already-seen", "still-waiting"] {
+        b.run(
+            "uuid-a",
+            &["send", "bob", "--subject", subject, "--body", "b"],
+        );
+    }
+    // Acknowledged, so the two scopes genuinely differ — without this the test cannot tell them
+    // apart and would pass under both mutants (M17's fixture-never-reaches-the-branch).
+    let id = b.json("uuid-b", &["inbox"])["messages"][0]["id"]
+        .as_i64()
+        .expect("an id");
+    b.run("uuid-b", &["read", &id.to_string()]);
+
+    let path = b.cwd.parent().expect("parent").join("scope.md");
+    let arg = path.to_string_lossy().to_string();
+
+    b.run("uuid-b", &["snapshot", &arg]);
+    let unread = std::fs::read_to_string(&path).expect("read snapshot");
+    assert!(
+        unread.contains("## Unread —"),
+        "the default names its scope: {unread:?}"
+    );
+    assert!(
+        unread.contains("still-waiting"),
+        "and carries the unread one"
+    );
+    assert!(
+        !unread.contains("already-seen"),
+        "and not the acknowledged one: {unread:?}"
+    );
+
+    b.run("uuid-b", &["snapshot", &arg, "--all"]);
+    let all = std::fs::read_to_string(&path).expect("read snapshot");
+    assert!(
+        all.contains("## All mail —"),
+        "--all names its scope: {all:?}"
+    );
+    assert!(
+        all.contains("still-waiting") && all.contains("already-seen"),
+        "and carries both: {all:?}"
+    );
+}

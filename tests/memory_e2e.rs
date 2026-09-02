@@ -1043,6 +1043,16 @@ fn export_publishes_a_decision_into_the_repo_it_governs_and_detects_drift() {
         Some(65),
         "content, not a timestamp, decides"
     );
+    // **The count in that refusal is a number whose only reader is a person** (M56), and it was
+    // asserted nowhere: `st.stale.len() + st.missing.len()` could become `*` and print
+    // `0 exported decision(s) ... disagree` beside exit 65, because exactly one of the two is
+    // zero in every ordinary drift. One stale and none missing is the fixture that separates
+    // them — the same seam as `export.rs`'s `written` (M54), on this command's other lane.
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("1 exported decision(s)"),
+        "the refusal counts what actually drifted: {said}"
+    );
 
     // **The premise of an equivalent mutant, pinned so the claim cannot rot silently** (M27).
     //

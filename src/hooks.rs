@@ -848,6 +848,59 @@ pub struct Applied {
     pub retries: usize,
 }
 
+/// What `amb install`/`uninstall` prints after a cycle — the human half, as a string.
+///
+/// **This lived in `main.rs` and could not be tested there** (D78's rule, and its shape exactly:
+/// the function was in the binary because that is where `Cli` already was). Its retry line is a
+/// guard over a count, so all three of `> 0`'s relaxations survived mutation — `>= 0` announces
+/// contention on every quiet install, and `== 0` or `< 0` silences a real one, which is precisely
+/// what that line's own comment says must not happen (M56).
+///
+/// The JSON lane stays in the binary: it is a `serde_json` value assembled from `Cli`, and the
+/// stability contract over it is asserted where the binary is driven.
+pub fn render_applied(
+    done: &Applied,
+    path: &std::path::Path,
+    dry_run: bool,
+    label: &str,
+) -> String {
+    let plan = &done.plan;
+    let mut out = String::new();
+    // **Said, never swallowed** (D99). An unlocked write still happens — a filesystem without
+    // working advisory locks should not lose its install — but the one thing it must not do is
+    // report the same success as a locked one. This edits the file that configures Claude Code
+    // for every project on the machine.
+    if let Some(why) = &done.lock_error {
+        out.push_str(&format!(
+            "! could not lock {} ({why}) — the change was still written and still verified \
+             unchanged before replacing the file, but two amb processes could interleave\n",
+            path.display()
+        ));
+    }
+    if done.retries > 0 {
+        // Not a warning. It is the mechanism working, and staying silent about it would make a
+        // contended settings file indistinguishable from a quiet one.
+        out.push_str(&format!(
+            "  another process wrote {} first; re-read and re-applied ({} time(s))\n",
+            path.display(),
+            done.retries
+        ));
+    }
+    if plan.is_noop() {
+        out.push_str(&format!("no change needed in {}\n", path.display()));
+    } else {
+        let verb = if dry_run { "would update" } else { "updated" };
+        out.push_str(&format!("{verb} {}\n", path.display()));
+        for e in &plan.added {
+            out.push_str(&format!("  + {e} hook ({label})\n"));
+        }
+        for e in &plan.removed {
+            out.push_str(&format!("  - {e} hook\n"));
+        }
+    }
+    out
+}
+
 /// Read, plan and write `~/.claude/settings.json` as one guarded cycle (D99).
 ///
 /// **Two protections, because they cover different writers, and this was measured rather than
@@ -967,6 +1020,94 @@ fn write_if_unchanged(path: &Path, value: &Value, seen: Option<&str>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn applied(retries: usize, lock_error: Option<&str>, added: &[&str]) -> Applied {
+        Applied {
+            plan: Plan {
+                settings: json!({}),
+                added: added.iter().map(|s| (*s).to_string()).collect(),
+                removed: vec![],
+            },
+            locked: lock_error.is_none(),
+            lock_error: lock_error.map(str::to_string),
+            retries,
+        }
+    }
+
+    /// **A guard over a count, and all three relaxations survived** (M56). `done.retries > 0`
+    /// decides whether an install says it lost a race and re-applied. The line's own comment
+    /// states the stakes — silence would make a contended settings file indistinguishable from a
+    /// quiet one — and nothing asserted either half, so `>= 0` announced contention on every
+    /// quiet install and `== 0` / `< 0` silenced a real one.
+    ///
+    /// A truth table rather than needles, because both directions are the defect and the
+    /// `expected == true` rows prove the renderer reached the line at all (M27's premise trap).
+    #[test]
+    fn the_retry_line_appears_exactly_when_a_write_was_retried() {
+        let path = Path::new("/h/.claude/settings.json");
+        for (retries, want) in [(0, false), (1, true), (2, true)] {
+            let out = render_applied(&applied(retries, None, &["Stop"]), path, false, "turn");
+            assert_eq!(
+                out.contains("re-read and re-applied"),
+                want,
+                "retries={retries} produced {out:?}"
+            );
+            if want {
+                assert!(
+                    out.contains(&format!("({retries} time(s))")),
+                    "the count itself is reported, not just that there was one: {out:?}"
+                );
+            }
+        }
+    }
+
+    /// The other two lines the same renderer owns, and the reason they are asserted here rather
+    /// than through the binary: an unlocked write and a no-op are both states a test can build
+    /// and neither is a state a test can *provoke* — the lock failure needs a filesystem without
+    /// advisory locks, and both were unreachable while this code lived in `main.rs`.
+    #[test]
+    fn an_unlocked_write_says_so_and_a_no_op_says_nothing_else() {
+        let path = Path::new("/h/.claude/settings.json");
+
+        let noisy = render_applied(
+            &applied(0, Some("no locks here"), &["Stop"]),
+            path,
+            false,
+            "turn",
+        );
+        assert!(
+            noisy.starts_with("! could not lock"),
+            "the weaker write is flagged: {noisy:?}"
+        );
+        assert!(
+            noisy.contains("+ Stop hook (turn)"),
+            "and the change is still reported: {noisy:?}"
+        );
+
+        let quiet = render_applied(&applied(0, None, &["Stop"]), path, false, "turn");
+        assert!(
+            !quiet.contains("could not lock"),
+            "a locked write raises nothing: {quiet:?}"
+        );
+
+        let nothing = render_applied(&applied(0, None, &[]), path, false, "turn");
+        assert_eq!(
+            nothing,
+            format!("no change needed in {}\n", path.display()),
+            "a no-op says that and only that"
+        );
+
+        let dry = render_applied(&applied(0, None, &["Stop"]), path, true, "turn");
+        assert!(
+            dry.contains("would update"),
+            "a dry run is conditional: {dry:?}"
+        );
+        assert!(
+            !render_applied(&applied(0, None, &["Stop"]), path, false, "turn")
+                .contains("would update"),
+            "and a real one is not"
+        );
+    }
 
     /// The settings temp name must carry the pid, or two sessions interleave on one path.
     ///

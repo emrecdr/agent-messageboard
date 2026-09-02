@@ -567,3 +567,51 @@ fn a_stop_refire_is_answered_with_silence() {
         "a re-fire answered with context is a wake loop: {out}"
     );
 }
+
+/// **The `amb watch` hint is two conditions and both survived** (M56). It is appended only at
+/// `SessionStart` and only when the installed mode is `monitor`, because it tells the session to
+/// run a blocking command under its Monitor tool — advice that is wrong for a session whose
+/// hooks fire on `Stop`, and noise on every later event.
+///
+/// `&&` relaxed to `||` appends it to every `SessionStart` *and* every monitor-mode `Stop`;
+/// `== "monitor"` flipped to `!=` inverts which install gets it. A three-row truth table is the
+/// smallest fixture that separates them: turn+start kills the flip, monitor+stop kills the `||`,
+/// and monitor+start proves the line is reachable rather than absent for some other reason.
+#[test]
+fn the_watch_hint_reaches_a_monitor_session_at_start_and_nobody_else() {
+    let b = Board::new();
+    b.run("uuid-a", &["register", "--name", "alice"]);
+    b.run("uuid-b", &["register", "--name", "bob"]);
+
+    for (mode, payload, want, why) in [
+        (
+            "monitor",
+            START,
+            true,
+            "a monitor install is told how to get mail immediately",
+        ),
+        (
+            "turn",
+            START,
+            false,
+            "a turn install has no Monitor tool to run it under",
+        ),
+        (
+            "monitor",
+            STOP,
+            false,
+            "and the advice is for the opening of a session, not every turn",
+        ),
+    ] {
+        // Fresh mail per row: delivery is a log, so an offer already made is not re-rendered.
+        b.run("uuid-a", &["send", "bob", "--subject", "s", "--body", "b"]);
+        let (code, out) = b.hook("uuid-b", mode, payload);
+        assert_eq!(code, 0, "a hook must always succeed");
+        let text = injected(&out).unwrap_or_default();
+        assert_eq!(
+            text.contains("amb watch --timeout 300"),
+            want,
+            "{why} — mode={mode} payload={payload} produced {text:?}"
+        );
+    }
+}

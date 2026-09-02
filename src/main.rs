@@ -841,34 +841,7 @@ fn report_plan(
         }));
         return Ok(());
     }
-    if let Some(why) = &done.lock_error {
-        println!(
-            "! could not lock {} ({why}) — the change was still written and still verified \
-             unchanged before replacing the file, but two amb processes could interleave",
-            path.display()
-        );
-    }
-    if done.retries > 0 {
-        // Not a warning. It is the mechanism working, and staying silent about it would make a
-        // contended settings file indistinguishable from a quiet one.
-        println!(
-            "  another process wrote {} first; re-read and re-applied ({} time(s))",
-            path.display(),
-            done.retries
-        );
-    }
-    if plan.is_noop() {
-        println!("no change needed in {}", path.display());
-    } else {
-        let verb = if dry_run { "would update" } else { "updated" };
-        println!("{verb} {}", path.display());
-        for e in &plan.added {
-            println!("  + {e} hook ({label})");
-        }
-        for e in &plan.removed {
-            println!("  - {e} hook");
-        }
-    }
+    print!("{}", hooks::render_applied(done, path, dry_run, label));
     Ok(())
 }
 

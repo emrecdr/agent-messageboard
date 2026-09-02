@@ -4213,3 +4213,60 @@ Proven by its truth table rather than by its first green run: uncovered-and-sile
 uncovered-plus-claim fails naming file and line, negated-claim passes, and the truthful state
 passes. The middle row is the presence row — without it the other three prove only that a
 script that always exits 0 exits 0.
+
+## M58 · The nine survivors in the binary, and the extraction that made three of them testable
+
+**2026-09-02.** M56 left fourteen mutants standing and named them; nine were in `src/main.rs`,
+the file D9's exit-0 guarantee lives in. No new mutation run was needed — M56's report already
+names each one — so this is the guarding pass, every mutant applied by hand against the fixture
+written for it and reverted byte-identical.
+
+**All nine are dead.** The suite goes 589 → 594 on macOS, 591 → 596 on Linux.
+
+### Three of them could not be tested where they lived, which is D78's rule firing again
+
+`report_plan`'s retry line is guarded by `done.retries > 0`, and **all three relaxations
+survived** — `>= 0` announces contention on every quiet install, `== 0` and `< 0` silence a real
+one. The line's own comment says why that matters: staying silent "would make a contended
+settings file indistinguishable from a quiet one."
+
+It could not be asserted from a test, and not because nobody had tried. A retry happens only when
+another process writes `~/.claude/settings.json` between this one's read and its write — a race
+a test cannot stage. The function was in `main.rs` for D78's exact reason, too: it needed `Cli`,
+and the binary is where `Cli` already was.
+
+So the human half moved to `hooks::render_applied`, pure, taking `(&Applied, &Path, bool, &str)`
+and returning a `String`; the JSON lane stayed in the binary, where the stability contract over
+it is asserted by driving the binary. The truth table over `retries` then kills all three, and
+two lines that had never been asserted at all — the unlocked-write warning and the no-op —
+came with it. **`main.rs` is 34 lines shorter and the rule it broke is kept again.**
+
+### The other six were reachable and simply unasserted
+
+- **`!taken.conflicts.is_empty()`** guards the sentence telling an agent what a conflict *means*.
+  Claims are advisory (D5), so that line is the entire remedy the tool offers — and dropping the
+  `!` prints it on every uncontended claim, where there is nobody to message, while silencing it
+  on the one claim that has a holder to warn about.
+- **`!all` twice, in `snapshot`.** One `!` chooses what `messages::inbox` collects, the other
+  what the document calls itself (`Unread` / `All mail`). Either could be inverted alone, and
+  both are M28's shape: a file headed `Unread` listing acknowledged mail, or one headed
+  `All mail` missing everything read. The fixture has to acknowledge a message, or the two
+  scopes are identical and the test passes under both mutants (M17).
+- **`is_start && mode == "monitor"`**, two mutants. The `amb watch` hint is advice to run a
+  blocking command under a Monitor tool; `||` appends it to every `Stop` as well, `!=` sends it
+  to exactly the installs that cannot use it. Three rows separate them, and the positive row
+  proves the line is reachable rather than absent for some other reason.
+- **`st.stale.len() + st.missing.len()`** is **the counter seam's fifth sighting**, on the
+  `--check` lane of the same command whose `written` was the fourth (M54). As `*` it prints
+  `0 exported decision(s) ... disagree with the vault` beside exit 65, because in ordinary drift
+  exactly one of the two is zero. The existing test asserted the exit code and never the
+  sentence — which is the seam stated precisely: the number reaching the person was the part
+  nothing checked.
+
+### What this leaves
+
+M56's other five are in `memory/index.rs`: the cycle-break `==` in `history` (two) and
+`validate_links` (one), and `sync_dir`'s `CANDIDATE` match guard with its `Scope::Project` arm.
+`main.rs` is clear. The crate's inventory of *rounds* was closed by M57's derived check; this
+closes the binary's inventory of *survivors*, which is a different question and the one that
+decides whether a round produced anything.

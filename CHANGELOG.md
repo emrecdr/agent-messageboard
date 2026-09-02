@@ -11,6 +11,17 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **The nine surviving mutants in `src/main.rs` are guarded, and three of them needed the
+  binary's rendering moved into the library first** (M58). `report_plan`'s retry line is a guard
+  over a count whose three relaxations all survived, and it could not be asserted where it lived:
+  a retry needs another process to write `~/.claude/settings.json` mid-cycle, which a test cannot
+  stage. The human half is now `hooks::render_applied` — pure, unit-tested by truth table — and
+  the unlocked-write warning and the no-op line got their first assertions with it. `main.rs` is
+  34 lines shorter, which is D78's rule kept rather than restated. Also guarded: the advisory
+  sentence on a contended claim, `snapshot`'s unread filter *and* its scope label (either could
+  be inverted alone), the `amb watch` hint's two conditions, and `export --check`'s drift count —
+  the human-report counter seam's **fifth** sighting, on the sibling lane of M54's fourth.
+
 - **`tools/check_mutation_coverage.py` — the completeness claim made derivable** (M57). "Every
   module has been mutation-tested" was asserted three times in one day and was wrong all three
   times: M55's claim was three files short, the correction that caught it was short by one, and
