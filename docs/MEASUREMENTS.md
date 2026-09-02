@@ -4065,6 +4065,11 @@ and only a count assertion at the caller's distance catches it.
 > recorded rather than quietly closed, because **a completeness claim is the one kind that stops
 > the next person looking.**
 
+**Modules:** `src/memory/id.rs`, `src/memory/text.rs`, `src/memory/topics.rs`,
+`src/memory/config.rs`, `src/address.rs`, `src/duration.rs`, `src/version.rs`, `src/error.rs` —
+spelled out because the prose below named them with brace expansion, which no parser can read
+and which is why `tools/check_mutation_coverage.py` reported all eight as never mutated.
+
 **2026-09-02.** `tools/mutants.sh` over every module never exhaustively mutated —
 memory/{id,text,topics,config}, address, duration, version, error — 1,912 lines in one
 invocation: one cold build, one baseline, deliberately, because the machine hit ENOSPC three
@@ -4164,3 +4169,47 @@ gated to `target_os = "linux"`, so CI's other leg is the assertor — which is w
 `run_memory`. `main.rs` is the binary carrying D9's exit-0 guarantee; it is behaviourally guarded
 by sixteen `code == 0` assertions in `tests/hook_safety.rs` and has still never had its
 *decisions* mutated, which is the gap this run measured rather than closed.
+
+## M57 · The completeness claim made derivable, after being made falsely three times
+
+**Modules:** `src/memory/note.rs` — re-run, 27 mutants, 24 caught, 3 unviable, **0 missed**
+(M27 measured 24 viable with 1 missed on 2026-08-30; that survivor is gone).
+
+**2026-09-02.** Not a hardening round. `tools/check_mutation_coverage.py` exists because
+*"every module has been mutation-tested"* was asserted three times in one day and was wrong all
+three, by two sessions and one tool:
+
+1. **M55 claimed the crate-wide inventory closed.** It was three files short —
+   `memory/index.rs`, `main.rs`, `memory/note.rs` — because it enumerated from the rounds its
+   author remembered running rather than from the filesystem. The claim reached CHANGELOG, a
+   commit message and the board before anyone checked it.
+2. **The correction that caught it was itself short by one.** It spot-checked the two files it
+   suspected, found them genuinely uncovered, and did not run the set-difference; `note.rs`
+   sat unmentioned in both the wrong claim and its correction. (M56 then closed the two, which
+   is when the inventory *actually* closed.)
+3. **The checker written to end this made the same error on its first run.** Its parser read
+   one of the record's three formats — the `tools/mutants.sh <paths>` invocation — and M27
+   records its four modules in a **score table** instead. So it reported `note.rs` as never
+   mutated, and that output went out on the board before being checked against the document
+   it had just parsed. A second bug in the same function stopped a `**Modules:**` block at its
+   first line and reported five of one round's eight modules as uncovered.
+
+**The shape, which is the reusable part.** Every instance is a *completeness* claim — "every",
+"all", "closed" — and completeness is the one kind of claim that cannot be verified by looking
+at what you have; it can only be verified by set-differencing against what exists. Each of the
+three parties looked at a list of things that *had* happened and concluded nothing was missing.
+The record's three formats made that easy, but the format was the occasion, not the cause.
+
+**What the script does, and deliberately does not do.** It derives the covered set from all
+three forms plus an explicit `**Modules:**` block, subtracts two zero-mutant exemptions that
+carry both a reason and the command that verifies them, and prints the difference. **An
+uncovered module is never a failure** — mutation is not a commit gate and `mutants.sh`'s header
+says why. What fails is a current-state document asserting closure while the set-difference
+disagrees; `docs/MEASUREMENTS.md` is excluded from that policing because it is an append-only
+log where M55's own title stands with its correction beneath it. Negation-aware, so an honest
+*"the inventory does not close yet"* passes.
+
+Proven by its truth table rather than by its first green run: uncovered-and-silent passes,
+uncovered-plus-claim fails naming file and line, negated-claim passes, and the truthful state
+passes. The middle row is the presence row — without it the other three prove only that a
+script that always exits 0 exits 0.

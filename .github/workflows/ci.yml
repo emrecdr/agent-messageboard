@@ -90,4 +90,5 @@ jobs:
         run: |
           python3 tools/check_docs.py
           python3 tools/find_unread_fields.py
+          python3 tools/check_mutation_coverage.py
           python3 tools/check_secret_literals.py

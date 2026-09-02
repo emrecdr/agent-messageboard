@@ -100,6 +100,7 @@ run "cargo clippy --locked --all-targets" cargo clippy --locked --all-targets --
 run "cargo test --locked"        cargo test --locked --quiet
 run "tools/check_docs.py"        python3 tools/check_docs.py
 run "tools/find_unread_fields.py" python3 tools/find_unread_fields.py
+run "tools/check_mutation_coverage.py" python3 tools/check_mutation_coverage.py
 run "tools/check_secret_literals.py" python3 tools/check_secret_literals.py
 
 if [ ${#failed[@]} -ne 0 ]; then

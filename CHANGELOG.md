@@ -11,6 +11,16 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`tools/check_mutation_coverage.py` — the completeness claim made derivable** (M57). "Every
+  module has been mutation-tested" was asserted three times in one day and was wrong all three
+  times: M55's claim was three files short, the correction that caught it was short by one, and
+  the checker written to end it repeated the error on its first run by reading one of the
+  record's three formats. It now set-differences `src/**/*.rs` against every recorded round,
+  carries two zero-mutant exemptions with the command that verifies them, and fails the gate
+  only when a current-state document claims closure the difference denies — an uncovered module
+  is printed and forgiven, because mutation is deliberately not a gate. Proven by a four-row
+  truth table including the row where it fires. The inventory did close, at M56.
+
 - **`src/memory/index.rs` and `src/main.rs` under exhaustive mutation — the two files the
   inventory had missed** (M56). 140 mutants, 34 missed; eighteen now guarded by six tests.
   Fifteen of the 34 were `+=` on `IndexStats` counters that could become `*=` and stay zero
@@ -36,7 +46,7 @@ and why the on-disk schema is deliberately not one of them.
   exact-boundary rows for every render unit, id-grammar truth tables, two more env-shell seams,
   and the error cause-chain read for the first time. One equivalent mutant kept with its
   reasoning; one wrong equivalence claim of mine caught by applying the mutant instead of
-  believing the argument. **The crate-wide inventory does not close yet** — `memory/index.rs`
+  believing the argument. **The crate-wide inventory did not close here** — `memory/index.rs`
   (79 mutants) and `main.rs` (61) have never been in a round, while `lib.rs` and the `memory.rs`
   facade are exempt because they generate none at all.
 
