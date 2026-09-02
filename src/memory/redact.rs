@@ -628,6 +628,68 @@ mod tests {
     /// The residual hole an enumeration always has — a fifth removal path added without an
     /// increment — is closed separately by `changing_the_text_always_costs_a_count`, which does
     /// not need to know which path ran.
+    /// **A measurement after a sensitive key is kept, whatever wraps it** — and the wrapping
+    /// never counts toward the length that convicts. Nine M53 survivors sat on this boundary:
+    /// the armed-path and inline trims could stop stripping quotes and commas (`|| -> &&`, one
+    /// mutant per character), so a seven-character value read as nine and was redacted, and
+    /// `substantial`'s conjunction could relax so an all-digit value — a measurement, the thing
+    /// the rule exists to keep — was convicted by length alone. Every row asserts both halves
+    /// of the seam M27 named: the text is unchanged *and* the count the author reads is zero.
+    #[test]
+    fn a_measurement_after_a_sensitive_key_is_kept_whatever_wraps_it() {
+        for text in [
+            // Armed path: key, separator, then the value as its own token.
+            concat!("pass", "word: \"hunter7\""),
+            concat!("pass", "word: 'hunter7'"),
+            concat!("pass", "word: hunter7,"),
+            concat!("pass", "word: 1234567890"),
+            // Inline path: one key=value token.
+            concat!("api", "_key=\"short12\""),
+            concat!("api", "_key='short12'"),
+            concat!("api", "_key=12345678901"),
+        ] {
+            let r = redact(text);
+            assert_eq!(r.text, text, "kept verbatim: {text:?}");
+            assert_eq!(
+                r.removed, 0,
+                "and the author is told nothing happened: {text:?}"
+            );
+        }
+    }
+
+    /// **The length floor holds at its boundary, and the dot exemption is charset-independent.**
+    /// M53's `len < 40 || contains('.')` -> `&&` flip was first "killed" with a dotted long
+    /// token — wrongly: the dot also fails the charset gate below, so that row is rejected under
+    /// both codes and sees nothing (M17's fixture-never-reaches lesson, caught here because the
+    /// hand-applied mutant stayed green). The flip's real difference is the floor collapsing: a
+    /// 39-character opaque run gets entropy-checked where the real gate stops it. So the killer
+    /// is the boundary row; the dotted row stays as the documented filename exemption, and the
+    /// 40-character dotless twin proves the fixture family crosses every other gate.
+    #[test]
+    fn the_entropy_length_floor_holds_at_its_own_boundary() {
+        let just_under = format!("Ab9{}", "xY7w".repeat(9)); // 39 chars, opaque, mixed case
+        let r = redact(&just_under);
+        assert_eq!(
+            r.text, just_under,
+            "under the floor is a name, not a secret"
+        );
+        assert_eq!(r.removed, 0);
+
+        let dotted = format!("Ab9{}.rs", "xY7w".repeat(10));
+        assert_eq!(
+            redact(&dotted).removed,
+            0,
+            "the dot exempts a filename at any length"
+        );
+
+        let dotless = format!("Ab9{}", "xY7w".repeat(10)); // 43 chars
+        assert_eq!(
+            redact(&dotless).removed,
+            1,
+            "the dotless twin over the floor is caught — the family reaches every other gate"
+        );
+    }
+
     #[test]
     fn every_removal_path_is_counted_where_the_author_will_read_the_count() {
         for (path, input) in [

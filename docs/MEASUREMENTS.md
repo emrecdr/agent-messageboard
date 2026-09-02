@@ -3986,3 +3986,45 @@ A survivor that is *equivalent under a data invariant* is a new row in the catal
 weak test nor a mistargeted mutation, but a guard whose only observable input is a state the
 system cannot produce. The choice is delete the guard or pin it with an impossible fixture that
 owns its impossibility — deleting fail-safe defense on an instrument was the wrong half.
+
+## M53 · redact.rs: thirteen survivors on the security module, and one of my kills was wrong the first time
+
+**2026-09-02.** `tools/mutants.sh src/memory/redact.rs` — D46's named shapes and the counter
+whose silence M27 named. First run under 8× ambient load (a Flutter dev loop and macOS media
+indexing, no cargo): baseline 39s + 329s, ceiling auto-set to 988s, **zero timeouts** — the
+relative-timeout design absorbing exactly the condition that voided a fixed ceiling in its
+header's history. 74 minutes instead of ~15, all of it honest.
+
+**87 mutants: 73 caught, 1 unviable, 13 missed.** Nine were one boundary told three ways — the
+line where "credential" and "measurement" separate:
+
+- **The wrapping counted toward the length that convicts.** Both value-trims (armed path and
+  inline) could stop stripping quotes and commas, one mutant per character, so a seven-character
+  value read as nine and was redacted. No fixture had ever put a *short* value in quotes after a
+  sensitive key.
+- **`substantial` could convict by length alone** (`-> true`, `&& -> ||`): an all-digit value —
+  the measurement the rule exists to keep — after a sensitive key had no fixture either.
+- **The entropy length floor had no boundary row**, and my first kill for it was wrong: a dotted
+  long token is rejected by the charset gate under both codes, so the "dot exemption" row saw
+  nothing. The hand-applied mutant staying green is what caught it — M17's fixture-never-reaches
+  lesson, this time in a guard being written, found only because every kill here is re-applied
+  before being believed. The real killer is a 39-character opaque run: under the flip the floor
+  collapses and it gets entropy-checked.
+
+**Four are equivalent, and the honesty check ran both ways.** The `!= -> ==` flips in the two
+key-cleaners change only which edge characters are trimmed before a `contains()` against
+`SENSITIVE_KEYS` — and end-trimming cannot destroy an internal substring match in either
+direction, dashed keywords included. One was hand-applied against the *full* suite and survived,
+confirming the analysis rather than assuming it. Named residue, not fake guards: a fixture that
+kills them does not exist.
+
+Every row asserts both halves of M27's seam — text unchanged *and* `removed == 0` — because on
+this module a wrong count is not bookkeeping, it is a redaction the author was never told about.
+
+**The confirming re-run was interrupted and the round does not lean on it.** Launched at load
+2.6, killed mid-build when the machine climbed back past 11 — an interrupted run is void as a
+score (M17's rule, applied to our own instrument). The evidence of record is stronger per
+mutant than a batch score: the complete first run, each of the nine killable survivors
+re-applied by hand and seen red against its own guard, and one claimed-equivalent re-applied
+against the *entire* lib suite and seen survive. The partial re-run corroborates where it got:
+its one logged MISSED before the interrupt is one of the four predicted-equivalent trim flips.

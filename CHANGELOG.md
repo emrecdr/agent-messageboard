@@ -11,6 +11,16 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`memory/redact.rs` under exhaustive mutation: thirteen missed, nine now guarded, four named
+  equivalent** (M53). Nine sat on the one boundary the module exists to draw — quotes and commas
+  counted toward the length that convicts a value, `substantial` could convict an all-digit
+  measurement, and the entropy floor had no boundary row (the first kill written for it was
+  itself wrong, caught by re-applying the mutant before believing the guard). The four `!= ->
+  ==` trim flips are equivalent — end-trimming cannot destroy an internal `contains()` match
+  against the keyword list — verified by surviving the full suite by hand, and recorded rather
+  than faked away. Every guard asserts text unchanged *and* `removed == 0`: on this module a
+  wrong count is a redaction the author was never told about.
+
 - **`memory/events.rs` under exhaustive mutation: 89 of 90 viable caught on the first pass**
   (M52) — the instrument module's D89–D95 truth-table discipline corroborated by machine. The
   one survivor was equivalent under the lane/session invariant and is now pinned by an
