@@ -52,6 +52,16 @@ fn session_key() -> Option<String> {
     let raw = std::env::var("AMB_AGENT")
         .or_else(|_| std::env::var("CLAUDE_CODE_SESSION_ID"))
         .ok()?;
+    sanitise_key(&raw)
+}
+
+/// The filesystem-safe form of one session's key, or `None` when nothing usable remains.
+///
+/// Extracted from the env shell above so the charset rule is testable without touching the
+/// process environment — the M51 pass found the whole marker shell unguarded: every mutant of
+/// this map and of the emptiness gate survived, because only the path-injected reader below it
+/// had tests.
+fn sanitise_key(raw: &str) -> Option<String> {
     let safe: String = raw
         .chars()
         .map(|c| {
@@ -74,21 +84,34 @@ pub fn note_failure() -> i64 {
     let Some(path) = failure_marker() else {
         return 0;
     };
-    let n = std::fs::read_to_string(&path)
+    bump_marker(&path)
+}
+
+/// Read-increment-write one marker. Unreadable or garbage content restarts from zero rather
+/// than failing — the counter must never be the thing that breaks (D9). Path-injected for the
+/// same reason as [`worst_recent_marker`]: the M51 pass proved the env shell alone left every
+/// mutant of this arithmetic alive.
+fn bump_marker(path: &std::path::Path) -> i64 {
+    let n = std::fs::read_to_string(path)
         .ok()
         .and_then(|s| s.trim().parse::<i64>().ok())
         .unwrap_or(0)
         + 1;
-    let _ = std::fs::write(&path, n.to_string());
+    let _ = std::fs::write(path, n.to_string());
     n
 }
 
 /// Record that this session's memory hook succeeded. Clears its own count — and only its own,
 /// which is the point of D108 — so the threshold means *consecutive*.
 pub fn note_success() {
-    if let Some(path) = failure_marker()
-        && path.exists()
-    {
+    if let Some(path) = failure_marker() {
+        clear_marker(&path);
+    }
+}
+
+/// Remove one marker; absent is already the goal state, not an error.
+fn clear_marker(path: &std::path::Path) {
+    if path.exists() {
         let _ = std::fs::remove_file(path);
     }
 }
@@ -552,11 +575,16 @@ mod tests {
             r#"{"tool_name":"Edit","tool_input":{"file_path":"/repo/src/b.rs"}}"#,
             r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"},"is_error":true}"#,
             r#"{"tool_name":"Read","tool_input":{"file_path":"/elsewhere/c.rs"}}"#,
+            // Both rows of the *other* failure signal. The `status == "error"` arm was reached
+            // by no fixture — every failure here came in through `is_error`, so flipping that
+            // comparison survived the suite (M51, M17's shape).
+            r#"{"tool_name":"Bash","tool_input":{"command":"sqlite3 broke"},"status":"error"}"#,
+            r#"{"tool_name":"Bash","tool_input":{"command":"cargo fmt"},"status":"success"}"#,
         ]
         .join("\n");
         let f = parse_transcript(&text, "/repo");
-        assert_eq!(f.failures, vec!["cargo test"]);
-        assert_eq!(f.tools, 4);
+        assert_eq!(f.failures, vec!["cargo test", "sqlite3 broke"]);
+        assert_eq!(f.tools, 6);
     }
     #[test]
     fn a_transcript_in_an_unrecognised_shape_yields_nothing_rather_than_failing() {
@@ -627,6 +655,69 @@ mod tests {
 
     /// The filename is the session key, so two sessions cannot clear each other's count —
     /// and no session at all degrades to the shared pre-D108 name rather than to a panic.
+    /// The marker's whole lifecycle, against a real file: consecutive counts, garbage
+    /// restarting from one, and cleared meaning the count starts over. Every one of these rows
+    /// is a mutant that survived M51 — `note_failure` could return 0, 1 or -1, its `+` could be
+    /// `-` or `*`, and `note_success` could do nothing, because only the pure readers had tests.
+    #[test]
+    fn the_marker_counts_consecutively_and_clearing_restarts_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p = dir.path().join(".memory-failures-x");
+        assert_eq!(bump_marker(&p), 1);
+        assert_eq!(bump_marker(&p), 2);
+        assert_eq!(bump_marker(&p), 3, "consecutive, not idempotent");
+        std::fs::write(&p, "not a number").expect("garbage");
+        assert_eq!(
+            bump_marker(&p),
+            1,
+            "garbage restarts the count rather than failing"
+        );
+        clear_marker(&p);
+        assert!(!p.exists(), "cleared is gone");
+        clear_marker(&p); // absent is the goal state, not an error
+        assert_eq!(bump_marker(&p), 1, "cleared means consecutive starts over");
+    }
+
+    /// The charset map row by row: kept, mapped, truncated, refused.
+    #[test]
+    fn a_session_key_is_made_filesystem_safe_or_refused() {
+        assert_eq!(
+            sanitise_key("uuid.broken/x"),
+            Some("uuid-broken-x".into()),
+            "anything outside [a-zA-Z0-9_-] becomes a dash"
+        );
+        assert_eq!(
+            sanitise_key("a_b-1"),
+            Some("a_b-1".into()),
+            "underscore and dash pass through"
+        );
+        assert_eq!(
+            sanitise_key(""),
+            None,
+            "nothing usable is None, never Some(\"\")"
+        );
+        let long = sanitise_key(&"a".repeat(70)).expect("long keys are truncated, not refused");
+        assert_eq!(long.len(), 64);
+    }
+
+    /// **Zero offers is no data, not a low rate** — the number D49's withdrawal condition is
+    /// read off. `> 0` relaxing to `>= 0` turns "nothing has been offered" into `0/0`, and the
+    /// division flipping to `*` turns one decline in two offers into 2.00; both survived M51.
+    #[test]
+    fn a_decline_rate_over_zero_offers_is_no_data_not_a_low_rate() {
+        let two = PhaseReceipts {
+            promoted: 1,
+            declined: 1,
+            ..PhaseReceipts::default()
+        };
+        assert_eq!(two.decline_rate(), Some(0.5));
+        assert_eq!(
+            PhaseReceipts::default().decline_rate(),
+            None,
+            "a rate over zero offers would read as approval-become-reflex"
+        );
+    }
+
     #[test]
     fn the_marker_is_keyed_by_session() {
         assert_eq!(marker_name(Some("abc-123")), ".memory-failures-abc-123");

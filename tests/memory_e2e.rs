@@ -2274,3 +2274,119 @@ fn the_json_promise_holds_on_the_gate_arms() {
     let gate = b.mem_json("uuid-alice", &["memory", "promote", id, "--direct"]);
     assert_eq!(gate["written"], serde_json::Value::Bool(false), "{gate}");
 }
+
+/// **D108, end to end: a broken session's count survives everyone else's successes, and its
+/// warning rides a healthy session's output — the only channel it has.**
+///
+/// M51 found the entire marker shell unguarded: `note_failure` could return constants,
+/// `note_success` could do nothing, `session_key` could return `None`, and the staleness window
+/// could be a day instead of a month, all green — the pure readers had tests and the env/file
+/// layer had none. This drives the real binary through the whole chain: the marker lands beside
+/// the board under the sanitised session name, counts consecutively, ignores a stale corpse,
+/// is untouched by another session's success, and is cleared only by its own.
+#[test]
+fn a_broken_sessions_warning_rides_a_healthy_sessions_success() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let hook_with_vault = |b: &Board, agent: &str, vault: &std::path::Path, payload: &str| {
+        let mut c = b.cmd(agent);
+        c.env("AMB_VAULT", vault)
+            .args(["hook", "memory"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = c.spawn().expect("spawn");
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(payload.as_bytes())
+            .expect("write");
+        let out = child.wait_with_output().expect("wait");
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    };
+
+    let b = Board::new();
+    b.mem("uuid-fine", &["memory", "status"]); // the board must exist
+    observe(
+        &b,
+        "uuid-fine",
+        "a lesson",
+        "src/a.rs",
+        "the healthy session has something to inject",
+    );
+
+    // A two-day-old marker from a session that is gone: fresh enough to count. This is the one
+    // row that reaches the staleness *wiring* — the window constant's `30 * 86_400` could become
+    // `+` (about a day) or `/` (zero) and nothing reddened, because the reader's tests inject
+    // their own age.
+    let board_dir = std::path::Path::new(&b.db)
+        .parent()
+        .expect("board dir")
+        .to_path_buf();
+    let corpse = board_dir.join(".memory-failures-oldsess");
+    std::fs::write(&corpse, "9").expect("corpse");
+    let two_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 86_400);
+    std::fs::File::options()
+        .write(true)
+        .open(&corpse)
+        .expect("open corpse")
+        .set_modified(two_days_ago)
+        .expect("age corpse");
+    let (code, out) = b.mem_hook("uuid-fine", START);
+    assert_eq!(code, 0);
+    assert!(
+        out.contains("failed 9 times in a row"),
+        "a two-day-old marker is a live outage, not residue: {out}"
+    );
+    std::fs::remove_file(&corpse).expect("clean up the corpse");
+
+    // Three failing captures from one session — the vault is a file, so every write fails while
+    // the board stays healthy. The dot in the name exercises the sanitiser through the shell.
+    let broken_vault = b.cwd.join("not-a-vault");
+    std::fs::write(&broken_vault, "a file where a directory belongs").expect("plant");
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUseFailure",
+        "tool_name": "Bash",
+        "tool_input": { "command": "cargo test" },
+        "error": "boom",
+    })
+    .to_string();
+    for _ in 0..3 {
+        let (code, _) = hook_with_vault(&b, "uuid.broken", &broken_vault, &payload);
+        assert_eq!(code, 0, "a failing capture still exits 0 (D9)");
+    }
+    let marker = board_dir.join(".memory-failures-uuid-broken");
+    assert_eq!(
+        std::fs::read_to_string(&marker)
+            .expect("the marker exists")
+            .trim(),
+        "3",
+        "beside the board, named for the sanitised session, counting consecutively"
+    );
+
+    // The warning travels through a *healthy* session's success path — and that success clears
+    // only its own count, which is the whole of D108.
+    let (code, out) = b.mem_hook("uuid-fine", START);
+    assert_eq!(code, 0);
+    assert!(out.contains("failed 3 times in a row"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(&marker)
+            .expect("still there")
+            .trim(),
+        "3",
+        "another session's success must not reset a broken session's count"
+    );
+
+    // Healed — the same session, a working vault — clears its own marker and no error remains.
+    let (code, _) = hook_with_vault(&b, "uuid.broken", &b.vault, START);
+    assert_eq!(code, 0);
+    assert!(
+        !marker.exists(),
+        "its own success is the only thing that clears a session's count"
+    );
+}

@@ -11,6 +11,15 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`memory/capture.rs` under exhaustive mutation: 23 missed on the first run, zero on the
+  re-run** (M51). D108's marker machinery was tested exactly down to its injection seam and no
+  further — the path-injected reader held while `note_failure`, `note_success`, `session_key`
+  and the staleness window's arithmetic could all be gutted, green. The writers now have injected
+  cores with row-by-row tables, the transcript fixture reaches the `status == "error"` arm in
+  both directions, `decline_rate` refuses `0/0`, and one e2e drives the whole D108 story through
+  the real binary: the corpse marker that still counts, the sanitised session name beside the
+  board, the warning riding a healthy session's output, and a heal clearing only its own count.
+
 - **The reached-assertion audit, run over every limit-like constant** (D102's discipline applied
   outside the property file). Twenty-three caps and thresholds swept against how their tests size
   fixtures: the property suite's seven floors are complete, `sync_dir`'s bound is

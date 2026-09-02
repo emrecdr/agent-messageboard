@@ -3924,3 +3924,39 @@ mid-edit hooks.rs and did not compile, so the guard and all eight hand-mutants r
 files were never touched — the stash-around offer was declined on principle. The M-number
 collision (their in-flight M49) was caught by reading their diff before writing this entry,
 which is what the #65 collision from history says to do.
+
+## M51 · capture.rs: the worst score of the session, and every miss in the layer the tests injected around
+
+**2026-09-02.** `tools/mutants.sh src/memory/capture.rs` — D108's day-old rewrite plus the
+transcript parser and the phase receipts. Peer held cargo; quiet machine, zero timeouts.
+
+**First run: 85 mutants in 13m — 55 caught, 23 missed, 7 unviable.** The worst viable score of
+any module this session (55/78), and the misses are one story told three times:
+
+- **Twenty sat in the marker shell** — `note_failure` could return 0, 1 or −1, its `+` could be
+  `−` or `*`, `note_success` could do nothing, `session_key` could return `None`, `Some("")` or
+  `Some("xyzzy")`, every charset comparison could flip, and the staleness window's `30 * 86_400`
+  could become a day or zero. All green. D108 shipped `worst_recent_marker` path-injected *for
+  testability* and tested it well — and every function above the injection seam was naked. The
+  seam is where the tests stopped, which is M50's free_slug finding one module over: the pure
+  half guarded, the I/O half trusted.
+- **`parse_transcript`'s `status == "error"` arm was reached by no fixture** — every failure in
+  the fixture came in through `is_error`, so the comparison could flip and the suite stayed
+  green. M17's shape, fourth sighting.
+- **`decline_rate`'s two mutants are M27's count-guard class on the number D49's withdrawal is
+  read off**: `> 0` relaxing to `>= 0` turns "nothing offered" into `0/0`, and `/` becoming `*`
+  turns one decline in two offers into 2.00.
+
+The guards: `sanitise_key`, `bump_marker` and `clear_marker` extracted as injected cores with
+row-by-row unit tables (the same move D108 made for the reader, finished for the writers); a
+transcript fixture carrying both `status` rows; a two-row decline-rate table; and one e2e that
+drives the real binary through the whole D108 story — a two-day-old corpse marker counts and a
+sanitised dotted session name lands beside the board, three failures count consecutively, the
+warning rides a *healthy* session's SessionStart, that session's success clears nothing of the
+broken one's, and the broken session's own healed run clears only its own. Five representative
+mutants hand-applied and seen red, reverts byte-identical; then the whole module re-run by
+machine.
+
+**Re-run after the guards: 91 mutants in 17m — 85 caught, 6 unviable, zero missed, zero
+timeouts.** 55 of 78 viable becomes 85 of 85; the guard tests themselves added six mutants of
+new surface and every one of those died too.
