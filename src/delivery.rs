@@ -17,14 +17,24 @@ use std::fmt::Write as _;
 ///
 /// Borrowed from `hcom`, which injects a CLI primer at launch for the same reason: an agent
 /// that receives mail but does not know `amb reply` exists can read but not answer.
+///
+/// **The claim verbs were missing for the same reason `reply` would have been missed** (D58,
+/// D91). Claims are one of the three things this tool does, and an agent met them only
+/// *reactively* — the `PostToolUse` hook records what it edits, and a conflict block warns it
+/// after the fact. Neither `amb claims` (who is here now) nor `amb claim` (say what you are
+/// starting) appeared anywhere an agent reads, so the proactive half of D5 was reachable only
+/// by a human with `--help` open. Two lines of permanent context tax, spent because a
+/// capability nobody can invoke is not a capability.
 pub const PRIMER: &str = "\
 [amb] You are on the agent messageboard. Other Claude sessions on this machine can reach you.
-  amb inbox                      what is waiting for you
+  amb inbox [--unread]           what is waiting for you (--unread hides what you have read)
   amb read <id>                  acknowledge one (only this marks it read)
   amb reply <id> --body \"...\"     answer its sender
-  amb send <to> --subject S --body B
+  amb send <to> --subject S --body B      (--body-file F for anything long or multi-line)
       <to> is  alice  ·  alice@otherproject  ·  @  (everyone here)  ·  @@  (everyone, everywhere)
   amb agents                     who else is on the board
+  amb claims                     who else is editing these files right now
+  amb claim <path> --intent \"...\"  say what you are about to work on — advisory, never blocks
 Add --json to any command for structured output.";
 
 /// The longest a quoted field is rendered before it is cut.
@@ -972,6 +982,34 @@ mod tests {
     /// the conflicts-to-mail join only; the primer-to-conflicts join is the same guard, three
     /// lines up, and was still open. That is the pattern D86, D88 and D90 each record.
     ///
+    /// **The cheat sheet is the whole API for an agent that never runs `--help`** (U8).
+    ///
+    /// A heavy session reported three costs, all from this string: it re-read acknowledged mail
+    /// because `--unread` was not here, it mangled two bodies through shell quoting because
+    /// `--body-file` was not here, and it never claimed a file because `claim` was not here.
+    /// The third is the worst of them — claims are one of the three things this tool does, and
+    /// the most careful agent on that board announced its file scope in *prose in a message
+    /// body* while the structured mechanism sat one undocumented verb away. A claims table with
+    /// one participant is worse than none, because the next reader trusts it.
+    ///
+    /// The non-guarantee travels with the verb: an agent told to claim without being told it
+    /// blocks nobody will either over-trust the list or avoid the feature (D5).
+    #[test]
+    fn the_primer_teaches_the_verbs_an_agent_cannot_find_anywhere_else() {
+        for taught in ["amb claims", "amb claim <path>", "--unread", "--body-file"] {
+            assert!(
+                PRIMER.contains(taught),
+                "{taught:?} exists, is agent-runnable, and appears nowhere an agent reads: \
+                 {PRIMER}"
+            );
+        }
+        assert!(
+            PRIMER.contains("never blocks"),
+            "naming the claim verb without its non-guarantee invites exactly the over-trust D5 \
+             refuses to build: {PRIMER}"
+        );
+    }
+
     /// Under the mutants the primer runs straight into the conflict header on one line, or the
     /// banner opens on a blank line — neither crashes, and this is the banner every session on
     /// this machine reads first.

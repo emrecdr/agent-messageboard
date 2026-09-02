@@ -61,10 +61,32 @@ pub fn resolve_recipient(conn: &Connection, to: &Address, me: &Identity) -> Resu
             agent_id: Some(id),
             project,
         }),
-        None => Err(Error::NoSuchAgent {
-            name: name.to_string(),
-            project: scope,
-        }),
+        None => {
+            // **The error knows the answer and used to withhold it** (U8). The same name is
+            // usually registered one project over — that is what makes it worth typing — and the
+            // row that proves it is one query away. D26's `nearest` covers a *typo*; this is the
+            // exact name in the wrong scope, which no edit distance can reach.
+            let elsewhere: Option<String> = conn
+                .query_row(
+                    "SELECT project FROM agents WHERE name = ?1 AND project <> ?2
+                      ORDER BY last_seen DESC LIMIT 1",
+                    params![name, scope],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(sql("looking for the agent in another project"))?;
+            Err(match elsewhere {
+                Some(other) => Error::AgentInAnotherProject {
+                    name: name.to_string(),
+                    project: scope,
+                    elsewhere: other,
+                },
+                None => Error::NoSuchAgent {
+                    name: name.to_string(),
+                    project: scope,
+                },
+            })
+        }
     }
 }
 
@@ -139,6 +161,12 @@ impl Message {
             "id": self.id,
             "ts": self.ts,
             "from": self.sender(),
+            // **The field a reply is addressed with, because `from` is not one** (U8). A session
+            // read `"from":"nestwatch-f04621"`, passed it to `amb send`, and got a refusal: the
+            // display name only resolves inside its own project, and the reader is usually
+            // somewhere else. Both halves were already in this document, one key apart, and every
+            // caller had to know to join them. Always qualified, so it works from anywhere.
+            "address": format!("{}@{}", self.sender(), self.from_proj),
             "from_id": self.from_agent,
             "from_project": self.from_proj,
             "to": self.to_agent,
@@ -727,9 +755,17 @@ pub const BROADCAST_HORIZON: std::time::Duration = std::time::Duration::from_sec
 /// the default rather than failing: this is read on the delivery path, and D9 puts refusing to
 /// deliver mail well above honouring a typo in an environment variable.
 pub fn broadcast_horizon() -> std::time::Duration {
-    std::env::var("AMB_BROADCAST_HORIZON")
-        .ok()
-        .and_then(|s| crate::duration::parse(&s).ok())
+    horizon_from(std::env::var("AMB_BROADCAST_HORIZON").ok().as_deref())
+}
+
+/// The env shell's decision, injected — M51's seam pattern, and the seam audit's second finding.
+///
+/// **`broadcast_horizon` had one caller and no test of any kind** (M60). Everything above is a
+/// stated rule: the fallback on a typo is deliberate and argued from D9, and the default is
+/// D96's. None of it was asserted, and `unwrap_or(BROADCAST_HORIZON)` relaxed to a zero duration
+/// stops every broadcast from being delivered at all — the delivery path this comment is about.
+fn horizon_from(raw: Option<&str>) -> std::time::Duration {
+    raw.and_then(|s| crate::duration::parse(s).ok())
         .unwrap_or(BROADCAST_HORIZON)
 }
 
@@ -784,6 +820,44 @@ pub fn watch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **`broadcast_horizon` had one caller and no test of any kind** (M60, the seam audit).
+    /// Everything its docstring argues is a real decision: the default is D96's, and falling back
+    /// on an unparseable value rather than failing is argued from D9 — refusing to deliver mail
+    /// is worse than ignoring a typo in an environment variable.
+    ///
+    /// The non-zero row is the one that matters most. `unwrap_or(BROADCAST_HORIZON)` relaxed to a
+    /// zero duration makes the cutoff `now`, so **no broadcast is ever delivered** — a silence on
+    /// the delivery path, which is this project's signature failure and was unguarded here.
+    #[test]
+    fn the_broadcast_horizon_reads_env_and_falls_back_rather_than_failing() {
+        assert_eq!(
+            horizon_from(Some("30m")),
+            std::time::Duration::from_secs(1800)
+        );
+        assert_eq!(
+            horizon_from(Some("2d")),
+            std::time::Duration::from_secs(172_800)
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("later"),
+            Some("30x"),
+            Some("-1h"),
+        ] {
+            assert_eq!(
+                horizon_from(bad),
+                BROADCAST_HORIZON,
+                "{bad:?} falls back to the default rather than failing delivery"
+            );
+        }
+        assert!(
+            !BROADCAST_HORIZON.is_zero(),
+            "a zero horizon delivers no broadcast at all — the default cannot be it"
+        );
+    }
 
     /// A board with two agents in one project, and a third somewhere else.
     fn board() -> (tempfile::TempDir, Connection, Identity, Identity, Identity) {
@@ -939,6 +1013,93 @@ mod tests {
         assert!(
             fetched.to_json().get("read").is_none(),
             "an unanswerable question is absent from JSON, not null"
+        );
+    }
+
+    /// **`from` is a display name, and a display name is not an address** (U8).
+    ///
+    /// A session read `"from":"nestwatch-f04621"` out of `--json`, passed it to `amb send`, and
+    /// was refused — the name resolves only inside its own project, and the reader of a global
+    /// broadcast is usually somewhere else. Both halves of the answer were already in the
+    /// document, one key apart, and every caller had to know to join them.
+    ///
+    /// Asserted by *using* it rather than by matching a string: the field is fed straight back
+    /// into `resolve_recipient`, which is the layer a copy-paste actually hits. A test that only
+    /// checked the key was present would pass on an address nobody can send to.
+    #[test]
+    fn the_address_beside_the_name_is_one_a_reply_can_actually_be_sent_to() {
+        let (_d, mut conn, alice, _bob, carol) = board();
+        // Carol is in another project — exactly the case where the bare name fails.
+        let everywhere = Recipient {
+            agent_id: None,
+            project: None,
+        };
+        send(
+            &mut conn,
+            &carol,
+            &Outgoing {
+                to: &everywhere,
+                kind: "note",
+                subject: "s",
+                body: "b",
+                thread: None,
+                ext_id: None,
+            },
+        )
+        .expect("carol broadcasts");
+
+        let got = inbox(&conn, &alice, false).expect("alice reads");
+        let doc = got[0].to_json();
+        let address = doc["address"].as_str().expect("an address field");
+        assert_eq!(address, "carol@other");
+        assert_ne!(
+            address,
+            doc["from"].as_str().expect("a name"),
+            "the name alone is what failed; if they are equal this field adds nothing"
+        );
+
+        let parsed = crate::address::parse(address).expect("the address parses");
+        let back =
+            resolve_recipient(&conn, &parsed, &alice).expect("and resolves, from another project");
+        assert_eq!(back.agent_id.as_deref(), Some("uuid-carol"));
+    }
+
+    /// **The refusal knew the answer and withheld it** (U8). The same name one project over is
+    /// the ordinary case — that is what makes it worth typing — and the row proving it is one
+    /// query away. D26's `nearest` covers a typo; this is the exact name in the wrong scope,
+    /// which no edit distance reaches. Both rows: the suggestion when it exists, and the plain
+    /// refusal when the name is nowhere, so the hint cannot be invented.
+    #[test]
+    fn a_name_registered_elsewhere_is_refused_with_the_address_that_would_work() {
+        let (_d, conn, _alice, bob, _carol) = board();
+        let addr = Address::Agent {
+            name: "carol".into(),
+            project: None,
+        };
+        let err = resolve_recipient(&conn, &addr, &bob).expect_err("carol is not in nest");
+        assert!(
+            matches!(err, Error::AgentInAnotherProject { .. }),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string().contains("carol@other"),
+            "the refusal must carry the address it already knows: {err}"
+        );
+        assert_eq!(
+            err.exit_code(),
+            65,
+            "still a data error, not a new contract"
+        );
+
+        let nowhere = Address::Agent {
+            name: "nobody".into(),
+            project: None,
+        };
+        let err = resolve_recipient(&conn, &nowhere, &bob).expect_err("nobody is nowhere");
+        assert!(matches!(err, Error::NoSuchAgent { .. }), "{err:?}");
+        assert!(
+            !err.to_string().contains("did you mean"),
+            "a suggestion with nothing behind it is worse than none: {err}"
         );
     }
 

@@ -49,6 +49,8 @@ pub const PRIMER: &str = "\
   amb memory recall \"query\"                                            search it yourself
   If a note below changed what you did, record which: --cites <id>. If none did, record nothing
   — an accurate zero is more useful here than a generous one.
+  --force decision (or rule) records a decision rather than a lesson; it outranks advice when
+  the injection cap has to choose, and still blocks nothing.
   If what you are about to record is the same thing a note below already records, add
   --same-as <slug> instead of writing a second note. A wrong guess makes a visible duplicate,
   never a silent merge.
@@ -504,6 +506,24 @@ mod tests {
         assert!(
             p.contains("record nothing") && p.contains("accurate zero"),
             "not citing has to be legitimised explicitly, or silence reads as failure: {PRIMER}"
+        );
+    }
+
+    /// **A decision filed as a lesson ranks below advice, and the flag that prevents it lived
+    /// only in `--help`** (U8, D91's shape). D64 created the force levels and `--force` is
+    /// agent-runnable; a human reading `--help` could find it and an agent reading this primer
+    /// could not. Deleting the line restores that state silently: decisions keep being recorded,
+    /// keep ranking as advice, and nothing is ever red.
+    #[test]
+    fn the_primer_names_the_flag_that_records_a_decision_rather_than_a_lesson() {
+        assert!(
+            PRIMER.contains("--force decision"),
+            "the flag that separates a decision from a lesson must be visible to the party that \
+             types it: {PRIMER}"
+        );
+        assert!(
+            PRIMER.contains("blocks nothing"),
+            "D52's non-guarantee travels with it, or `rule` reads as enforcement: {PRIMER}"
         );
     }
 

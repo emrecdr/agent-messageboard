@@ -157,10 +157,21 @@ pub const CANDIDATE_TTL_DAYS: f64 = 30.0;
 /// Whether the promotion pipeline is switched on. **The kill switch D49 names as the response to
 /// approval degrading into a rubber stamp** — not a tuning knob.
 pub fn promotion_enabled() -> bool {
-    !matches!(
-        std::env::var("AMB_MEMORY_PROMOTION").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
+    promotion_enabled_from(std::env::var("AMB_MEMORY_PROMOTION").ok().as_deref())
+}
+
+/// The env shell's decision, injected — M51's seam pattern, and the seam audit's first finding.
+///
+/// **The switch accepts three spellings and only one of them was ever tested.** `0`, `off` and
+/// `false` are all published in the README's environment table; the e2e test uses `off`, so
+/// deleting either of the other two arms reddened nothing (M60). A person following the
+/// documentation with `AMB_MEMORY_PROMOTION=0` would have found the kill switch inert, on the
+/// mechanism D49 names as the response to approval degrading into a rubber stamp.
+///
+/// Extracted rather than tested through the process, because a test cannot set env without
+/// racing the parallel runner — which is why the vocabulary went unguarded in the first place.
+fn promotion_enabled_from(raw: Option<&str>) -> bool {
+    !matches!(raw, Some("0") | Some("off") | Some("false"))
 }
 
 /// The most notes one injection will spell out in full.
@@ -206,15 +217,27 @@ pub const AUTO_INDEX_LIMIT: usize = 500;
 /// create a directory nobody asked for, and every other value this layer needs — the cap, the
 /// skip list — has a defensible default in code precisely because it is not a path.
 pub fn vault_path() -> Option<PathBuf> {
-    let raw = std::env::var("AMB_VAULT").ok()?;
-    let raw = raw.trim();
+    vault_from(
+        std::env::var("AMB_VAULT").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+/// The env shell's decision, injected — M51's seam pattern, and the seam audit's third finding.
+///
+/// **D35 lives entirely in the first two lines and neither was asserted** (M60): unset means
+/// memory is off, and so does a variable set to nothing. Delete the emptiness check and
+/// `AMB_VAULT=""` yields `PathBuf::from("")` — a relative path to the working directory — so
+/// memory switches *on*, pointed at the repo the session is sitting in, which is also a D11
+/// question. `~` is expanded here because this is read from an environment variable, where a
+/// shell may never have had the chance to.
+fn vault_from(raw: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+    let raw = raw?.trim();
     if raw.is_empty() {
         return None;
     }
-    // `~` is expanded here because this is read from an environment variable, where a shell may
-    // never have had the chance to.
     if let Some(rest) = raw.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
+        && let Some(home) = home
     {
         return Some(PathBuf::from(home).join(rest));
     }
@@ -252,6 +275,80 @@ pub fn should_skip(tool: &str, skip: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **D35 lives in the first two lines of `vault_from` and neither was asserted** (M60).
+    /// "`AMB_VAULT` has no default. Unset means memory is off" — and a variable set to nothing
+    /// has to mean the same, or `PathBuf::from("")` turns memory on pointed at whatever directory
+    /// the session happens to be sitting in, which is a D11 question as well as a D35 one.
+    ///
+    /// The `~` rows are the other half: expansion happens here because the value came from an
+    /// environment variable that no shell may have touched, and it applies to `~/` only — `~x` is
+    /// a directory name, not a home reference.
+    #[test]
+    fn an_unset_or_empty_vault_is_off_and_a_tilde_is_expanded_only_as_a_prefix() {
+        for off in [None, Some(""), Some("   "), Some("\t\n")] {
+            assert_eq!(
+                vault_from(off, Some("/home/x")),
+                None,
+                "{off:?} means memory is off (D35), never a relative path"
+            );
+        }
+        assert_eq!(
+            vault_from(Some("~/notes"), Some("/home/x")),
+            Some(PathBuf::from("/home/x/notes")),
+            "a leading ~/ is expanded against HOME"
+        );
+        assert_eq!(
+            vault_from(Some("~/notes"), None),
+            Some(PathBuf::from("~/notes")),
+            "with no HOME there is nothing to expand against, and a literal beats a guess"
+        );
+        assert_eq!(
+            vault_from(Some("~notes"), Some("/home/x")),
+            Some(PathBuf::from("~notes")),
+            "only the ~/ prefix is a home reference; ~notes is an ordinary directory name"
+        );
+        assert_eq!(
+            vault_from(Some("  /srv/vault  "), Some("/home/x")),
+            Some(PathBuf::from("/srv/vault")),
+            "surrounding whitespace is trimmed, as it is for the emptiness decision above"
+        );
+    }
+
+    /// **Every spelling the README publishes, and the on-cases that prove it is not stuck off.**
+    ///
+    /// D49 names this switch as the response to approval degrading into a rubber stamp, so the
+    /// question it has to answer is "did the person who read the docs actually turn it off". The
+    /// e2e test drives one value (`off`); deleting the `0` and `false` arms broke nothing until
+    /// this existed (M60).
+    ///
+    /// The `true` rows are not padding. A kill switch that reads *on* as *off* silently disables
+    /// the whole phase, so an unset variable, an empty one and an unrecognised one all have to be
+    /// pinned — and they are the rows that fail if the `!` is deleted.
+    #[test]
+    fn the_kill_switch_answers_to_every_spelling_the_docs_publish() {
+        for off in ["0", "off", "false"] {
+            assert!(
+                !promotion_enabled_from(Some(off)),
+                "{off:?} is published in the README's env table as disabling promotion"
+            );
+        }
+        for on in [
+            None,
+            Some(""),
+            Some("1"),
+            Some("on"),
+            Some("true"),
+            Some("OFF"),
+            Some(" off "),
+        ] {
+            assert!(
+                promotion_enabled_from(on),
+                "{on:?} must leave the pipeline running — an over-broad match switches D49's \
+                 phase off for people who never asked"
+            );
+        }
+    }
 
     /// D64's ordering as arithmetic: rule outranks decision outranks everything else, by the
     /// exact weights the ORDER BY consumes. Deleting either named arm or constant-replacing the

@@ -36,6 +36,18 @@ pub enum Error {
     #[error("no agent named {name:?} is registered in project {project:?}")]
     NoSuchAgent { name: String, project: String },
 
+    /// The name exists — one project over. Carrying the address is the whole point of the
+    /// variant: the refusal that withheld it was the only hard failure in a heavy session's
+    /// field report (U8).
+    #[error(
+        "no agent named {name:?} is registered in project {project:?} — did you mean          {name}@{elsewhere}?"
+    )]
+    AgentInAnotherProject {
+        name: String,
+        project: String,
+        elsewhere: String,
+    },
+
     #[error("the name {name:?} is already taken in project {project:?} — choose another")]
     NameTaken { name: String, project: String },
 
@@ -216,6 +228,7 @@ impl Error {
             Error::BadAddress { .. } => "bad_address",
             Error::NoSuchMessage(_) => "no_such_message",
             Error::NoSuchAgent { .. } => "no_such_agent",
+            Error::AgentInAnotherProject { .. } => "no_such_agent",
             Error::NameTaken { .. } => "name_taken",
             Error::SchemaVersion { .. } => "schema_version",
             Error::NoSuchClaim(_) => "no_such_claim",
@@ -265,6 +278,7 @@ impl Error {
             Error::NoSuchMessage(_)
             | Error::NoSuchClaim(_)
             | Error::NoSuchAgent { .. }
+            | Error::AgentInAnotherProject { .. }
             | Error::NoSuchNote(_)
             | Error::ExportStale { .. } => exit::DATA,
             Error::AmbiguousNote { .. } | Error::InsideRepository { .. } => exit::USAGE,

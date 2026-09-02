@@ -9,7 +9,37 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **D49's promotion kill switch answered to one of the three spellings its own documentation
+  publishes** (M60). `AMB_MEMORY_PROMOTION` is documented in the README's environment table as
+  accepting `0`, `off` or `false`; only `off` was ever tested, and deleting the other two arms
+  left the entire suite green — so a person who read the docs, set `AMB_MEMORY_PROMOTION=0` and
+  expected promotion to stop would have got promotion, on the mechanism D49 names as the response
+  to approval degrading into a rubber stamp. The decision is now injected and every published
+  spelling is asserted, along with the on-cases: a switch that reads *on* as *off* silently
+  disables the phase for people who never asked.
+
 ### Added
+
+- **The seam audit: every `std::env::var` in the library, asked whether a test can reach the
+  decision behind it** (M60). Three of six shells could not be reached, and the two beside the
+  kill switch were `broadcast_horizon` — one caller, no test at all, where a zero fallback stops
+  every broadcast being delivered — and `vault_path`, whose first two lines *are* D35 and neither
+  was asserted, so an empty `AMB_VAULT` switched memory on pointed at the session's working
+  directory. All three are now injected seams with truth tables, each confirmed by mutating the
+  decision. The three that passed had one thing in common and it was not importance or age:
+  somebody had already pulled the decision out of the shell.
+
+- **The four frictions a heavy session actually hit, three of them fixed** (U8). `--json` now
+  carries an `address` beside `from`, because `from` is a display name and a display name is
+  not an address — a session copied one out of an inbox and `amb send` refused it. The refusal
+  now offers the address it already knew (`did you mean carol@other?`), as its own error
+  variant so the plain "nowhere" case cannot invent a suggestion. And the SessionStart primer —
+  the entire API for an agent that never runs `--help` — now teaches `--unread`, `--body-file`,
+  `amb claims`/`amb claim`, and `--force decision`, each with the non-guarantee that makes it
+  safe to use. The claim verbs matter most: a board where the most careful agent announced its
+  file scope in prose, in a message body, had a structured mechanism one undocumented verb away.
 
 - **M56's round is closed: the last five survivors in `memory/index.rs` are guarded** (M59).
   `history`'s two cycle breaks flipped to `!=` truncate every ordinary lineage after one hop, and
