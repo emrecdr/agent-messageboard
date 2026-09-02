@@ -490,7 +490,8 @@ pub fn gather(now: f64) -> Report {
     let running = version::banner();
 
     // --- the binaries the hooks invoke -------------------------------------------------
-    let settings = hooks::settings_path().and_then(|p| hooks::read_settings(&p));
+    let settings =
+        hooks::settings_path(&crate::vendors::CLAUDE_CODE).and_then(|p| hooks::read_settings(&p));
     match &settings {
         Err(e) => checks.push(Check::new(
             "binary",
@@ -524,13 +525,16 @@ pub fn gather(now: f64) -> Report {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default();
             let cwd = std::env::current_dir().unwrap_or_default();
-            let loaded: Vec<(String, Value)> = hooks::settings_sources(&home, &cwd)
-                .into_iter()
-                .filter_map(|(label, path)| hooks::read_settings(&path).ok().map(|v| (label, v)))
-                .collect();
+            let loaded: Vec<(String, Value)> =
+                hooks::settings_sources(&crate::vendors::CLAUDE_CODE, &home, &cwd)
+                    .into_iter()
+                    .filter_map(|(label, path)| {
+                        hooks::read_settings(&path).ok().map(|v| (label, v))
+                    })
+                    .collect();
             checks.push(duplicate_check(&hooks::duplicate_hooks(&loaded)));
 
-            let (installed, missing) = hooks::memory_hooks(v);
+            let (installed, missing) = hooks::memory_hooks(v, &crate::vendors::CLAUDE_CODE);
             checks.push(if missing.is_empty() {
                 Check::new(
                     "hooks",
@@ -597,7 +601,11 @@ pub fn gather(now: f64) -> Report {
             let memory_on = settings
                 .as_ref()
                 .ok()
-                .map(|s| hooks::memory_hooks(s).1.is_empty())
+                .map(|s| {
+                    hooks::memory_hooks(s, &crate::vendors::CLAUDE_CODE)
+                        .1
+                        .is_empty()
+                })
                 .unwrap_or(false);
             if let Some(conn) = conn.as_ref() {
                 for (name, event) in [

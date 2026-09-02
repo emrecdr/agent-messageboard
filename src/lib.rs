@@ -29,6 +29,7 @@ pub mod hooks;
 pub mod identity;
 pub mod memory;
 pub mod messages;
+pub mod vendors;
 pub mod version;
 
 pub use error::{Error, Result};

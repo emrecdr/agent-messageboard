@@ -11,6 +11,7 @@
 //! filesystem in sight — and everything touching disk is a thin shell around them.
 
 use crate::error::{Error, Result, io};
+use crate::vendors::Vendor;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
@@ -30,16 +31,21 @@ impl Mode {
     ///
     /// `Stop` rather than `UserPromptSubmit`, deliberately: the latter blocks the user's turn on
     /// a 30 s timeout, so a hung `amb` would hang the human. `Stop` cannot (D9).
-    pub fn events(self) -> &'static [&'static str] {
+    pub fn events(self, v: &Vendor) -> Vec<&'static str> {
         match self {
-            Mode::Session => &["SessionStart"],
+            Mode::Session => vec![v.events.session_start],
             // PostToolUse is what makes claims *observed* rather than declared (D14): the hook
             // sees every Edit and Write, so an agent never has to remember `amb claim`.
             // SessionEnd is the same coin's other face (D109): the session that recorded
             // claims releases them the moment it ends, instead of running out a four-hour TTL
             // that warns every peer off files nobody is touching. Best effort — the platform
             // does not fire it on a crash, so the TTL stays the truth.
-            Mode::Turn | Mode::Monitor => &["SessionStart", "Stop", "PostToolUse", "SessionEnd"],
+            Mode::Turn | Mode::Monitor => vec![
+                v.events.session_start,
+                v.events.turn_end,
+                v.events.tool_post,
+                v.events.session_end,
+            ],
         }
     }
 
@@ -227,20 +233,27 @@ const MEMORY_TOOLS: &str = "Read|Edit|Write|NotebookEdit";
 /// `PreToolUse` over `PostToolUse`: the point is to say what is known about a file *before* it is
 /// opened, which is the strictest form of scoping the injection to its consumer. At
 /// `SessionStart` the relevant file is a guess; here it is stated.
-const MEMORY_EVENTS: &[(&str, Option<&str>)] = &[
-    ("SessionStart", None),
-    ("PreToolUse", Some(MEMORY_TOOLS)),
-    // Phase 4b's cheap half. Failures are disproportionately what is worth remembering, and
-    // capturing one needs no model, no transcript and no blocking — unlike 4a, which is
-    // deliberately not installed.
-    ("PostToolUseFailure", None),
-];
+/// How many lanes the memory layer installs. Named because `HookState::caveat` compares against
+/// it without a vendor in scope: three is a property of `amb`'s design (recency, path, capture),
+/// not of any one CLI's event vocabulary.
+pub const MEMORY_LANES: usize = 3;
+
+fn memory_events(v: &Vendor) -> [(&'static str, Option<&'static str>); MEMORY_LANES] {
+    [
+        (v.events.session_start, None),
+        (v.events.tool_pre, Some(MEMORY_TOOLS)),
+        // Phase 4b's cheap half. Failures are disproportionately what is worth remembering, and
+        // capturing one needs no model, no transcript and no blocking — unlike 4a, which is
+        // deliberately not installed.
+        (v.events.tool_failed, None),
+    ]
+}
 
 /// Plan the installation of delivery hooks into an existing settings document.
 ///
 /// Idempotent: installing twice adds nothing the second time. Non-destructive: other tools'
 /// hooks in the same events are preserved, and only our own entries are replaced.
-pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Plan {
+pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool, v: &Vendor) -> Plan {
     let mut settings = existing.clone();
     // Ledgers, not labels: what was removed and what was added carry their content, so the
     // delta below can tell an identical re-add from a rewrite. Reduced to labels at the end.
@@ -277,17 +290,17 @@ pub fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Pl
     removed.extend(strip_ours(hooks));
 
     let arg = mode.as_str();
-    for event in mode.events() {
+    for event in mode.events(v) {
         // The same argument for every event: the hook learns which event fired from
         // `hook_event_name` in its stdin payload, so argv carries only the mode.
         push_entry(hooks, event, None, hook_entry(exe, arg), &mut added, "");
     }
     if memory {
-        for (event, matcher) in MEMORY_EVENTS {
+        for (event, matcher) in memory_events(v) {
             push_entry(
                 hooks,
                 event,
-                *matcher,
+                matcher,
                 hook_entry(exe, MEMORY_ARG),
                 &mut added,
                 " (memory)",
@@ -402,7 +415,7 @@ impl HookState {
             HookState::Incomplete { missing } => Some(format!(
                 "memory hooks: {} — missing {}. The counts that follow predate this and are not \
                  evidence about the corpus; run `amb install --memory` to restore them",
-                if missing.len() == MEMORY_EVENTS.len() {
+                if missing.len() == MEMORY_LANES {
                     "NOT INSTALLED"
                 } else {
                     "PARTIALLY INSTALLED"
@@ -430,8 +443,8 @@ impl HookState {
 /// The memory hook state of a settings document. Pure, so every case is testable without a
 /// filesystem — including the one that matters, a settings file with delivery hooks and no memory
 /// ones, which is the state this machine was actually found in.
-pub fn memory_state(settings: &Value) -> HookState {
-    let (_, missing) = memory_hooks(settings);
+pub fn memory_state(settings: &Value, v: &Vendor) -> HookState {
+    let (_, missing) = memory_hooks(settings, v);
     if missing.is_empty() {
         HookState::Installed
     } else {
@@ -449,13 +462,13 @@ pub fn memory_state(settings: &Value) -> HookState {
 /// and as documented. The removals were printed. Nobody was reading. Weeks of "evidence"
 /// accumulated from a feature that was switched off, and D59 was measurably approaching a verdict
 /// on it.
-pub fn memory_hooks(settings: &Value) -> (Vec<String>, Vec<String>) {
+pub fn memory_hooks(settings: &Value, v: &Vendor) -> (Vec<String>, Vec<String>) {
     let mut installed = Vec::new();
     let mut missing = Vec::new();
     let hooks = settings.get("hooks").and_then(Value::as_object);
-    for (event, _) in MEMORY_EVENTS {
+    for (event, _) in memory_events(v) {
         let present = hooks
-            .and_then(|h| h.get(*event))
+            .and_then(|h| h.get(event))
             .and_then(Value::as_array)
             .is_some_and(|matchers| {
                 matchers.iter().any(|m| {
@@ -651,21 +664,23 @@ pub fn plan_uninstall(existing: &Value) -> Plan {
 /// **`claude --settings` is deliberately absent and that is a stated hole, not an oversight.** It
 /// is a per-session flag with no on-disk trace a later process can find, so nothing invoked from a
 /// shell can enumerate it. A duplicate introduced that way is invisible here.
-pub fn settings_sources(home: &Path, cwd: &Path) -> Vec<(String, PathBuf)> {
-    vec![
-        // Managed settings first, matching the platform's own precedence listing. macOS path;
-        // other platforms differ, and a missing file is simply skipped by the caller.
-        (
-            "managed".into(),
-            PathBuf::from("/Library/Application Support/ClaudeCode/managed-settings.json"),
-        ),
-        (
-            "project local".into(),
-            cwd.join(".claude").join("settings.local.json"),
-        ),
-        ("project".into(), cwd.join(".claude").join("settings.json")),
-        ("user".into(), home.join(".claude").join("settings.json")),
-    ]
+pub fn settings_sources(v: &Vendor, home: &Path, cwd: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::with_capacity(4);
+    // Managed settings first, matching the platform's own precedence listing. Absolute and
+    // platform-specific; a vendor that ships none says so, and a missing file is simply skipped
+    // by the caller.
+    if let Some(managed) = v.managed_settings {
+        out.push(("managed".into(), PathBuf::from(managed)));
+    }
+    if let Some(local) = v.local_settings_file {
+        out.push(("project local".into(), cwd.join(v.config_dir).join(local)));
+    }
+    out.push((
+        "project".into(),
+        cwd.join(v.config_dir).join(v.settings_file),
+    ));
+    out.push(("user".into(), home.join(v.config_dir).join(v.settings_file)));
+    out
 }
 
 /// One `amb` hook command that will run more than once per event.
@@ -734,9 +749,9 @@ pub fn duplicate_hooks(sources: &[(String, Value)]) -> Vec<DuplicateHook> {
     out
 }
 
-pub fn settings_path() -> Result<PathBuf> {
+pub fn settings_path(v: &Vendor) -> Result<PathBuf> {
     let home = std::env::var("HOME").map_err(|_| Error::NoIdentity)?;
-    Ok(PathBuf::from(home).join(".claude").join("settings.json"))
+    Ok(PathBuf::from(home).join(v.config_dir).join(v.settings_file))
 }
 
 /// Read a settings document, treating an absent file as an empty one.
@@ -1019,6 +1034,131 @@ fn write_if_unchanged(path: &Path, value: &Value, seen: Option<&str>) -> Result<
 
 #[cfg(test)]
 mod tests {
+    //! **These pin Claude Code's shape, and say so through these three shims.** Every assertion
+    //! below predates the vendor descriptor and is a claim about *Claude's* settings document —
+    //! its event spellings, its `hooks → matcher → hooks` nesting, its file paths. Threading the
+    //! vendor through each of sixty-one call sites would have restated that constant sixty-one
+    //! times without adding a claim. The vendor axis has its own tests, which drive a second
+    //! descriptor rather than this one; if these shims ever disagree with those, the seam is
+    //! what broke.
+    use crate::vendors::CLAUDE_CODE;
+
+    fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Plan {
+        super::plan_install(existing, exe, mode, memory, &CLAUDE_CODE)
+    }
+    fn memory_state(settings: &Value) -> HookState {
+        super::memory_state(settings, &CLAUDE_CODE)
+    }
+    fn memory_hooks(settings: &Value) -> (Vec<String>, Vec<String>) {
+        super::memory_hooks(settings, &CLAUDE_CODE)
+    }
+    fn settings_sources(home: &Path, cwd: &Path) -> Vec<(String, PathBuf)> {
+        super::settings_sources(&CLAUDE_CODE, home, cwd)
+    }
+
+    /// A vendor that is not Claude, so the seam is asserted rather than assumed.
+    const OTHER: crate::vendors::Vendor = crate::vendors::Vendor {
+        config_dir: ".other",
+        settings_file: "config.json",
+        local_settings_file: None,
+        managed_settings: None,
+        events: crate::vendors::Events {
+            session_start: "Awake",
+            turn_end: "Rest",
+            tool_post: "AfterTool",
+            session_end: "Sleep",
+            tool_pre: "BeforeTool",
+            tool_failed: "ToolFailed",
+        },
+        session_env: &["OTHER_SESSION_ID"],
+    };
+
+    /// **The seam, driven by a second descriptor rather than by the one that shipped.**
+    ///
+    /// Every other test in this module pins Claude's shape, so all of them stay green if the
+    /// descriptor's fields are quietly ignored and the constants re-hardcoded — which is exactly
+    /// the regression the extraction exists to prevent, and exactly the kind this project keeps
+    /// finding (a guard asserted against the caller that happens to be right). This installs for
+    /// a fabricated vendor and asserts both halves: its spellings appear, and Claude's do not.
+    /// The absence row is the load-bearing one.
+    #[test]
+    fn a_second_vendor_gets_its_own_events_and_paths_and_none_of_claudes() {
+        let plan = super::plan_install(&json!({}), "/bin/amb", Mode::Turn, true, &OTHER);
+        let hooks = plan
+            .settings
+            .get("hooks")
+            .and_then(Value::as_object)
+            .expect("a plan writes a hooks object");
+        for mine in [
+            "Awake",
+            "Rest",
+            "AfterTool",
+            "Sleep",
+            "BeforeTool",
+            "ToolFailed",
+        ] {
+            assert!(
+                hooks.contains_key(mine),
+                "{mine} missing from {:?}",
+                plan.settings
+            );
+        }
+        for claudes in [
+            "SessionStart",
+            "Stop",
+            "PostToolUse",
+            "SessionEnd",
+            "PreToolUse",
+            "PostToolUseFailure",
+        ] {
+            assert!(
+                !hooks.contains_key(claudes),
+                "Claude's {claudes} leaked into another vendor's plan: {:?}",
+                plan.settings
+            );
+        }
+
+        // Paths follow the descriptor too, including the two scopes this vendor declines to have.
+        let srcs = super::settings_sources(&OTHER, Path::new("/home/u"), Path::new("/repo"));
+        let labels: Vec<&str> = srcs.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["project", "user"],
+            "a vendor with no managed and no local file must be given neither"
+        );
+        assert!(
+            srcs.iter()
+                .all(|(_, p)| p.to_string_lossy().contains(".other")),
+            "{srcs:?}"
+        );
+    }
+
+    /// The identity lane, with the environment injected so it cannot race the runner: the first
+    /// name that answers wins, an empty answer is not an identity, and a vendor whose variables
+    /// are all absent yields nothing rather than a blank id.
+    #[test]
+    fn a_session_id_comes_from_the_first_vendor_variable_that_answers() {
+        let two = crate::vendors::Vendor {
+            session_env: &["FIRST", "SECOND"],
+            ..OTHER
+        };
+        assert_eq!(
+            two.session_id(|k| (k == "SECOND").then(|| "s".to_string())),
+            Some("s".into()),
+            "a later name still answers when the earlier one is absent"
+        );
+        assert_eq!(
+            two.session_id(|k| Some(if k == "FIRST" { "f" } else { "s" }.to_string())),
+            Some("f".into()),
+            "and the order is the precedence"
+        );
+        assert_eq!(
+            two.session_id(|_| Some("   ".into())),
+            None,
+            "blank is not an id"
+        );
+        assert_eq!(two.session_id(|_| None), None);
+    }
     use super::*;
 
     fn applied(retries: usize, lock_error: Option<&str>, added: &[&str]) -> Applied {
@@ -2068,7 +2208,10 @@ mod tests {
                 Some(mode),
                 "{spelling} must parse back to itself"
             );
-            assert!(!mode.events().is_empty(), "{spelling} installs no event");
+            assert!(
+                !mode.events(&crate::vendors::CLAUDE_CODE).is_empty(),
+                "{spelling} installs no event"
+            );
         }
         assert_eq!(Mode::parse("Session"), None, "matching is case-sensitive");
         assert_eq!(Mode::parse(""), None);

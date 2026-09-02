@@ -57,9 +57,13 @@ pub fn repo_root(start: &std::path::Path, home: Option<&str>) -> Option<std::pat
 /// as a specific agent. `AMB_PROJECT` overrides the project, which otherwise defaults to the
 /// working directory's name.
 pub fn resolve() -> Result<Identity> {
+    // `AMB_AGENT` first, then whichever session id the host CLI exported. The list lives on the
+    // vendor descriptor, so a second CLI is recognised by adding a name to data — and identity is
+    // where one arrives first, since a session is simply whoever exported an id.
     let id = std::env::var("AMB_AGENT")
-        .or_else(|_| std::env::var("CLAUDE_CODE_SESSION_ID"))
-        .map_err(|_| Error::NoIdentity)?;
+        .ok()
+        .or_else(|| crate::vendors::CLAUDE_CODE.session_id_from_env())
+        .ok_or(Error::NoIdentity)?;
     if id.trim().is_empty() {
         return Err(Error::NoIdentity);
     }

@@ -459,16 +459,16 @@ fn run(cli: Cli) -> Result<(), Error> {
             let exe = std::env::current_exe()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| "amb".to_string());
-            let path = hooks::settings_path()?;
+            let path = hooks::settings_path(&amb::vendors::CLAUDE_CODE)?;
             // The whole read-plan-write cycle lives in the library, where it is testable and
             // where its retry loop is not logic sitting in the binary (D78, D99).
             let done = hooks::apply(&path, dry_run, |cur| {
-                hooks::plan_install(cur, &exe, mode, memory)
+                hooks::plan_install(cur, &exe, mode, memory, &amb::vendors::CLAUDE_CODE)
             })?;
             return report_plan(&cli, &path, &done, dry_run, mode.as_str());
         }
         Command::Uninstall { dry_run } => {
-            let path = hooks::settings_path()?;
+            let path = hooks::settings_path(&amb::vendors::CLAUDE_CODE)?;
             let done = hooks::apply(&path, dry_run, hooks::plan_uninstall)?;
             return report_plan(&cli, &path, &done, dry_run, "removed");
         }
@@ -1670,8 +1670,10 @@ fn run_memory(
             // Read, never assumed. An unreadable or absent settings file is `Unknown`, never
             // `Incomplete` — see `hooks::HookState`. Every decision about what this means lives in
             // the library; this arm reads a file and prints what it is given.
-            let hook_state = match hooks::settings_path().and_then(|p| hooks::read_settings(&p)) {
-                Ok(settings) => hooks::memory_state(&settings),
+            let hook_state = match hooks::settings_path(&amb::vendors::CLAUDE_CODE)
+                .and_then(|p| hooks::read_settings(&p))
+            {
+                Ok(settings) => hooks::memory_state(&settings, &amb::vendors::CLAUDE_CODE),
                 Err(_) => hooks::HookState::Unknown,
             };
             if cli.json {

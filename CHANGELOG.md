@@ -11,6 +11,14 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **A vendor is data now, not code** (D111). `src/vendors.rs` holds a `Vendor` descriptor —
+  config directory, settings filenames, the six event spellings, the session-id environment
+  variables — and the install path takes one instead of assuming Claude's. Claude Code remains
+  the only descriptor that ships and **nothing changed behaviourally**: 604 tests before, 604
+  after. The seam is asserted by a second, fabricated descriptor whose events and paths must come
+  out of a plan while Claude's must not; re-hardcoding either was applied by hand and seen red.
+  This reopens D101 on the second of the two conditions it named for itself.
+
 - **The gate's test count now says when it is measuring a tree that is not the commit** (D110).
   `check_docs.py` takes the count over the working tree while CI takes it over committed code;
   on a machine where several sessions share one checkout those differ, and twice in one day a

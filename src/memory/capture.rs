@@ -50,8 +50,8 @@ fn marker_name(session: Option<&str>) -> String {
 /// `AMB_AGENT` overrides, `CLAUDE_CODE_SESSION_ID` is what every hook environment carries.
 fn session_key() -> Option<String> {
     let raw = std::env::var("AMB_AGENT")
-        .or_else(|_| std::env::var("CLAUDE_CODE_SESSION_ID"))
-        .ok()?;
+        .ok()
+        .or_else(|| crate::vendors::CLAUDE_CODE.session_id_from_env())?;
     sanitise_key(&raw)
 }
 

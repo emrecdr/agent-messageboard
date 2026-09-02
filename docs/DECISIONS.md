@@ -5608,3 +5608,63 @@ silent on a clean tree, so it is never routine noise — and that it prints **be
 rather than after, because a qualification read after the answer has already been read is not a
 qualification. If it rots anyway, the next reader should make it a failure and accept the bypass
 cost, not delete it.
+
+## D111 · A vendor is data, not a trait — and D101 reopens on its own second condition
+
+**Decided 2026-09-02.** `src/vendors.rs` holds a `Vendor` descriptor; `hooks::plan_install`,
+`settings_path`, `settings_sources`, `memory_state`, `memory_hooks` and `Mode::events` take one.
+Claude Code is the only descriptor that ships. **This is a refactor with no behaviour change** —
+604 tests passed before it and after it, unchanged.
+
+### Why this reopens D101 rather than overriding it
+
+D101 named two reopening conditions and called them the property a stated threshold most often
+lacks: push becoming reachable cross-vendor, or **"a second agent tool actually in use on this
+machine"**. The second is met — the user asked for Copilot and Gemini, and this machine already
+carries an Antigravity install. D101 stands on its own terms; this is the door it left open.
+
+**And one of its facts had already rotted, which is why the arithmetic differs.** D101 priced
+Gemini CLI off a competitor's matrix as a degraded turn-only lane. Google's own hooks reference
+now documents a contract nearly identical to Claude's: the same `hooks → event → [{matcher,
+hooks:[{type, command}]}]` nesting, the same stdin field names (`session_id`, `transcript_path`,
+`cwd`, `hook_event_name`), the same `hookSpecificOutput.additionalContext`, plus `AfterAgent`,
+`AfterTool` and `SessionEnd` — every lane `amb` installs. Copilot CLI accepts Claude's PascalCase
+event names as aliases. The vocabulary converged while the decision was being written.
+
+### Why data and not a trait
+
+**Measured before deciding.** The vendor-specific surface was 16 lines of Claude-named production
+code across seven files, plus about twenty sites assuming Claude's settings shape, and every one
+differed in a *value* — a path, a spelling, an envelope — never in an algorithm. A
+`trait AgentVendor` with an impl per CLI is what the field does: `agmsg` states outright that it
+has no declarative capability matrix and embeds vendor constraints in conditional script logic;
+`hcom` hardcodes a hook set per vendor in a router. It is also why neither can gain a vendor
+without a release. Dynamic dispatch over six fields of data is a pattern applied for its own sake.
+
+### What is deliberately absent, and the order is the point
+
+No second descriptor, no `id`/`label`, no manifest loader, no runtime vendor detection. The file
+carries exactly the fields production code reads, because `tools/find_unread_fields.py` is in the
+gate and a speculative field is a field nothing reads. **The user-droppable TOML format comes
+after a second vendor proves which fields are real** — designing the format first is how a
+config language acquires options nobody needs, and it is the failure mode this project has
+already recorded under a different name.
+
+### The one thing that must precede a second vendor's traffic
+
+**The receipt has to record the delivery mode.** D59 retires the injection layer on a cited ratio,
+and `monitor` mode is Claude-only while `turn` is universal, so mixing the two makes the ratio
+answer a question nobody asked — `CLAUDE.md`'s own rule about a numerator and denominator
+describing the same opportunity, firing in advance for once rather than in a post-mortem. Cheap
+now, a corrupted instrument later.
+
+### Rejected
+
+**A trait with per-vendor implementations.** Above: the variation is data.
+
+**Dynamically loaded plugins.** `dlopen` in Rust means ABI fragility and gives up the single
+static binary, which is D3's premise rather than a convenience.
+
+**Shipping Gemini in this commit.** The extraction had to be provably behaviour-preserving first,
+and a second descriptor arriving in the same diff would have made "604 before, 604 after"
+unreadable as evidence.
