@@ -530,6 +530,31 @@ mod tests {
             "no session_env, no vendor"
         );
 
+        // **Present-but-empty is the row the first version of this test never reached** (M62).
+        // Removing a key and setting it to `""` take different branches, and only the removal
+        // was exercised — so `!v.is_empty()` could become `true` and nothing reddened. Not a
+        // cosmetic difference: `"config_dir": ""` makes `home.join("")` the config directory, so
+        // `amb install` would write to `$HOME/settings.json` — another program's file, or none —
+        // and an empty event name installs a hook under the key `""`.
+        for key in ["id", "config_dir", "settings_file"] {
+            let mut doc = full.clone();
+            doc[key] = serde_json::json!("   ");
+            let err = parse_manifest(&doc, &[]).expect_err("blank is not a value");
+            assert!(err.contains(key), "the refusal must name {key}: {err}");
+        }
+        for key in [
+            "session_start",
+            "turn_end",
+            "tool_post",
+            "session_end",
+            "tool_pre",
+        ] {
+            let mut doc = full.clone();
+            doc["events"][key] = serde_json::json!("");
+            let err = parse_manifest(&doc, &[]).expect_err("blank is not an event name");
+            assert!(err.contains(key), "the refusal must name {key}: {err}");
+        }
+
         // And a manifest may not quietly take a shipped vendor's id.
         let mut shadow = full.clone();
         shadow["id"] = serde_json::json!("claude-code");

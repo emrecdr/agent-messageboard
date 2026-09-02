@@ -11,6 +11,14 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`vendors.rs` re-mutated after tripling in size, and three survivors were found in a day-old
+  module** (M62). The coverage checker answers "has this module ever had a round", not "was it
+  mutated in its current form" — a blind spot now named in its own docstring. The survivors:
+  empty-string values were accepted for required manifest fields (`"config_dir": ""` would send
+  `amb install` at `$HOME/settings.json`), and `problems()` could return an empty list forever
+  while doctor reported a healthy vendor set, because that check had been asserted against
+  hand-built values instead of against a bad file on disk.
+
 - **A vendor's tool names travel with its event names** (D111). The memory lane's `PreToolUse`
   matcher was a constant — `Read|Edit|Write|NotebookEdit` — and phase 2 installed it verbatim
   into Gemini's `BeforeTool`, where it matches nothing: Gemini calls those acts `read_file`,

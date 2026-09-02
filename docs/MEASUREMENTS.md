@@ -4389,3 +4389,35 @@ something asserts the values. What logic it has — detection precedence and the
 was written with the environment injected (M51's rule) *before* a mutation pass could find it
 untestable, which is the first time on this project that lesson was applied ahead of the finding
 rather than after it.
+
+## M62 · vendors.rs again, because "has a recorded round" is not "was mutated in its current form"
+
+**Modules:** `src/vendors.rs`
+
+**2026-09-02.** M61 gave this module a clean pass at **12 mutants**. It then grew the manifest
+loader, the parser and its refusals, detection, and `tool_matcher` — **39 mutants**, more than
+triple — and `tools/check_mutation_coverage.py` went on printing *the inventory IS closed*,
+because it answers "has this module ever had a round" and cannot answer "was it mutated in the
+form it is in now". That is the blind spot of a per-file completeness claim, and it is the same
+shape M57 was written about one level down: a set-difference over *files* cannot see time.
+
+**39 mutants: 36 caught, 3 missed** — and all three were in code written hours earlier, which is
+the argument for re-running rather than trusting the closed inventory.
+
+- **Two empty-string gates.** `!v.is_empty()` in the manifest parser could become `true`, and
+  nothing reddened: every fixture *removed* a key and none set it to `""`, which take different
+  branches (M17's shape, again, in a table written to prevent it). Not cosmetic —
+  `"config_dir": ""` makes `home.join("")` the config directory, so `amb install` would write to
+  `$HOME/settings.json`, a file that belongs to something else or to nothing.
+- **`problems()` could return an empty list forever**, and doctor would report a healthy vendor
+  set while silently ignoring every refused manifest. The doctor test asserted `vendors_check`
+  against hand-built `Problem` values, so it proved the *renderer* and never the path from a bad
+  file on disk to a line on a screen — D90's shape, inside the one feature whose entire purpose
+  is that a skipped file is not a silence. Closed by an e2e through the real binary, asserting
+  both halves: the refusal is named *and* the good manifest beside it still loads.
+
+**The fixture for that e2e was itself wrong on the first run**, and the failure is worth keeping:
+a manifest carrying only an `id` is refused for its missing `session_env` and never reaches the
+`config_dir` check the test was about. The parser refuses on the first thing missing, so a
+fixture has to clear the earlier gates to exercise a later one — M17's rule, broken minutes after
+re-reading it in the paragraph above.

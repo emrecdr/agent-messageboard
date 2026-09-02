@@ -9,6 +9,13 @@ enumerated from *the record of rounds they remembered running* — and a complet
 derived from memory is not a completeness claim (D39/D45: the fix for a recurring error is a
 script, not a note).
 
+**Its blind spot, named because it bit within a day** (M62): this answers *has this module ever
+had a round*, never *was it mutated in the form it is in now*. `vendors.rs` tripled in size after
+its clean pass and kept reading as covered; re-running found three survivors, all in the new
+code. A set-difference over files cannot see time. Left as a stated limit rather than machinery
+because the honest fix is to re-run a module you have just rewritten, and a script that guessed
+at staleness from dates would be a new instrument to keep true.
+
 **It polices the claim, not the work.** Mutation is deliberately not a commit gate — it is slow,
 and `tools/mutants.sh`'s header says why. So an uncovered module is never a failure here; it is
 printed and left. What fails is a document asserting closure while the set-difference disagrees.

@@ -650,3 +650,69 @@ fn a_vendor_amb_never_heard_of_installs_from_a_dropped_in_manifest() {
         "a manifest vendor's session must get an identity: {who}"
     );
 }
+
+/// **A refused manifest reaches a person, asserted through the binary that has to say so** (M62).
+///
+/// `problems()` could be replaced with an empty list and every test stayed green: the doctor
+/// check was asserted against hand-built `Problem` values, so it proved the *renderer* and never
+/// the path from a bad file on disk to a line on a screen. That is D90's shape — a guard written
+/// against the caller rather than the rule — inside the very feature whose whole purpose is that
+/// a skipped file is not a silence.
+///
+/// Both halves: the refusal is reported *and* the good manifest beside it still loads, because a
+/// loader that gave up on the first bad file would also pass a test that only checks for the
+/// warning.
+#[test]
+fn doctor_names_a_manifest_it_refused_and_still_loads_the_good_one() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vendors = dir.path().join("vendors");
+    std::fs::create_dir_all(&vendors).expect("mkdir");
+    // Carries an id and a session_env on purpose: the parser refuses on the *first* thing
+    // missing, so a manifest with only an id fails on `session_env` and never reaches the
+    // field this test is about. The fixture has to get past the earlier gates to test a later
+    // one — M17's rule, applied to a fixture written minutes after re-reading it.
+    std::fs::write(
+        vendors.join("broken.json"),
+        r#"{"id": "half-a-vendor", "session_env": ["HALF_SESSION"]}"#,
+    )
+    .expect("write");
+    std::fs::write(
+        vendors.join("good.json"),
+        r#"{
+          "id": "good-cli", "config_dir": ".good", "settings_file": "s.json",
+          "events": {
+            "session_start": "A", "turn_end": "B", "tool_post": "C",
+            "session_end": "D", "tool_pre": "E"
+          },
+          "session_env": ["GOOD_SESSION_ID"]
+        }"#,
+    )
+    .expect("write");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_amb"))
+        .arg("doctor")
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("AMB_VENDORS", &vendors)
+        .env("AMB_DB", dir.path().join("board.db"))
+        .env_remove("AMB_VAULT")
+        .output()
+        .expect("doctor runs");
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        text.contains("broken.json"),
+        "the file that was skipped must be named: {text}"
+    );
+    assert!(
+        text.contains("config_dir"),
+        "and the reason must travel with it, or it cannot be fixed: {text}"
+    );
+    assert!(
+        !text.contains("good.json"),
+        "a manifest that loaded is not a problem: {text}"
+    );
+    assert_eq!(out.status.code(), Some(0), "doctor always exits 0 (D73)");
+}
