@@ -221,13 +221,6 @@ fn hook_entry(exe: &str, event_arg: &str) -> Value {
 /// can uninstall this without knowing what "memory" means.
 pub const MEMORY_ARG: &str = "memory";
 
-/// Tool calls the memory hook is asked about.
-///
-/// Narrowed here as well as in `memory::SKIP_TOOLS`, and the redundancy is deliberate: this
-/// bounds how often the process is spawned at all, while the skip list is what makes a
-/// hand-edited or absent matcher harmless rather than a hook running on every tool call.
-const MEMORY_TOOLS: &str = "Read|Edit|Write|NotebookEdit";
-
 /// The events memory registers on, with the matcher each needs.
 ///
 /// `PreToolUse` over `PostToolUse`: the point is to say what is known about a file *before* it is
@@ -241,7 +234,11 @@ const MEMORY_TOOLS: &str = "Read|Edit|Write|NotebookEdit";
 fn memory_events(v: &Vendor) -> Vec<(&'static str, Option<&'static str>)> {
     let mut out = vec![
         (v.events.session_start, None),
-        (v.events.tool_pre, Some(MEMORY_TOOLS)),
+        // The vendor's own tool names, never Claude's — see `Vendor::tool_matcher`. Narrowed
+        // here as well as in `memory::SKIP_TOOLS`, and the redundancy is deliberate: this bounds
+        // how often the process is spawned at all, while the skip list is what makes a
+        // hand-edited or absent matcher harmless rather than a hook running on every tool call.
+        (v.events.tool_pre, v.tool_matcher),
     ];
     // Phase 4b's cheap half. Failures are disproportionately what is worth remembering, and
     // capturing one needs no model, no transcript and no blocking — unlike 4a, which is
@@ -1085,8 +1082,25 @@ mod tests {
             tool_pre: "BeforeTool",
             tool_failed: Some("ToolFailed"),
         },
+        tool_matcher: Some("Grab|Stash"),
         session_env: &["OTHER_SESSION_ID"],
     };
+
+    /// The matcher installed is the vendor's, asserted through a *plan* rather than through the
+    /// constant — the defect was that a correct constant reached the wrong vendor's file.
+    #[test]
+    fn a_vendors_memory_matcher_reaches_its_own_settings_and_claudes_does_not() {
+        let plan = super::plan_install(&json!({}), "/bin/amb", Mode::Turn, true, &OTHER);
+        let m = plan.settings["hooks"]["BeforeTool"][0]["matcher"]
+            .as_str()
+            .expect("the memory lane installs with its vendor's matcher");
+        assert_eq!(m, "Grab|Stash");
+        assert_ne!(
+            m,
+            CLAUDE_CODE.tool_matcher.expect("claude has one"),
+            "Claude's tool vocabulary must not travel to another vendor"
+        );
+    }
 
     /// **The seam, driven by a second descriptor rather than by the one that shipped.**
     ///
@@ -1767,7 +1781,10 @@ mod tests {
             .as_array()
             .expect("PreToolUse should exist");
         assert_eq!(list.len(), 1);
-        assert_eq!(list[0]["matcher"], json!(MEMORY_TOOLS));
+        assert_eq!(
+            list[0]["matcher"],
+            json!(CLAUDE_CODE.tool_matcher.expect("claude has one"))
+        );
     }
 
     #[test]

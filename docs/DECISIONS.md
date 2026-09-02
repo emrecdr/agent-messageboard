@@ -5722,6 +5722,30 @@ install still succeeded — a dry-run showed two memory lanes where three were d
 number went unnoticed until a test asserted it. A "did it install" check does not catch that; a
 count does.
 
+### The defect phase 2 shipped, and what it says about where to look next
+
+**A vendor's *tool* vocabulary is as much its own as its event names, and phase 2 missed it.**
+The memory hook's `PreToolUse` matcher was a constant, `Read|Edit|Write|NotebookEdit`, and it
+went into Gemini's `BeforeTool` entry verbatim — where it matches nothing. Gemini calls those
+acts `read_file`, `read_many_files`, `write_file` and `replace`; `NotebookEdit` appears zero
+times in its bundle. The path-anchored lane would have fired **zero times on every Gemini
+session**, silently, and the receipt would have read `by path 0/0` beside a working recency lane
+— which D74 already records as the failure that is not a low number but an incomparable one.
+
+`Vendor::tool_matcher` now carries it, `None` meaning a CLI with no matchers at all.
+
+**What generalises: the events were the obvious axis and the vocabulary was the second one.**
+Phase 2 checked the installed binary for *event names* and caught a real difference there, then
+installed a *tool-name* constant beside them without asking the same question. The check that
+would have caught it is the one that caught the events: read the other vendor's own words for
+everything you are about to write into its file, not just for the field you were thinking about.
+
+**Named residue, not silence:** `memory::SKIP_TOOLS` is still Claude's vocabulary
+(`TodoWrite,Skill,AskUserQuestion,Task`). On another vendor it skips nothing, so capture records
+tool calls Claude would have dropped — noise in the vault rather than a wrong number in the
+receipt, and `AMB_MEMORY_SKIP_TOOLS` overrides it. Left as data on the wrong side of the seam
+because the fix is the same move and the cost of getting it wrong is not.
+
 ### Rejected
 
 **A trait with per-vendor implementations.** Above: the variation is data.

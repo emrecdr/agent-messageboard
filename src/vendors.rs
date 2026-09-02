@@ -77,6 +77,19 @@ pub struct Vendor {
     /// platform-specific: a path that does not exist is simply skipped by every caller.
     pub managed_settings: Option<&'static str>,
     pub events: Events,
+    /// Which tool calls the memory hook is asked about, in this CLI's **own** tool names.
+    ///
+    /// **A vendor's tool vocabulary is as much its own as its event names, and missing that was a
+    /// live defect.** `Read|Edit|Write|NotebookEdit` is Claude's; Gemini calls the same acts
+    /// `read_file`, `read_many_files`, `write_file` and `replace`, so the Claude matcher
+    /// installed into Gemini matched nothing and the path-anchored lane would have fired zero
+    /// times — silently, and in the shape D74 records: `by path 0/0` beside a working recency
+    /// lane is not a low number, it is an incomparable one.
+    ///
+    /// `None` installs the hook with no matcher at all, for a CLI that has none. The cost is
+    /// bounded anyway by `memory::SKIP_TOOLS` and by the injection itself, which is why the
+    /// matcher is an optimisation rather than the guard.
+    pub tool_matcher: Option<&'static str>,
     /// Session-id environment variables, most specific first. `AMB_AGENT` overrides all of them
     /// and is not listed here, because it belongs to `amb` rather than to any vendor.
     pub session_env: &'static [&'static str],
@@ -99,6 +112,7 @@ pub const CLAUDE_CODE: Vendor = Vendor {
         tool_pre: "PreToolUse",
         tool_failed: Some("PostToolUseFailure"),
     },
+    tool_matcher: Some("Read|Edit|Write|NotebookEdit"),
     session_env: &["CLAUDE_CODE_SESSION_ID"],
 };
 
@@ -152,6 +166,9 @@ pub const GEMINI_CLI: Vendor = Vendor {
         tool_pre: "BeforeTool",
         tool_failed: None,
     },
+    // Gemini's own names, counted in the installed bundle: `replace` 65, `read_file` 28,
+    // `read_many_files` 12, `write_file` 8. Claude's `NotebookEdit` appears zero times.
+    tool_matcher: Some("read_file|read_many_files|write_file|replace"),
     session_env: &["GEMINI_SESSION_ID"],
 };
 
@@ -295,6 +312,7 @@ pub fn parse_manifest(doc: &Value, shipped: &[&str]) -> Result<Vendor, String> {
                 .filter(|v| !v.is_empty())
                 .map(leak),
         },
+        tool_matcher: opt(doc, "tool_matcher"),
         session_env: Box::leak(session_env.into_boxed_slice()),
     })
 }
@@ -417,6 +435,37 @@ mod tests {
             detect_with(|_| Some("   ".into())).id,
             "claude-code",
             "a blank id is not a detection"
+        );
+    }
+
+    /// **A vendor's tool names are as much its own as its event names** — and this is the row
+    /// that was wrong in a shipped commit. `Read|Edit|Write|NotebookEdit` went into Gemini's
+    /// `BeforeTool` matcher verbatim, where it matches nothing: Gemini calls those acts
+    /// `read_file`, `read_many_files`, `write_file` and `replace`, and `NotebookEdit` appears
+    /// zero times in its bundle. The path-anchored lane would have fired zero times, silently,
+    /// which is D74's shape — `by path 0/0` beside a working recency lane is not a low number,
+    /// it is an incomparable one.
+    ///
+    /// The absence half is the load-bearing one: an assertion that Gemini's matcher merely
+    /// *contains* its own names would pass on a matcher that also carried Claude's.
+    #[test]
+    fn each_vendors_matcher_is_written_in_its_own_tool_vocabulary() {
+        let claude = CLAUDE_CODE
+            .tool_matcher
+            .expect("claude matches on tool names");
+        let gemini = GEMINI_CLI.tool_matcher.expect("so does gemini");
+        for mine in ["read_file", "write_file", "replace"] {
+            assert!(gemini.contains(mine), "gemini's own tools: {gemini}");
+        }
+        for claudes in ["Read", "Edit", "Write", "NotebookEdit"] {
+            assert!(
+                !gemini.split('|').any(|t| t == claudes),
+                "Claude's {claudes:?} in Gemini's matcher matches nothing there: {gemini}"
+            );
+        }
+        assert!(
+            claude.contains("NotebookEdit"),
+            "claude keeps its own: {claude}"
         );
     }
 

@@ -11,6 +11,16 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **A vendor's tool names travel with its event names** (D111). The memory lane's `PreToolUse`
+  matcher was a constant — `Read|Edit|Write|NotebookEdit` — and phase 2 installed it verbatim
+  into Gemini's `BeforeTool`, where it matches nothing: Gemini calls those acts `read_file`,
+  `read_many_files`, `write_file` and `replace`. The path-anchored lane would have fired zero
+  times on every Gemini session, silently, and the receipt would have shown `by path 0/0` beside
+  a working recency lane — D74's incomparable-denominator failure, arriving through a field
+  nobody thought to ask about. `Vendor::tool_matcher` carries it now, manifests may declare it,
+  and both the descriptor and the installed plan assert that one vendor's vocabulary never
+  reaches another's file.
+
 - **`find_unread_fields.py` no longer reports a live function as dead when a doc comment contains
   a glob.** It stripped block comments before line comments, so `~/.config/amb/vendors/*.json` —
   or the `**/*.rs` that had been sitting in `topics.rs` all along — opened a block comment that
