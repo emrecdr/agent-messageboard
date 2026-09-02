@@ -11,6 +11,13 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`memory/export.rs` under exhaustive mutation: one missed of 26 viable, and it was the
+  exporter's own receipt** (M54). `written += 1` could become `*=` and the person running
+  `amb memory export` would be told nothing was written while every file landed — the
+  human-report counter seam's third sighting this week (M27, M51). Guarded with a count-and-body
+  fixture. The first run died at ENOSPC when the machine's disk hit zero mid-pass and was
+  redone clean rather than salvaged.
+
 - **`memory/redact.rs` under exhaustive mutation: thirteen missed, nine now guarded, four named
   equivalent** (M53). Nine sat on the one boundary the module exists to draw — quotes and commas
   counted toward the length that convicts a value, `substantial` could convict an all-digit

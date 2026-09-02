@@ -255,6 +255,36 @@ mod tests {
     /// The mechanism reaches the reader and then fails to reach the party positioned to act —
     /// which here is the same person, one command away. Both the count and the command are
     /// asserted, and so is the quiet path: a clean repository must not print a list of nothing.
+    /// **The count the exporter reports is the count of files it wrote.** M54's one survivor:
+    /// `written += 1` could become `*=` — zero forever — and nothing reddened, because no test
+    /// had ever asserted the returned count. Files written while the person is told none were
+    /// is M27's silent-writer seam on the one path that authors into a repository (D11's
+    /// sanctioned exception), where a wrong "0 exported" sends someone re-running a command
+    /// that already worked.
+    #[test]
+    fn the_export_count_is_the_number_of_files_actually_written() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exports = [
+            Export {
+                id: NoteId::observation("nest", "a"),
+                rel_path: "docs/decisions/a.md".into(),
+                body: "alpha\n".into(),
+            },
+            Export {
+                id: NoteId::observation("nest", "b"),
+                rel_path: "docs/decisions/b.md".into(),
+                body: "beta\n".into(),
+            },
+        ];
+        let n = write_export(&exports, dir.path()).expect("writes");
+        assert_eq!(n, 2, "the report matches the work");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("docs/decisions/b.md")).expect("on disk"),
+            "beta\n",
+            "and the work happened"
+        );
+    }
+
     #[test]
     fn a_drifted_export_names_every_file_and_the_command_that_refreshes_them() {
         let clean = ExportStatus {

@@ -4028,3 +4028,26 @@ mutant than a batch score: the complete first run, each of the nine killable sur
 re-applied by hand and seen red against its own guard, and one claimed-equivalent re-applied
 against the *entire* lib suite and seen survive. The partial re-run corroborates where it got:
 its one logged MISSED before the interrupt is one of the four predicted-equivalent trim flips.
+
+## M54 · export.rs: one survivor, and it was the exporter's own receipt
+
+**2026-09-02.** `tools/mutants.sh src/memory/export.rs` — the D11-sanctioned repository write
+and the `--check` hash comparison. Two runs, because the first died at ENOSPC seventeen mutants
+in when the machine's disk hit zero (a machine-wide event, not ours — the shared-cache clean
+another session ran had already been refilled by an unidentified consumer): an interrupted run
+is void, so it was redone from a cold cache once space was freed. The 16/16 the void run
+managed agree with the clean run, which is corroboration and not evidence.
+
+**Clean run: 29 mutants in 2m — 25 caught, 3 unviable, 1 missed, zero timeouts.** The renderer
+and the drift check held (the D90-family containment tests and the drift truth tables did their
+work). The survivor is the now-familiar seam, third sighting: **`written += 1` in
+`write_export` could become `*=` — zero forever — because no test had ever asserted the
+returned count.** Files written while the person is told none were, on the one path that
+authors into a repository: a wrong "0 exported" sends someone re-running a command that already
+worked. Guarded with a two-file fixture asserting the count *and* one body on disk; the mutant
+re-applied and seen red, revert byte-identical.
+
+The pattern now has three instances this week — `Redacted.removed` (M27), the capture marker
+(M51), and this — and one shape: **a counter whose writer works and whose only reader is a
+human report.** The find-unread-fields tool cannot see it (the field IS read — by the print),
+and only a count assertion at the caller's distance catches it.
