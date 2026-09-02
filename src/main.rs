@@ -128,6 +128,14 @@ enum Command {
         /// Another project's claims. Defaults to this project.
         #[arg(long)]
         project: Option<String>,
+        /// Every project on this machine, not just yours.
+        ///
+        /// **Because the default answers a narrower question than it looks like it answers**
+        /// (U11). A session ran `amb claims`, saw the one holder its own project had, and
+        /// reported twice that nobody uses claims — a number the command guaranteed rather than
+        /// observed. The board actually held 173 rows across 14 holders at that moment.
+        #[arg(long)]
+        all: bool,
         /// Hide claims that have already lapsed.
         #[arg(long)]
         live: bool,
@@ -732,10 +740,22 @@ fn run(cli: Cli) -> Result<(), Error> {
 
         Command::Claims {
             ref project,
+            all,
             live,
             raw,
         } => {
-            let rows = claims::list(&conn, project.as_deref().unwrap_or(&me.project), live)?;
+            // `--all` is `None`: every project. **Conflict *detection* stays project-scoped and
+            // that is not the same question** — claims store repo-relative paths, so `README.md`
+            // in six projects is six different files, and warning their holders about each other
+            // would be a false collision on the board's most-claimed name. This is the *survey*
+            // view, and it exists because `amb claims` could only show a project whose name you
+            // already knew (U11).
+            let scope = if all {
+                None
+            } else {
+                Some(project.as_deref().unwrap_or(&me.project))
+            };
+            let rows = claims::list(&conn, scope, live)?;
             let at = db::now()?;
             if cli.json {
                 let items: Vec<_> = rows.iter().map(|c| c.to_json(at)).collect();
@@ -753,7 +773,14 @@ fn run(cli: Cli) -> Result<(), Error> {
                     );
                 }
             } else {
-                for line in claims::summarise(&rows, at) {
+                // Grouped when surveying the machine, flat when it is one project — the heading
+                // is what stops six different `README.md` files reading as one collision.
+                let lines = if all {
+                    claims::summarise_by_project(&rows, at)
+                } else {
+                    claims::summarise(&rows, at)
+                };
+                for line in lines {
                     println!("{line}");
                 }
             }

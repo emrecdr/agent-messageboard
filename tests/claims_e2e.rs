@@ -639,3 +639,47 @@ fn the_advisory_sentence_appears_only_when_somebody_else_holds_the_path() {
         "and the one remedy the tool offers is stated: {contended:?}"
     );
 }
+
+/// **`amb claims` could only show a project whose name you already knew, and that produced a
+/// false measurement twice** (U11). A session ran it, saw the single holder its own project had,
+/// and reported that nobody uses claims — a number the command guaranteed rather than observed.
+///
+/// Both halves are asserted, and the second is the one that matters: `--all` shows every
+/// project, and the default still shows only yours. A survey that quietly became the default
+/// would break every existing reading of this command.
+#[test]
+fn claims_can_survey_every_project_and_still_defaults_to_this_one() {
+    let b = Board::new();
+    b.run("uuid-a", &["claim", "README.md", "--intent", "mine here"]);
+    let mut c = b.cmd("uuid-b");
+    c.env("AMB_PROJECT", "elsewhere")
+        .args(["claim", "README.md", "--intent", "a different file"]);
+    let out = c.output().expect("amb runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let survey = b.run("uuid-a", &["claims", "--all"]);
+    assert!(
+        survey.contains("nest:"),
+        "the survey names each project: {survey}"
+    );
+    assert!(
+        survey.contains("elsewhere:"),
+        "including one you are not in: {survey}"
+    );
+    assert_eq!(
+        survey.matches("README.md").count(),
+        2,
+        "the same relative path in two projects is two different files, and both are shown \
+         under their own heading rather than one hiding the other: {survey}"
+    );
+
+    let mine = b.run("uuid-a", &["claims"]);
+    assert!(
+        !mine.contains("elsewhere"),
+        "the default must stay this project, or every existing reading changes: {mine}"
+    );
+}

@@ -287,7 +287,7 @@ pub fn take(
 /// that only grows. The `is_live` filter below stays: `list` computes its own `now()`, this
 /// function is handed the caller's `at`, and the belt costs nothing.
 pub fn conflicts_with(conn: &Connection, me: &Identity, path: &str, at: f64) -> Result<Vec<Claim>> {
-    Ok(list(conn, &me.project, true)?
+    Ok(list(conn, Some(&me.project), true)?
         .into_iter()
         .filter(|c| c.agent != me.id && c.is_live(at) && overlaps(&c.path, path))
         .collect())
@@ -375,7 +375,7 @@ pub fn edited_paths(conn: &Connection, project: &str) -> Result<Vec<EditedPath>>
 /// `live_only = false` the lapsed rows come too, so a lapse degrades into a lead — "alice held
 /// this until 40 minutes ago" — rather than the claim silently vanishing, which is
 /// `RESEARCH.md` R1's specific complaint about the prior art.
-pub fn list(conn: &Connection, project: &str, live_only: bool) -> Result<Vec<Claim>> {
+pub fn list(conn: &Connection, project: Option<&str>, live_only: bool) -> Result<Vec<Claim>> {
     let at = now()?;
     let (query, binds) = list_sql(project, live_only.then_some(at));
     let mut stmt = conn
@@ -428,17 +428,26 @@ pub fn list(conn: &Connection, project: &str, live_only: bool) -> Result<Vec<Cla
 /// by the same `if let`, so the positional order is held by structure — an interim form kept
 /// the SQL here and the binds in [`list`], two branches agreeing by comment, with a third
 /// hand-built copy in the plan test.
-fn list_sql(project: &str, live_at: Option<f64>) -> (String, Vec<rusqlite::types::Value>) {
+fn list_sql(project: Option<&str>, live_at: Option<f64>) -> (String, Vec<rusqlite::types::Value>) {
     let mut query = String::from(
         "SELECT c.path, c.agent, a.name, c.project, c.intent, c.source, c.taken_at,
                 c.expires_at, a.pid, a.last_seen
          FROM claims c
          LEFT JOIN agents a ON a.id = c.agent
-         WHERE c.project = ?1",
+         WHERE 1 = 1",
     );
-    let mut binds: Vec<rusqlite::types::Value> = vec![project.to_string().into()];
+    let mut binds: Vec<rusqlite::types::Value> = Vec::new();
+    // **`None` is every project, and this axis was deleted as dead before it had a caller.**
+    // It was unreachable then and removing it was right; `amb claims --all` is the use case that
+    // brings it back, and it arrived from a session that ran `amb claims`, saw its own project's
+    // single holder, and concluded twice that nobody uses claims — a number the command
+    // guaranteed rather than observed (U11).
+    if let Some(p) = project {
+        query.push_str(&format!(" AND c.project = ?{}", binds.len() + 1));
+        binds.push(p.to_string().into());
+    }
     if let Some(at) = live_at {
-        query.push_str(" AND c.expires_at > ?2");
+        query.push_str(&format!(" AND c.expires_at > ?{}", binds.len() + 1));
         binds.push(at.into());
     }
     query.push_str(" ORDER BY c.taken_at DESC");
@@ -451,6 +460,29 @@ fn list_sql(project: &str, live_at: Option<f64>) -> (String, Vec<rusqlite::types
 /// when showing them.** Observed claims are precise, so they never warn anyone off a file nobody
 /// touched; grouping them for display still reads as "alice · 7 files under src/capture/".
 /// Storing directories instead would have bought the same readability by over-claiming.
+/// [`summarise`], grouped under a heading per project, for the whole-machine survey.
+///
+/// **The project has to be on the page, because a path does not identify a file across
+/// projects** (U11). Claims store repo-relative paths, and this board holds `README.md` in six
+/// projects and `CHANGELOG.md` in five — an ungrouped survey shows six rows that look like a
+/// collision and are six different files. The grouping is what makes the survey readable as
+/// evidence rather than as an alarm.
+///
+/// Pure, so the ordering is testable: projects alphabetical, and inside one the order
+/// `summarise` already chose.
+pub fn summarise_by_project(claims: &[Claim], at: f64) -> Vec<String> {
+    let mut projects: Vec<&str> = claims.iter().map(|c| c.project.as_str()).collect();
+    projects.sort_unstable();
+    projects.dedup();
+    let mut out = Vec::new();
+    for p in projects {
+        let mine: Vec<Claim> = claims.iter().filter(|c| c.project == p).cloned().collect();
+        out.push(format!("{p}:"));
+        out.extend(summarise(&mine, at).into_iter().map(|l| format!("  {l}")));
+    }
+    out
+}
+
 pub fn summarise(claims: &[Claim], at: f64) -> Vec<String> {
     /// One holder's claims under one directory.
     struct Group<'a> {
@@ -586,7 +618,7 @@ fn notice_exhausted(conn: &Connection, me: &Identity, c: &Claim) -> Result<bool>
 
 pub fn my_conflicts(conn: &Connection, me: &Identity) -> Result<Vec<Claim>> {
     let at = now()?;
-    let all = list(conn, &me.project, true)?;
+    let all = list(conn, Some(&me.project), true)?;
     let mine: Vec<&Claim> = all.iter().filter(|c| c.agent == me.id).collect();
     if mine.is_empty() {
         return Ok(Vec::new());
@@ -731,7 +763,7 @@ mod tests {
     fn the_project_filter_reaches_the_index() {
         let (_dir, conn, _a, _b, _c) = board();
         for live in [false, true] {
-            let (query, binds) = list_sql("nest", live.then_some(0.0));
+            let (query, binds) = list_sql(Some("nest"), live.then_some(0.0));
             crate::assert_query_plan_uses(&conn, &query, binds, "ix_claims_live");
         }
     }
@@ -877,6 +909,35 @@ mod tests {
                 ("src/c.rs".to_string(), carol.id.clone()),
             ],
             "four overlaps, each once, and nothing alice does not hold"
+        );
+    }
+
+    /// **A survey across projects has to say which project**, because the same relative path is
+    /// a different file in each one (U11). This board holds `README.md` in six projects; without
+    /// the heading the survey reads as a six-way collision.
+    #[test]
+    fn a_whole_machine_survey_groups_under_a_heading_per_project() {
+        let cs = vec![
+            claim("README.md", "bob", "declared", 100.0),
+            Claim {
+                project: "other".into(),
+                ..claim("README.md", "carol", "declared", 100.0)
+            },
+        ];
+        let lines = summarise_by_project(&cs, 0.0);
+        let joined = lines.join("\n");
+        assert!(
+            joined.contains("nest:") && joined.contains("other:"),
+            "{joined}"
+        );
+        assert!(
+            lines.iter().position(|l| l == "nest:") < lines.iter().position(|l| l == "other:"),
+            "projects are alphabetical, so two runs can be compared: {joined}"
+        );
+        assert_eq!(
+            lines.iter().filter(|l| l.contains("README.md")).count(),
+            2,
+            "both are shown — the heading disambiguates them rather than hiding one: {joined}"
         );
     }
 

@@ -11,6 +11,15 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`amb claims --all` surveys every project, because the default answered a narrower question
+  than it looked like it answered** (U11). A session ran `amb claims`, saw the single holder its
+  own project had, and reported twice that nobody uses claims — a number the command *guaranteed*
+  rather than observed. The board held 173 rows across 14 holders at that moment. The survey is
+  grouped under a heading per project, which is not decoration: claims store repo-relative paths,
+  and this board holds `README.md` in six projects and `CHANGELOG.md` in five, so an ungrouped
+  survey would read as a six-way collision between six different files. Conflict *detection*
+  stays project-scoped for exactly that reason — it is a different question from the survey.
+
 - **`amb reply` takes `--body-file`, which only `send` had** (U10). A reply is the longer message
   of the two — it quotes, it explains, it carries the decision — so the command most likely to
   need the escape hatch was the one without it. Found by being refused while composing a long
