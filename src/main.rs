@@ -472,8 +472,21 @@ fn main() -> ExitCode {
     }
 }
 
+/// `--vendor` as a descriptor, or the usage error naming what it could have been.
+///
+/// One spelling for both `install` and `uninstall`: they had two, and the difference was not a
+/// decision — `install` listed the known ids and `uninstall` said only "unknown vendor", so the
+/// half of the pair likelier to be typed under time pressure was the half that helped less.
+/// Which ids exist is [`amb::vendors::known_ids`]'s to answer, not this file's (D78).
+fn resolve_vendor(id: &str) -> Result<&'static amb::vendors::Vendor, Error> {
+    amb::vendors::by_id(id).ok_or_else(|| Error::BadAddress {
+        input: id.to_string(),
+        reason: format!("unknown vendor; known: {}", amb::vendors::known_ids()),
+    })
+}
+
 fn run(cli: Cli) -> Result<(), Error> {
-    // Hook management touches only ~/.claude/settings.json, never the board. Handled before
+    // Hook management touches a vendor's own settings file, never the board. Handled before
     // the database is opened, so `amb install` does not create one — the hooks then stay inert
     // for every session on the machine until somebody actually sends something (D9).
     match cli.command {
@@ -483,17 +496,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             dry_run,
             memory,
         } => {
-            let v = amb::vendors::by_id(vendor).ok_or_else(|| Error::BadAddress {
-                input: vendor.clone(),
-                reason: format!(
-                    "unknown vendor; known: {}",
-                    amb::vendors::VENDORS
-                        .iter()
-                        .map(|v| v.id)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            })?;
+            let v = resolve_vendor(vendor)?;
             let mode = hooks::Mode::parse(mode).ok_or_else(|| Error::BadAddress {
                 input: mode.clone(),
                 reason: "expected session, turn or monitor".into(),
@@ -513,10 +516,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             ref vendor,
             dry_run,
         } => {
-            let v = amb::vendors::by_id(vendor).ok_or_else(|| Error::BadAddress {
-                input: vendor.clone(),
-                reason: "unknown vendor".into(),
-            })?;
+            let v = resolve_vendor(vendor)?;
             let path = hooks::settings_path(v)?;
             let done = hooks::apply(&path, dry_run, hooks::plan_uninstall)?;
             return report_plan(&cli, &path, &done, dry_run, "removed");
@@ -1224,7 +1224,7 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
     // injected into the model's context — say so now rather than at the next turn boundary.
     let vendor = amb::vendors::detect();
     if event == vendor.events.tool_post {
-        return post_tool_use(&mut conn, &me, input);
+        return post_tool_use(&mut conn, &me, input, event);
     }
 
     // A session that ends lapses its claims now instead of running out their TTL (D109).
@@ -1275,7 +1275,8 @@ fn emit(
     Ok(())
 }
 
-/// Handle a `PostToolUse` hook: record the edit, then deliver what is genuinely new.
+/// Handle the tool-completed hook — Claude's `PostToolUse`, Gemini's `AfterTool`: record the
+/// edit, then deliver what is genuinely new.
 ///
 /// **Mid-turn delivery, and it is the cheapest large improvement available here.** `SessionStart`
 /// and `Stop` deliver at a session's start and at turn boundaries; an agent grinding through a
@@ -1293,17 +1294,26 @@ fn emit(
 /// **What keeps it from becoming noise** is that both halves are restricted to *new* facts:
 /// mail that has never been offered, and a conflict only on an edit that took a claim rather
 /// than renewing one. Re-editing the same contested file is silent; `Stop` remains the sweep.
+///
+/// **`event` is passed rather than spelled, and that is the whole of the fix it carries.** Three
+/// of the four `delivery::envelope` call sites already forwarded the name the payload announced;
+/// this one wrote `"PostToolUse"`, so a Gemini session's `AfterTool` hook emitted an envelope
+/// naming an event Gemini does not have. The guard that should have caught it says so in its own
+/// message — `claims_e2e`'s *"the envelope must name the event that fired"* — and could not,
+/// because under Claude the constant and the payload are the same string. M17's shape: the
+/// fixture never reaches the case that separates the rule from a coincidence.
 fn post_tool_use(
     conn: &mut rusqlite::Connection,
     me: &identity::Identity,
     input: &serde_json::Value,
+    event: &str,
 ) -> Result<(), Error> {
     let conflicts = observe_edit(conn, me, input)?;
     let unread = messages::undelivered(conn, me)?;
     let Some(rendered) = delivery::render_all(&unread, &conflicts, db::now()?, false) else {
         return Ok(());
     };
-    emit(conn, me, "PostToolUse", &rendered)
+    emit(conn, me, event, &rendered)
 }
 
 /// Record a claim from an edit the agent just performed, and report what it collided with.
@@ -1779,12 +1789,16 @@ fn run_memory(
             // Read, never assumed. An unreadable or absent settings file is `Unknown`, never
             // `Incomplete` — see `hooks::HookState`. Every decision about what this means lives in
             // the library; this arm reads a file and prints what it is given.
-            let hook_state = match hooks::settings_path(&amb::vendors::CLAUDE_CODE)
-                .and_then(|p| hooks::read_settings(&p))
-            {
-                Ok(settings) => hooks::memory_state(&settings, &amb::vendors::CLAUDE_CODE),
-                Err(_) => hooks::HookState::Unknown,
-            };
+            // The host vendor, not Claude Code. This state feeds `Receipt::verdict`, which is the
+            // instrument D59's withdrawal is read off — so reading the wrong CLI's settings file
+            // is not a cosmetic slip but D91's shape exactly: a verdict computed from an event
+            // that did not happen here.
+            let vendor = amb::vendors::detect();
+            let hook_state =
+                match hooks::settings_path(vendor).and_then(|p| hooks::read_settings(&p)) {
+                    Ok(settings) => hooks::memory_state(&settings, vendor),
+                    Err(_) => hooks::HookState::Unknown,
+                };
             if cli.json {
                 print_json(&st.to_json(&hook_state));
                 return Ok(());

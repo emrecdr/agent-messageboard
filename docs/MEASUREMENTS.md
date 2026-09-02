@@ -4421,3 +4421,57 @@ a manifest carrying only an `id` is refused for its missing `session_env` and ne
 `config_dir` check the test was about. The parser refuses on the first thing missing, so a
 fixture has to clear the earlier gates to exercise a later one — M17's rule, broken minutes after
 re-reading it in the paragraph above.
+
+## M63 · five doc comments describing the wrong function, and two detectors each blind to what the other saw
+
+**Modules:** `src/claims.rs`, `src/doctor.rs`, `src/hooks.rs`, `src/identity.rs`, `src/main.rs`
+
+**2026-09-02.** A cleanup pass over the vendor arc found `summarise_by_project` carrying, as its
+rustdoc, the three paragraphs that describe `summarise` — and `summarise`, the function that
+actually does the grouping, carrying none. The mechanism is mechanical and dull: a new item was
+inserted *between* an existing `///` block and the function it documented, so the block attached
+itself to the newcomer. Nothing fails. `cargo doc` renders happily. The result is the failure mode
+this project already has four entries about — **a false comment, which is worse than an absent
+one** — sitting on public API, where the reader most likely to be misled is the one who came to
+the file for the first time.
+
+**Five instances, not one.** Two were introduced by the vendor arc and three predate it:
+
+| item that lost its doc | item that inherited it | file |
+|---|---|---|
+| `claims::summarise` | `claims::summarise_by_project` | `src/claims.rs` |
+| `claims::take` | `claims::end_session` | `src/claims.rs` |
+| `doctor::size_check` | `doctor::vendors_check` | `src/doctor.rs` |
+| `identity::register` | `identity::MAX_NAME` | `src/identity.rs` |
+| `hooks::settings_path` | `hooks::settings_sources` | `src/hooks.rs` |
+
+Two of them read as outright contradictions rather than as mere misplacement: `end_session`'s
+rustdoc opened *"Take or renew a claim. Never blocks, never fails on conflict."* — the summary of
+the function that **writes** claims, on the one that **lapses** them — and `MAX_NAME`, a `usize`,
+opened *"The roster upsert, reporting anything it displaced."*
+
+**The reusable part is that neither detector could have found all five.** Two were written and
+both were run:
+
+- **By history** — for each function, was it documented at some earlier commit and bare now?
+  Precision 4/4, and it found `take`, `register`, `summarise` and `size_check`. It cannot see
+  `settings_path`, whose loss predates the range, and as a *gate* check it has nowhere to stand:
+  the pre-commit hook examines a working tree, not a range.
+- **By text** — inside one `///` block's first paragraph, a line ending a sentence followed
+  directly by a line opening a new capitalised one. It found `take` and `settings_path` — including
+  the one history missed — at **2 real out of 11 candidates**, because a genuine two-sentence
+  summary looks identical. Too noisy for the gate.
+
+The union is five; each alone is four or two. This is `CLAUDE.md`'s "count the layers" arithmetic
+arriving in a new place: two instruments with different blind spots, and the completeness claim
+belonging to neither.
+
+**What was rejected, and why it is a rejection rather than an omission.** `#![warn(missing_docs)]`
+catches this class permanently and at compile time — the robbed item always ends up bare. It was
+measured rather than assumed: **242 warnings**, of which **180 are struct fields and 29 are enum
+variants**, leaving 33 items of the kind at issue. Turning it on means either documenting 180
+self-describing fields or shipping an `#[allow]` that switches the lint off exactly where it would
+have worked. Neither is a cleanup pass's call to make quietly, so the lint is recorded here as a
+decision someone should take deliberately, with the backlog counted, instead of being bolted on.
+The five instances are fixed; the mechanism is not yet guarded, and this paragraph is the only
+thing saying so.

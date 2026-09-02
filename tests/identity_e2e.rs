@@ -477,6 +477,102 @@ fn a_blank_amb_project_falls_back_to_the_directory() {
     }
 }
 
+/// **The envelope names the event that fired, and one call site spelled it instead.**
+///
+/// A two-row truth table over the *same* hook, because one row cannot tell a rule from a
+/// coincidence. `claims_e2e` already asserted this — its message even states the rule, *"the
+/// envelope must name the event that fired"* — but only ever under Claude, where the payload's
+/// `PostToolUse` and the hardcoded `"PostToolUse"` are the same string. M17's shape: the fixture
+/// never reached the case that separates them. Gemini's tool-completed event is `AfterTool`, so
+/// the Gemini row is the one that fails when the name is a constant, and the Claude row is what
+/// proves the harness reached the renderer at all rather than passing vacuously.
+#[test]
+fn the_injected_envelope_names_the_event_that_actually_fired() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("board.db");
+
+    // Each row: (session variable, session id, the event this CLI announces on a finished tool).
+    for (session_var, session, event) in [
+        ("CLAUDE_CODE_SESSION_ID", "claude-tool-sess", "PostToolUse"),
+        ("GEMINI_SESSION_ID", "gemini-tool-sess", "AfterTool"),
+    ] {
+        let other = if session_var == "GEMINI_SESSION_ID" {
+            "CLAUDE_CODE_SESSION_ID"
+        } else {
+            "GEMINI_SESSION_ID"
+        };
+        // One project per row, so neither row can be carried by the other's mail.
+        let project = format!("envelope-{event}");
+        let base = |cmd: &mut Command| {
+            cmd.current_dir(dir.path())
+                .env("AMB_DB", &db)
+                .env("AMB_PROJECT", &project)
+                .env(session_var, session)
+                .env_remove("AMB_AGENT")
+                .env_remove(other)
+                .env_remove("CLAUDE_CODE_MESSAGING_SOCKET")
+                .env_remove("AMB_VAULT");
+        };
+
+        // Mail from *someone else*, so this session has something it has never been offered — a
+        // session does not receive its own broadcast, and a hook with nothing to say says nothing.
+        let out = Command::new(env!("CARGO_BIN_EXE_amb"))
+            .args(["send", "@", "--subject", "knock", "--body", "anyone there"])
+            .current_dir(dir.path())
+            .env("AMB_DB", &db)
+            .env("AMB_PROJECT", &project)
+            .env("AMB_AGENT", format!("peer-{event}"))
+            .output()
+            .expect("amb runs");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_amb"));
+        base(&mut hook);
+        let mut child = hook
+            .args(["hook", "turn"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("amb runs");
+        let payload = serde_json::json!({
+            "hook_event_name": event,
+            "tool_name": "Edit",
+            "tool_input": { "file_path": dir.path().join("a.rs") },
+        })
+        .to_string();
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(payload.as_bytes())
+            .expect("write");
+        let done = child.wait_with_output().expect("amb finishes");
+        assert_eq!(done.status.code(), Some(0), "a hook must always succeed");
+
+        let stdout = String::from_utf8_lossy(&done.stdout);
+        let v: serde_json::Value = serde_json::from_str(stdout.trim())
+            .unwrap_or_else(|e| panic!("{event}: {e}: {stdout}"));
+        assert_eq!(
+            v["hookSpecificOutput"]["hookEventName"], event,
+            "a {session_var} session firing {event} must have its own event named back: {stdout}"
+        );
+        // The presence row: without this the assertion above could pass on an empty injection.
+        assert!(
+            v["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .is_some_and(|c| c.contains("knock")),
+            "{event}: the envelope must actually carry the mail: {stdout}"
+        );
+    }
+}
+
 /// **A Gemini session and a Claude session reach each other, across projects** (D111).
 ///
 /// This is the requirement the vendor descriptor exists to serve, and it is asserted end to end
@@ -565,6 +661,131 @@ fn a_gemini_session_can_message_a_claude_session_in_another_project() {
 /// lost its capture lane while the install still succeeded and printed two lanes where three
 /// were declared. A count of installed lanes is what catches that; a "did it install" check is
 /// not.
+/// **`doctor` inspects the settings file of the CLI it is running inside.**
+///
+/// It read Claude's unconditionally, which made it the fourth sighting of D91's shape: an
+/// instrument whose number is computed from an event that did not happen here. A Gemini-only
+/// installation was reported as *no amb hooks are installed* — the strongest wording `doctor`
+/// has — while every hook was in place, and the warning beside it quoted `~/.claude/settings.json`
+/// as a literal though the read had gone elsewhere.
+///
+/// Both rows install into Gemini. The difference is only which CLI the *doctor* run believes it
+/// is inside, so nothing but the vendor lookup can move the answer: under Claude the same board
+/// and the same `$HOME` must report the hooks missing, and that row is what proves the Gemini row
+/// is not passing on a fixture that would satisfy either implementation.
+#[test]
+fn doctor_reads_the_settings_file_of_the_cli_it_is_running_inside() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).expect("mkdir");
+
+    let run = |session_var: &str, args: &[&str]| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_amb"))
+            .args(args)
+            .current_dir(dir.path())
+            .env("HOME", &home)
+            .env("AMB_DB", dir.path().join("board.db"))
+            .env("AMB_PROJECT", "doc-proj")
+            .env(session_var, "sess")
+            .env_remove("AMB_AGENT")
+            .env_remove(if session_var == "GEMINI_SESSION_ID" {
+                "CLAUDE_CODE_SESSION_ID"
+            } else {
+                "GEMINI_SESSION_ID"
+            })
+            .env_remove("AMB_VENDORS")
+            .env_remove("AMB_VAULT")
+            .output()
+            .expect("amb runs");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    run("GEMINI_SESSION_ID", &["install", "--vendor", "gemini-cli"]);
+    assert!(
+        home.join(".gemini").join("settings.json").is_file(),
+        "the fixture must have installed into Gemini's own file"
+    );
+    assert!(
+        !home.join(".claude").join("settings.json").exists(),
+        "and must have left Claude's absent, or neither row proves anything"
+    );
+
+    let from_gemini = run("GEMINI_SESSION_ID", &["doctor"]);
+    assert!(
+        !from_gemini.contains("no amb hooks are installed"),
+        "a Gemini session must be told about the file it actually uses: {from_gemini}"
+    );
+    let from_claude = run("CLAUDE_CODE_SESSION_ID", &["doctor"]);
+    assert!(
+        from_claude.contains("no amb hooks are installed"),
+        "and a Claude session on the same $HOME must still report its own file empty: \
+         {from_claude}"
+    );
+}
+
+/// **The list in the unknown-vendor error is the same list `--vendor` resolves against.**
+///
+/// It was not: `by_id` searched `all()` while the error enumerated `VENDORS`, so a person who had
+/// dropped a manifest in and then mistyped its id was shown a list their own vendor was missing
+/// from — the loader working perfectly and the only message about it implying the file had not
+/// been read. D58's shape at message scale, and invisible to any test that only ever asks about
+/// shipped vendors.
+///
+/// Asserted on the *manifest* id specifically. A row naming only `claude-code` would pass against
+/// either implementation, which is the whole reason the defect survived.
+#[test]
+fn the_unknown_vendor_error_lists_vendors_that_came_from_a_manifest() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let vendors = dir.path().join("vendors");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&vendors).expect("mkdir");
+    std::fs::create_dir_all(&home).expect("mkdir");
+    std::fs::write(
+        vendors.join("acme.json"),
+        r#"{
+          "id": "acme-cli",
+          "config_dir": ".acme",
+          "settings_file": "settings.json",
+          "events": {
+            "session_start": "Begin", "turn_end": "Done", "tool_post": "AfterTool",
+            "session_end": "Finish", "tool_pre": "BeforeTool"
+          },
+          "session_env": ["ACME_SESSION_ID"]
+        }"#,
+    )
+    .expect("write manifest");
+
+    for args in [
+        ["install", "--vendor", "acme-cly"],
+        ["uninstall", "--vendor", "acme-cly"],
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_amb"))
+            .args(args)
+            .current_dir(dir.path())
+            .env("HOME", &home)
+            .env("AMB_VENDORS", &vendors)
+            .env("AMB_DB", dir.path().join("board.db"))
+            .env_remove("AMB_AGENT")
+            .env_remove("AMB_VAULT")
+            .output()
+            .expect("amb runs");
+        assert!(!out.status.success(), "{args:?} must be a usage error");
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            said.contains("acme-cli"),
+            "{args:?} must name the manifest vendor it could have meant: {said}"
+        );
+        assert!(
+            said.contains("claude-code"),
+            "{args:?} must still name the shipped ones: {said}"
+        );
+    }
+}
+
 #[test]
 fn a_vendor_amb_never_heard_of_installs_from_a_dropped_in_manifest() {
     use std::process::Command;

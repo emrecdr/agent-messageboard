@@ -12,7 +12,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 620 tests (622 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 623 tests (625 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -854,7 +854,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 620 tests (622 on Linux)
+cargo test                       # all 623 tests (625 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change

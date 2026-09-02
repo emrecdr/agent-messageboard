@@ -190,7 +190,6 @@ pub struct Taken {
     pub conflicts: Vec<Claim>,
 }
 
-/// Take or renew a claim. Never blocks, never fails on conflict.
 /// Lapse every live claim this agent holds, now.
 ///
 /// The `SessionEnd` hook's whole action (D109): a claim is a statement that a session is
@@ -211,6 +210,7 @@ pub fn end_session(conn: &Connection, me: &Identity) -> Result<usize> {
 /// rendered inline in the conflict block of every session that touches the path (D106).
 pub const MAX_INTENT: usize = 500;
 
+/// Take or renew a claim. Never blocks, never fails on conflict.
 pub fn take(
     conn: &Connection,
     me: &Identity,
@@ -454,13 +454,7 @@ fn list_sql(project: Option<&str>, live_at: Option<f64>) -> (String, Vec<rusqlit
     (query, binds)
 }
 
-/// One line per holder-and-directory, for display.
-///
-/// This is the resolution to the file-versus-directory question: **store exact paths, aggregate
-/// when showing them.** Observed claims are precise, so they never warn anyone off a file nobody
-/// touched; grouping them for display still reads as "alice · 7 files under src/capture/".
-/// Storing directories instead would have bought the same readability by over-claiming.
-/// [`summarise`], grouped under a heading per project, for the whole-machine survey.
+/// [`summarise`] again, under a heading per project, for the whole-machine survey.
 ///
 /// **The project has to be on the page, because a path does not identify a file across
 /// projects** (U11). Claims store repo-relative paths, and this board holds `README.md` in six
@@ -483,6 +477,12 @@ pub fn summarise_by_project(claims: &[Claim], at: f64) -> Vec<String> {
     out
 }
 
+/// One line per holder-and-directory, for display.
+///
+/// This is the resolution to the file-versus-directory question: **store exact paths, aggregate
+/// when showing them.** Observed claims are precise, so they never warn anyone off a file nobody
+/// touched; grouping them for display still reads as "alice · 7 files under src/capture/".
+/// Storing directories instead would have bought the same readability by over-claiming.
 pub fn summarise(claims: &[Claim], at: f64) -> Vec<String> {
     /// One holder's claims under one directory.
     struct Group<'a> {

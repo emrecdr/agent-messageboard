@@ -263,15 +263,15 @@ fn reclaim(conn: &Connection, who: &Identity, name: &str, at: f64) -> Result<Opt
     }
 }
 
-/// The roster upsert, reporting anything it displaced.
-///
-/// [`touch`] is the same call for the callers that only need the name.
 /// A display name's cap. Rendered on every mail header as `from "name"` and on every claim
 /// line, so it gets `messages::MAX_SUBJECT`'s treatment at label scale (D106). Only an
 /// *explicit* name is checked — the auto-generated candidates are ours and bounded by
 /// construction.
 pub const MAX_NAME: usize = 80;
 
+/// The roster upsert, reporting anything it displaced.
+///
+/// [`touch`] is the same call for the callers that only need the name.
 pub fn register(
     conn: &Connection,
     who: &Identity,

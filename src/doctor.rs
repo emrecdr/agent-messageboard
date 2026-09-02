@@ -346,18 +346,6 @@ pub fn location_check(path: &std::path::Path) -> Check {
     }
 }
 
-/// How big the board is, against the size D83 says to build pruning at.
-///
-/// **Three files, not one, and that is not pedantry.** In WAL mode the `-wal` sidecar holds
-/// committed transactions the main file does not yet contain, so `metadata(path)` alone understates
-/// a busy board. This project measured the consequence from the other side: the main file's own
-/// bytes change under concurrent *readers*, because a read updates `-shm` and can trigger a
-/// checkpoint (M32). Disk footprint is what "the board passes 50 MB" means to a person, so the
-/// sidecars are summed rather than ignored.
-///
-/// Fires **at** the threshold and not one byte past it. A strict `>` would make the number D83
-/// actually names the last value that does *not* trigger, which reads wrong to everyone who has
-/// only read the decision.
 /// Whether any user-added vendor manifest was refused, and which.
 ///
 /// **A refused manifest is otherwise a silence, and a loud one is the point** (D111): the loader
@@ -391,6 +379,18 @@ pub fn vendors_check(problems: &[crate::vendors::Problem], loaded: usize) -> Che
     )
 }
 
+/// How big the board is, against the size D83 says to build pruning at.
+///
+/// **Three files, not one, and that is not pedantry.** In WAL mode the `-wal` sidecar holds
+/// committed transactions the main file does not yet contain, so `metadata(path)` alone understates
+/// a busy board. This project measured the consequence from the other side: the main file's own
+/// bytes change under concurrent *readers*, because a read updates `-shm` and can trigger a
+/// checkpoint (M32). Disk footprint is what "the board passes 50 MB" means to a person, so the
+/// sidecars are summed rather than ignored.
+///
+/// Fires **at** the threshold and not one byte past it. A strict `>` would make the number D83
+/// actually names the last value that does *not* trigger, which reads wrong to everyone who has
+/// only read the decision.
 pub fn size_check(bytes: u64) -> Check {
     let mb = bytes as f64 / (1024.0 * 1024.0);
     let limit = db::PRUNE_AT_BYTES as f64 / (1024.0 * 1024.0);
@@ -523,13 +523,24 @@ pub fn gather(now: f64) -> Report {
     let running = version::banner();
 
     // --- the binaries the hooks invoke -------------------------------------------------
-    let settings =
-        hooks::settings_path(&crate::vendors::CLAUDE_CODE).and_then(|p| hooks::read_settings(&p));
+    // **The host vendor, not Claude Code, and the constant that used to sit here made this the
+    // fourth sighting of D91's shape.** `doctor` inspects a settings file to answer "are the
+    // hooks installed and is their binary current"; naming Claude's file unconditionally meant a
+    // Gemini session was told about a file it does not use, and a Gemini-only installation read
+    // as *not installed*. Worse, the warning below quoted `~/.claude/settings.json` as a literal
+    // while the read had gone elsewhere — an instrument naming a path it never opened.
+    let vendor = crate::vendors::detect();
+    let settings_file = hooks::settings_path(vendor);
+    let named = match &settings_file {
+        Ok(p) => p.display().to_string(),
+        Err(_) => format!("~/{}/{}", vendor.config_dir, vendor.settings_file),
+    };
+    let settings = settings_file.and_then(|p| hooks::read_settings(&p));
     match &settings {
         Err(e) => checks.push(Check::new(
             "binary",
             Health::Warn,
-            format!("could not read ~/.claude/settings.json: {e}"),
+            format!("could not read {named}: {e}"),
         )),
         Ok(v) => {
             let entries: Vec<HookBinary> = hooks::our_hook_exes(v)
@@ -558,16 +569,13 @@ pub fn gather(now: f64) -> Report {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default();
             let cwd = std::env::current_dir().unwrap_or_default();
-            let loaded: Vec<(String, Value)> =
-                hooks::settings_sources(&crate::vendors::CLAUDE_CODE, &home, &cwd)
-                    .into_iter()
-                    .filter_map(|(label, path)| {
-                        hooks::read_settings(&path).ok().map(|v| (label, v))
-                    })
-                    .collect();
+            let loaded: Vec<(String, Value)> = hooks::settings_sources(vendor, &home, &cwd)
+                .into_iter()
+                .filter_map(|(label, path)| hooks::read_settings(&path).ok().map(|v| (label, v)))
+                .collect();
             checks.push(duplicate_check(&hooks::duplicate_hooks(&loaded)));
 
-            let (installed, missing) = hooks::memory_hooks(v, &crate::vendors::CLAUDE_CODE);
+            let (installed, missing) = hooks::memory_hooks(v, vendor);
             checks.push(if missing.is_empty() {
                 Check::new(
                     "hooks",
@@ -638,11 +646,7 @@ pub fn gather(now: f64) -> Report {
             let memory_on = settings
                 .as_ref()
                 .ok()
-                .map(|s| {
-                    hooks::memory_hooks(s, &crate::vendors::CLAUDE_CODE)
-                        .1
-                        .is_empty()
-                })
+                .map(|s| hooks::memory_hooks(s, vendor).1.is_empty())
                 .unwrap_or(false);
             if let Some(conn) = conn.as_ref() {
                 for (name, event) in [

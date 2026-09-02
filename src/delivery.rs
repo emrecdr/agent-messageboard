@@ -442,7 +442,13 @@ pub fn write_snapshot(path: &Path, text: &str, home: Option<&str>) -> Result<()>
     std::fs::write(path, text).map_err(io(format!("writing the snapshot to {}", path.display())))
 }
 
-/// Wrap context in the envelope Claude Code injects into a model's context.
+/// Wrap context in the envelope a CLI injects into a model's context.
+///
+/// Claude Code and Gemini CLI spell this identically — 200 and 128 occurrences of
+/// `hookSpecificOutput.additionalContext` in their respective bundles — so delivery needs no
+/// vendor branch. `event` is the name the *payload* announced, never a constant: they are the
+/// same string under Claude and were not under Gemini, which is how the one call site that
+/// spelled it went unnoticed.
 ///
 /// Shape verified 2026-08-27 against a working local example: a `SessionStart` hook emitting
 /// `hookSpecificOutput.additionalContext` had its exact text appear in a session's prompt.

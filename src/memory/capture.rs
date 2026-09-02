@@ -47,7 +47,8 @@ fn marker_name(session: Option<&str>) -> String {
 }
 
 /// This session's key, made filesystem-safe. The same precedence as `identity::resolve`:
-/// `AMB_AGENT` overrides, `CLAUDE_CODE_SESSION_ID` is what every hook environment carries.
+/// `AMB_AGENT` overrides, and otherwise the host CLI's own session variable — the list is
+/// `Vendor::session_env`'s, so a second CLI is recognised without touching this function.
 fn session_key() -> Option<String> {
     let raw = std::env::var("AMB_AGENT")
         .ok()

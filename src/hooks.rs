@@ -429,9 +429,14 @@ impl HookState {
                 },
                 missing.join(", ")
             )),
+            // **The path is named by `doctor` rather than spelled here.** This string used to
+            // read `~/.claude/settings.json`, which is one vendor's file and became a wrong
+            // answer the moment there were two; `HookState` carries no vendor to substitute, and
+            // threading one through `render_status` to fix a caveat line is the wrong depth. The
+            // command that resolves the path already prints it.
             HookState::Unknown => Some(
-                "memory hooks: unknown — ~/.claude/settings.json could not be read, so whether \
-                 injection is running is unverified"
+                "memory hooks: unknown — this CLI's settings file could not be read, so whether \
+                 injection is running is unverified; `amb doctor` names the file it tried"
                     .to_string(),
             ),
         }
@@ -662,8 +667,7 @@ pub fn plan_uninstall(existing: &Value) -> Plan {
     settle(settings, Vec::new(), removed, existing)
 }
 
-/// The settings file the hooks are installed into.
-/// Every settings file whose hooks Claude Code merges, in precedence order, that a CLI can find.
+/// Every settings file whose hooks a CLI merges, in precedence order.
 ///
 /// **Hooks are list-valued, and the platform combines lists rather than overriding them** —
 /// *"when you set the same list key in more than one file, Claude Code combines the lists instead
@@ -759,6 +763,7 @@ pub fn duplicate_hooks(sources: &[(String, Value)]) -> Vec<DuplicateHook> {
     out
 }
 
+/// The settings file the hooks are installed into, for one vendor.
 pub fn settings_path(v: &Vendor) -> Result<PathBuf> {
     let home = std::env::var("HOME").map_err(|_| Error::NoIdentity)?;
     Ok(PathBuf::from(home).join(v.config_dir).join(v.settings_file))

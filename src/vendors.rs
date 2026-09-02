@@ -16,16 +16,15 @@
 //! `hookSpecificOutput.additionalContext`. Copilot CLI accepts Claude's PascalCase event names as
 //! aliases. The differences that remain are paths, event spellings and one envelope — data.
 //!
-//! **Deliberately not here yet.** No second vendor, no `id`/`label`, no manifest loader, no
-//! runtime detection. This module carries exactly the fields production code reads today, because
+//! **Built in that order on purpose, and the order is the reusable part.** The first version of
+//! this module shipped with one vendor and no `id`, no `label`, no manifest loader and no runtime
+//! detection — carrying exactly the fields production code read that day, because
 //! `tools/find_unread_fields.py` is in the gate and a speculative field is a field nothing reads.
-//! The format a user drops in a file is designed *after* a second vendor proves which fields are
-//! real, which is the opposite order from the one that produces an unused config language.
-//!
-//! **That order held: the fields were proven by two shipped vendors before a file format
-//! could freeze them, and only then did the loader arrive.** What a user drops in
-//! `~/.config/amb/vendors/*.json` is exactly the struct below, because the struct was
-//! measured rather than guessed.
+//! The format a user drops in a file was designed *after* a second vendor proved which fields are
+//! real, which is the opposite order from the one that produces an unused config language. All
+//! four arrived once Gemini justified them, and what a user drops in
+//! `~/.config/amb/vendors/*.json` is exactly the struct below because the struct was measured
+//! rather than guessed.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -95,7 +94,8 @@ pub struct Vendor {
     pub session_env: &'static [&'static str],
 }
 
-/// Claude Code — the vendor `amb` was built against and, until a second one lands, the only one.
+/// Claude Code — the vendor `amb` was built against, and the fallback when nothing in the
+/// environment says otherwise.
 pub const CLAUDE_CODE: Vendor = Vendor {
     id: "claude-code",
     label: "Claude Code",
@@ -178,6 +178,17 @@ pub const VENDORS: &[&Vendor] = &[&CLAUDE_CODE, &GEMINI_CLI];
 /// The vendor named by `--vendor`, or `None` if nobody ships one by that name.
 pub fn by_id(id: &str) -> Option<&'static Vendor> {
     all().iter().copied().find(|v| v.id == id)
+}
+
+/// Every id `--vendor` accepts, ready to print.
+///
+/// **Over [`all`], because [`by_id`] resolves over [`all`].** The unknown-vendor error used to
+/// enumerate [`VENDORS`], so a person who had dropped a manifest in and mistyped its id was shown
+/// a list their vendor was missing from — the loader working perfectly and the only message about
+/// it saying the vendor does not exist. A writer and a reader disagreeing about which set is
+/// "known" is the shape D91 records; here they are the same call.
+pub fn known_ids() -> String {
+    all().iter().map(|v| v.id).collect::<Vec<_>>().join(", ")
 }
 
 /// The vendor whose session this process is running inside.
