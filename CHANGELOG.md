@@ -11,6 +11,11 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`install.sh` replaces binaries by sibling-then-rename, never in-place `cp`** — on macOS an
+  in-place copy reuses a vnode whose code signature the kernel has cached, and a later exec dies
+  with SIGKILL. Observed on the PATH copy while the hook copy landed clean, which is the nastiest
+  split: manual commands dead, hooks fine, and `amb doctor` unable to run to say so.
+
 - **`memory/capture.rs` under exhaustive mutation: 23 missed on the first run, zero on the
   re-run** (M51). D108's marker machinery was tested exactly down to its injection seam and no
   further — the path-injected reader held while `note_failure`, `note_success`, `session_key`

@@ -69,7 +69,14 @@ for d in "${DESTS[@]}"; do
   case " ${DONE[*]:-} " in *" $d "*) continue ;; esac
   DONE+=("$d")
   mkdir -p "$(dirname "$d")"
-  cp "$BIN" "$d"
+  # A new inode, never an in-place overwrite. On macOS `cp` onto an existing binary reuses the
+  # vnode whose code signature the kernel has already cached, and a later exec of that path dies
+  # with SIGKILL — observed 2026-09-02: the PATH copy was dead while the hook copy worked, so
+  # `amb doctor` could not even run to say so. Sibling-then-rename is the same move
+  # `write_private` makes for notes, for the same reason: the reader sees the old file or the
+  # new one, never a corrupted in-between.
+  cp "$BIN" "$d.amb-new.$$"
+  mv -f "$d.amb-new.$$" "$d"
   printf '  %s\n' "$d"
 done
 
