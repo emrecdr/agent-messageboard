@@ -9,6 +9,19 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Changed
+
+- **The gate's test count now says when it is measuring a tree that is not the commit** (D110).
+  `check_docs.py` takes the count over the working tree while CI takes it over committed code;
+  on a machine where several sessions share one checkout those differ, and twice in one day a
+  count described a tree nobody was about to commit — the quiet near-miss being a number that
+  *matched* the working tree and would not have matched the commit. Unstaged `.rs` edits now
+  produce an advisory when the numbers agree and are folded into the failure text when they do
+  not, so a mismatch arrives with its cause attached. Deliberately **not** a failure: the
+  condition is the normal state of this repository under its own selective-staging practice, and
+  a gate that is habitually bypassed is worse than one that is occasionally wrong. D110 records
+  both rejected alternatives.
+
 ### Fixed
 
 - **D49's promotion kill switch answered to one of the three spellings its own documentation

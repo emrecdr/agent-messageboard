@@ -5568,3 +5568,43 @@ stays as the backstop for the crash case, which is why it is not shortened.
 liveness and already answers "is the session gone"; a `departed_at` column would be a second
 copy of that fact. **Rejected: adding the event to `session` mode**, whose contract is
 deliberately minimal ("mail waiting when a session begins") and which records no claims to lapse.
+
+## D110 · The gate's test count says when it is measuring something other than the commit, and does not block on it
+
+**2026-09-02.** `tools/check_docs.py` verifies that the count quoted in `README.md` and
+`CLAUDE.md` matches the suite. It takes that count by running `cargo test` over the **working
+tree**; CI takes it over **committed code**. On a machine where several sessions edit one
+checkout, those are different trees, and the check cannot see the difference.
+
+**Twice in one day a count described a tree nobody was about to commit** (M60). The near-miss
+that matters is the quiet one: a session updated the quoted number to match a tree containing
+another session's uncommitted tests, and the check passed. Had that session committed only its
+own files, `origin` would have carried a README claiming seven tests that were not in the commit
+and CI would have gone red — the failure mode of `83f75b1`, arriving from a direction discipline
+cannot close, because both sessions were staging correctly.
+
+**Rejected: making it a failure.** It is the obvious fix and it is wrong here. The condition is
+"a tracked `.rs` file has unstaged edits", which is the *normal* state of this repository under
+its own documented practice — stage selectively, because peers edit this tree concurrently. It
+would have refused every commit made on 2026-09-02 while two sessions worked, and the standard
+escape (`AMB_VERIFY_SKIP=1`) turns a routine block into a routine bypass. **A gate that is
+habitually bypassed is worse than one that is occasionally wrong**, because the bypass becomes the
+muscle memory and takes the other nine checks with it.
+
+**Rejected: counting from the index instead.** Correct in principle — the index is what will be
+committed — and it needs a second checkout and a second build to evaluate, against a gate whose
+whole design constraint is ~30 s.
+
+**So the asymmetry is accepted and named instead.** CI is the authority on the committed count;
+the gate is a fast approximation, and the one thing it must not do is present itself as more than
+that. When unstaged `.rs` edits exist the check now says so — as an advisory when the numbers
+agree, and folded into the failure text when they do not, so a mismatch arrives with its cause
+attached rather than as a number nobody can explain.
+
+**This is the file's first advisory that is not a failure, and that is a risk worth stating.**
+D84 records what happens to advisory output here: `find_unread_fields.py` printed the same three
+names for days and nobody read them. The mitigations are that this one is *conditional* — it is
+silent on a clean tree, so it is never routine noise — and that it prints **before** the verdict
+rather than after, because a qualification read after the answer has already been read is not a
+qualification. If it rots anyway, the next reader should make it a failure and accept the bypass
+cost, not delete it.

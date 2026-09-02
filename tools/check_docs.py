@@ -85,6 +85,12 @@ def every_command_is_documented():
     return problems
 
 
+# Things a reader needs in order to *interpret* a result, which are not themselves drift.
+# `main` prints these whatever the exit code. There is exactly one so far and it earned the
+# channel: see the end of `counts_are_current`.
+ADVISORIES = []
+
+
 def counts_are_current():
     """Test counts and the decision range, both quoted in prose and both easy to forget."""
     problems = []
@@ -133,6 +139,29 @@ def counts_are_current():
             "`cargo test` reported no passing tests — the count could not be taken, which is not"
             " the same as the docs being right"
         ]
+    # **That number is the WORKING TREE's, and the commit's may be different** (M60). The count
+    # above already ignores *untracked* files, which was the first version of this problem; the
+    # second version is tracked files with uncommitted edits, and on this machine those are
+    # routinely another session's. Twice now a count taken here described a tree nobody was about
+    # to commit: once it would have published a README claiming seven tests that were not in the
+    # commit, and CI — which only ever sees committed code — would have gone red exactly as it did
+    # on 83f75b1.
+    #
+    # **It says so rather than blocking, and that is a decision.** Blocking would fire on this
+    # project's own documented practice — stage selectively, because peers edit this tree
+    # concurrently — and would have refused every commit made on 2026-09-02 while two sessions
+    # worked. The failure it would prevent costs one red CI run and one follow-up commit; the
+    # block would cost a bypass on every concurrent commit, and a gate routinely bypassed is worse
+    # than one that is occasionally wrong. **CI is the authority on the committed count**; this is
+    # a fast approximation, and the one thing it must not do is present itself as more.
+    unstaged = [
+        f
+        for f in subprocess.run(
+            ["git", "diff", "--name-only"], capture_output=True, text=True, cwd=ROOT
+        ).stdout.split()
+        if f.endswith(".rs")
+    ]
+
     # The suite is deliberately platform-asymmetric — the statfs magic table compiles only on
     # Linux (M46: "CI's Linux leg is the assertor"), so one count stopped being checkable the
     # day that landed: whichever leg the docs quoted, the other platform's run disagreed, and
@@ -146,9 +175,23 @@ def counts_are_current():
             expected = int(linux_n) if (on_linux and linux_n) else int(mac_n)
             if expected != actual:
                 leg = "Linux" if on_linux else "this platform"
-                problems.append(
-                    f"{name} quotes {expected} tests for {leg}; the suite here runs {actual}"
+                because = (
+                    f" — and {len(unstaged)} tracked .rs file(s) have unstaged edits, so this is"
+                    f" not the count CI will take: {', '.join(unstaged)}"
+                    if unstaged
+                    else ""
                 )
+                problems.append(
+                    f"{name} quotes {expected} tests for {leg}; the suite here runs"
+                    f" {actual}{because}"
+                )
+    if unstaged:
+        ADVISORIES.append(
+            f"the test count was taken over a working tree with unstaged edits to"
+            f" {len(unstaged)} tracked .rs file(s), so it is not necessarily the count a clean"
+            f" checkout runs: {', '.join(unstaged)}."
+            " CI is the authority on the committed count."
+        )
     return problems
 
 
@@ -530,6 +573,9 @@ def main():
         + checks_can_still_fail()
         + every_bench_script_is_named()
     )
+    # Before the verdict, not after: an advisory that qualifies a result has to be read with it.
+    for a in ADVISORIES:
+        print(f"  ~ {a}")
     if problems:
         print(f"{len(problems)} documentation drift(s):")
         for p in problems:
