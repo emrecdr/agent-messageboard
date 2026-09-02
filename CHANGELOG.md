@@ -11,6 +11,26 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`src/memory/index.rs` and `src/main.rs` under exhaustive mutation — the two files the
+  inventory had missed** (M56). 140 mutants, 34 missed; eighteen now guarded by six tests.
+  Fifteen of the 34 were `+=` on `IndexStats` counters that could become `*=` and stay zero
+  forever, so `amb memory index` would report `0 scanned · 0 indexed` over a vault it had just
+  walked — the human-report counter seam's **fourth** sighting, on the same struct D45 was
+  written about. Also guarded: `excerpt_of`, which is the corpus `recall` searches (D88) and
+  could be emptied silently, with exact-boundary rows at its 240-character cap; and
+  `render_history`'s `&&`, which as `||` made a note *with* lineage print "stands alone".
+  Two mutants are unreachable on macOS because APFS refuses a non-UTF-8 filename, so that test
+  is gated to Linux; fourteen are named in M56 rather than quietly dropped.
+
+- **`tools/cfg_phantoms.py`: a MISSED row that means "not compiled on this host" is now
+  classified rather than remembered.** `cargo mutants` does not evaluate `#[cfg]` and says so in
+  its Limitations chapter, so mutating a Linux-only function on macOS prints MISSED for code the
+  binary never contained — 16 of `db.rs`'s 29 missed rows in one run (M46). `tools/mutants.sh`
+  now ends by calling it, and it refuses rather than guesses on any predicate it cannot model.
+  The documented `cfg_attr` workaround is deliberately not used: cargo-mutants does not evaluate
+  that condition either, so it would skip the mutant on every platform including the one where
+  the code is live.
+
 - **The final eight library modules under exhaustive mutation** (M55) — one pass, 360 mutants,
   45 missed, all guarded or named: calendar round-trips, FNV-1a pinned to published vectors,
   exact-boundary rows for every render unit, id-grammar truth tables, two more env-shell seams,

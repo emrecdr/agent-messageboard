@@ -21,7 +21,7 @@ install.
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite compiles; ~15s cold
-cargo test                       # all 584 tests (585 on Linux)
+cargo test                       # all 589 tests (591 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # run before finishing; the gate runs `cargo fmt --check`
 ./tools/verify.sh                # every gate check in one command, ~30s after a change (D70)
@@ -29,6 +29,7 @@ cargo fmt                        # run before finishing; the gate runs `cargo fm
 ./tools/bench.sh                 # every measurement harness; ~17s, deliberately not in the gate
 ./tools/mutants.sh src/claims.rs # mutation-test one module — run nothing else meanwhile (M17)
 ./tools/eyeball.sh               # what a session actually sees, against a COPY of the real board
+python3 tools/cfg_phantoms.py    # mutants.sh runs this itself; separates "not compiled here" from "untested"
 python3 tools/check_secret_literals.py   # in the gate; see its header for why fixtures use concat!
 ```
 
@@ -40,6 +41,16 @@ polluted run reported a caught mutant as missed (M17); `eyeball.sh` runs the rea
 copy of the real board and prints what a person gets, because **tests and mutation both work on
 code against fixtures and neither can see a defect in the composition of correct parts** — M24 and
 M29 were both found that way and nothing else could have found either (M32).
+
+**A MISSED row can mean "not compiled on this host", and that is now classified rather than
+remembered.** `cargo mutants` does not evaluate `#[cfg]` and says so in its own Limitations
+chapter, so mutating a `#[cfg(target_os = "linux")]` function on macOS prints MISSED for code the
+binary never contained — 16 of `db.rs`'s 29 missed rows in one run (M46). `mutants.sh` now ends by
+calling `tools/cfg_phantoms.py`, which splits the two against the host's real flags and **refuses
+rather than guesses** on a predicate it cannot model. Do not "fix" this with the documented
+`#[cfg_attr(not(target_os = "linux"), mutants::skip)]` annotation: cargo-mutants does not evaluate
+the `cfg_attr` condition either, so that skips the mutant on **every** platform including the one
+where the code is live — the guard would remove exactly the coverage it appears to protect.
 
 **Turn the gate on once per clone:** `git config core.hooksPath .githooks`. It runs before every
 commit, collects every failure rather than stopping at the first, and `AMB_VERIFY_SKIP=1` bypasses

@@ -781,6 +781,226 @@ mod tests {
         }
     }
 
+    /// **The index receipt is a counter whose only reader is a person** — the fourth sighting of
+    /// the shape M27 named, after `Redacted.removed`, `capture.rs`'s marker and `export.rs`'s
+    /// `written`. Every `+=` in `sync_dir` and `reindex` could become `*=` and stay zero forever,
+    /// because nothing asserted the numbers themselves: `amb memory index` would print
+    /// `0 scanned · 0 indexed` over a vault it had just walked in full, and the `--json` lane —
+    /// a declared stable contract — would say the same to a script.
+    ///
+    /// The struct is `IndexStats`, which is where D45 already found the inverse defect (a field
+    /// with no reader at all, so a 501-note vault reported itself empty). Same struct, opposite
+    /// half: there the reader was missing, here the assertion was.
+    ///
+    /// `-=` is caught too, and by arithmetic rather than by this test's cleverness: these are
+    /// `usize`, so a decrement from zero panics in debug.
+    #[test]
+    fn the_index_receipt_counts_the_work_and_the_line_reports_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let proj = dir.path().join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&proj).expect("vault dir");
+        for slug in ["a", "b"] {
+            std::fs::write(
+                proj.join(format!("{slug}.md")),
+                format!("---\nscope: nest\ntitle: t{slug}\nstatus: active\n---\nbody {slug}\n"),
+            )
+            .expect("note");
+        }
+        // Not parseable: counted as unreadable, never fatal.
+        std::fs::write(proj.join("junk.md"), "no frontmatter here\n").expect("junk");
+
+        let first = reindex(&conn, dir.path(), 0.0).expect("first pass");
+        assert_eq!(
+            (
+                first.scanned,
+                first.indexed,
+                first.unchanged,
+                first.unreadable
+            ),
+            (3, 2, 0, 1),
+            "a first pass indexes what it read and counts what it could not: {first:?}"
+        );
+
+        // Second pass over an unchanged vault: the same files, none re-indexed.
+        let second = reindex(&conn, dir.path(), 0.0).expect("second pass");
+        assert_eq!(
+            (second.scanned, second.indexed, second.unchanged),
+            (3, 0, 2),
+            "an unchanged vault is walked and not rewritten: {second:?}"
+        );
+
+        // The numbers reach a person through this line, which is the whole reason they matter.
+        let line = render_index(&second, &[], &[]);
+        assert!(
+            line.starts_with("3 scanned · 0 indexed · 2 unchanged · 0 pruned"),
+            "the receipt reports the pass it just made: {line:?}"
+        );
+
+        // Deleting the file behind an indexed note is what `pruned` counts.
+        std::fs::remove_file(proj.join("a.md")).expect("rm");
+        let third = reindex(&conn, dir.path(), 0.0).expect("third pass");
+        assert_eq!(
+            third.pruned, 1,
+            "a note whose file left is pruned: {third:?}"
+        );
+    }
+
+    /// **Three ways a file in the vault can be uncountable, and each has its own increment.** The
+    /// receipt test above reaches only the parse failure; mutating either of the other two stayed
+    /// green, so `unreadable` was a number with one third of its writers asserted.
+    ///
+    /// The walk filters on the `.md` extension alone, which is what makes the first two
+    /// reachable at all: a *directory* named `x.md` passes the filter and fails `read_to_string`,
+    /// and a filename that is not UTF-8 passes it and fails `to_str`. Neither is hypothetical —
+    /// a vault is a directory a person edits, and `mkdir notes.md` is a slip, not an attack.
+    #[test]
+    fn every_way_a_vault_file_is_unreadable_reaches_the_same_counter() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let proj = dir.path().join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&proj).expect("vault dir");
+        // A directory wearing the extension: passes the filter, cannot be read as a string.
+        std::fs::create_dir(proj.join("a-directory.md")).expect("dir");
+        // Bytes that are not UTF-8 inside a file that is otherwise ordinary.
+        std::fs::write(proj.join("bad-bytes.md"), [0xff, 0xfe, 0x00, 0x9f]).expect("bytes");
+
+        let stats = reindex(&conn, dir.path(), 0.0).expect("index");
+        assert_eq!(
+            (stats.scanned, stats.indexed, stats.unreadable),
+            (2, 0, 2),
+            "both are scanned, neither is indexed, both are counted: {stats:?}"
+        );
+    }
+
+    /// The same counter through the one path needing a filename the OS allows and Rust cannot
+    /// name — `to_str` returning `None`.
+    ///
+    /// **Linux-only because macOS refuses to create the fixture, which is a fact about the
+    /// filesystem rather than about the code.** APFS validates filenames as UTF-8 and returns
+    /// `EILSEQ`, so this branch cannot be reached from a test on this machine at all — the
+    /// mutation that deletes its counter survives here and is killable only on the other leg.
+    /// That is a third category beside "real survivor" and "not compiled here": the code *is*
+    /// compiled, and the input is what the platform forbids. `tools/cfg_phantoms.py` classifies
+    /// by `cfg` and will therefore call this row real on macOS, correctly — the row is a
+    /// question for CI's Linux leg, and this test is the answer it finds there.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_filename_that_is_not_utf8_is_counted_rather_than_skipped_silently() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let proj = dir.path().join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&proj).expect("vault dir");
+        let name = std::ffi::OsStr::from_bytes(b"\xff\xfe-bad.md");
+        std::fs::write(proj.join(name), "---\nscope: nest\ntitle: t\n---\nbody\n").expect("write");
+
+        let stats = reindex(&conn, dir.path(), 0.0).expect("index");
+        assert_eq!(
+            (stats.scanned, stats.unreadable),
+            (1, 1),
+            "a name Rust cannot render is counted, not dropped: {stats:?}"
+        );
+    }
+
+    /// **The directory outranks the frontmatter, and the comment saying so had no test.**
+    /// `safe_component(&note.id.scope) != scope` is what makes a note's *location* the truth when
+    /// its own `scope:` key disagrees. Relaxed to `==`, the correction fires only when there is
+    /// nothing to correct: a note sitting in `nest/` while claiming `scope: elsewhere` gets
+    /// indexed under `elsewhere`, so it is invisible to the project that owns it and appears
+    /// under one that does not — D17's central claim, broken by one operator.
+    #[test]
+    fn the_directory_decides_the_scope_when_the_frontmatter_disagrees() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let proj = dir.path().join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&proj).expect("vault dir");
+        std::fs::write(
+            proj.join("liar.md"),
+            "---\nscope: elsewhere\ntitle: t\nstatus: active\n---\nbody\n",
+        )
+        .expect("note");
+        reindex(&conn, dir.path(), 0.0).expect("index");
+
+        let scopes: Vec<String> = conn
+            .prepare("SELECT scope FROM notes WHERE slug = 'liar'")
+            .and_then(|mut s| s.query_map([], |r| r.get(0)).and_then(|m| m.collect()))
+            .expect("query");
+        assert_eq!(
+            scopes,
+            vec!["nest".to_string()],
+            "indexed under the directory that holds it, never under the scope it claimed"
+        );
+    }
+
+    /// **`excerpt_of` is the corpus `recall` actually searches** (D88), so a mutant that empties
+    /// it does not damage a display convenience — it silently deletes most of what search can
+    /// find, and every existing test still passes because the *notes* are all still there.
+    ///
+    /// The boundary rows are the point. `first.chars().count() > 240` decides the ellipsis, and
+    /// `==`, `<` and `>=` all survived: exactly 240 characters must not be marked truncated and
+    /// 241 must, which is the only pair of fixtures that separates the four operators.
+    #[test]
+    fn the_excerpt_is_the_first_paragraph_and_the_cap_is_exact() {
+        assert_eq!(
+            excerpt_of("first para\nsecond line\n\nlater para").as_deref(),
+            Some("first para second line"),
+            "the first paragraph, newlines flattened, and nothing from the next"
+        );
+        assert_eq!(
+            excerpt_of("").as_deref(),
+            None,
+            "nothing to excerpt is None"
+        );
+        assert_eq!(
+            excerpt_of("   \n\n rest ").as_deref(),
+            None,
+            "blank first para is None"
+        );
+
+        let at_cap = "x".repeat(240);
+        assert_eq!(
+            excerpt_of(&at_cap).as_deref(),
+            Some(at_cap.as_str()),
+            "exactly 240 characters is not truncated and gets no ellipsis"
+        );
+        let over_cap = "y".repeat(241);
+        let got = excerpt_of(&over_cap).expect("241 chars excerpts");
+        assert_eq!(got.chars().count(), 241, "240 kept plus the ellipsis");
+        assert!(
+            got.ends_with('\u{2026}'),
+            "241 characters is marked truncated: {got:?}"
+        );
+    }
+
+    /// **"stands alone" is a sentence written against a silence, and `||` turns it into one.**
+    /// The docstring on [`render_history`] says an id with no lineage and an id that does not
+    /// exist would otherwise print the same nothing. Relaxing its `&&` to `||` makes a note with
+    /// real lineage print that same reassurance — the provenance a person asked for, replaced by
+    /// a claim that there is none, at exit 0.
+    ///
+    /// A truth table rather than one row: the `expected == true` line proves the renderer still
+    /// reaches the sentence at all, which an absence-only assertion cannot (M27).
+    #[test]
+    fn only_a_note_with_no_lineage_at_all_stands_alone() {
+        let id = NoteId::observation("nest", "a");
+        for (before, after, alone) in [
+            (vec![], vec![], true),
+            (vec![step("nest/older")], vec![], false),
+            (vec![], vec![step("nest/newer")], false),
+            (vec![step("nest/older")], vec![step("nest/newer")], false),
+        ] {
+            let out = render_history(&id, &before, &after);
+            assert_eq!(
+                out.contains("stands alone"),
+                alone,
+                "before={} after={} produced {out:?}",
+                before.len(),
+                after.len()
+            );
+        }
+    }
+
     /// U5: the renderer's "stands alone" sentence was written so absence would not print as
     /// nothing — and then `history` never checked existence, so a typo'd id printed that same
     /// sentence as a clean provenance, exit 0. The command must miss like every other

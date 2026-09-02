@@ -4100,3 +4100,67 @@ reasoning says "plausible", only the applied mutant says "confirmed".
 Fourteen representative kills hand-applied and seen red, one equivalence hand-confirmed, every
 revert byte-identical. No batch machine re-run — three ENOSPC events today make per-mutant hand
 verification both the stronger standard and the only responsible one.
+
+## M56 · The two files the inventory missed, and a counter seam's fourth sighting
+
+**2026-09-02.** `tools/mutants.sh src/memory/index.rs src/main.rs` — the two modules M55's
+"crate-wide inventory closes" did not cover, run the same day the claim was corrected. Load had
+fallen from 45 to 7.1 and three foreign `xtask` builds had finished; `cargo` was claimed on the
+board first and no other run overlapped. **140 mutants in 18m: 91 caught, 34 missed, 15 unviable,
+zero timeouts.**
+
+**Disclosed, because the header forbids it and I did it anyway:** the run was invoked through a
+pipe (`| tail`), which is trap 2 in `mutants.sh`'s own header — the pipe reports *tail's* status,
+so a baseline failure would have printed exit 0 beside a run that tested nothing. It did not
+happen here (the baseline demonstrably passed and 140 mutants were tested), and every count in
+this entry is read from `mutants.out/`, never from the exit status. The trap is real and the
+mitigation was luck, not design.
+
+### The dominant cluster is the shape catalogued four hours earlier
+
+**Fifteen of the 34 are `+=` on `IndexStats` counters** — `scanned`, `indexed`, `unchanged`,
+`unreadable`, `pruned`, in both `sync_dir` and `reindex`'s aggregation. Every one could become
+`*=` and stay zero forever, because nothing asserted the numbers themselves. `amb memory index`
+would print `0 scanned · 0 indexed` over a vault it had just walked in full, and the `--json`
+lane — a declared stable contract — would tell a script the same.
+
+That is **the fourth sighting** of the seam M27 named and this session catalogued at three
+(`Redacted.removed`, `capture.rs`'s marker, `export.rs`'s `written`): *a counter whose writer
+works and whose only reader is a human report*. The catalogue entry was written into `CLAUDE.md`
+at 15:15 and this run found the next instance at 16:00, which is the strongest available evidence
+that the shape is a shape. It is also the same struct D45 was written about — there the *reader*
+was missing so a 501-note vault reported itself empty; here the reader exists and the
+*assertion* was missing. Same field, opposite half, four months apart.
+
+### Two more, neither a counter
+
+- **`excerpt_of` could return `None`, `""` or `"xyzzy"` and nothing went red.** D88 records that
+  `recall` matches `body_excerpt` — so this is not a display convenience, it is the corpus search
+  actually runs against, and emptying it deletes most of what memory can find while every note
+  stays present and every existing test passes. Its 240-character cap survived `==`, `<` and
+  `>=` as well: fixtures at exactly 240 and 241 are the only pair that separates the four.
+- **`render_history`'s `&&` could be `||`**, which makes a note *with* lineage print
+  `stands alone — it replaced nothing, and nothing replaced it`. That sentence exists because
+  this project's failures are silences (U5); the mutation turns the cure into the disease.
+
+### What is guarded, what is named, and what is left
+
+**Eighteen killed, each mutant hand-applied and seen red, every revert byte-identical.** Six
+tests: the index receipt (counts *and* the rendered line), the three unreadable paths, the
+scope-correction rule, `excerpt_of` with its exact cap, and a truth table for "stands alone".
+
+**Two are unreachable on this host and it is not a `cfg` gate.** `stats.unreadable += 1` in the
+`file_stem` arm needs a filename that is not UTF-8, and **APFS refuses to create one** —
+`EILSEQ`, verified by trying. The code compiles here; the *input* is what macOS forbids. That is
+a third category beside "real survivor" and "not compiled here", and `cfg_phantoms.py` correctly
+calls it real, because it classifies by `cfg` and there is no `cfg`. The test is written and
+gated to `target_os = "linux"`, so CI's other leg is the assertor — which is why the suite is now
+589 on macOS and 591 on Linux.
+
+**Fourteen are left standing and named rather than quietly dropped:** the cycle-break `==` in
+`history` (two) and `validate_links` (one), `sync_dir`'s `CANDIDATE` match guard and its
+`Scope::Project` arm (two), and nine in `main.rs` — three `delete !` in `run`, three on
+`report_plan`'s `> 0` (M27's guard-over-a-count, again), two in `hook_deliver` and one `+` in
+`run_memory`. `main.rs` is the binary carrying D9's exit-0 guarantee; it is behaviourally guarded
+by sixteen `code == 0` assertions in `tests/hook_safety.rs` and has still never had its
+*decisions* mutated, which is the gap this run measured rather than closed.

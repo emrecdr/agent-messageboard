@@ -32,9 +32,13 @@
 #   - **A MISSED row in `#[cfg]`'d-out code means "not compiled here", not "untested".** Mutating
 #     a Linux-only function on macOS builds fine — the mutated code is simply absent from the
 #     binary — and every test passes, so the row prints MISSED and no test on this machine can
-#     ever redden it. db.rs reported 16 such rows in one run (M46). Read the platform gate before
-#     prosecuting a survivor, and assert foreign-platform code in tests cfg'd to where it
-#     compiles: CI's other leg is the assertor.
+#     ever redden it. db.rs reported 16 such rows in one run of 29 missed (M46) — 55% of that
+#     module's apparent survivors. **This one is now mechanical**: every run ends by calling
+#     `tools/cfg_phantoms.py`, which classifies each MISSED row against the host's own cfg flags
+#     and refuses rather than guesses. Upstream does not do this and says so in its Limitations
+#     chapter; the documented `cfg_attr` workaround is a trap that would skip the mutant on the
+#     platform where it is live, which that script's docstring explains. Still assert foreign-
+#     platform code in tests cfg'd to where it compiles: CI's other leg is the assertor.
 #
 #   - **Do not pipe this script anywhere.** `tools/mutants.sh … | tail` reports *tail's* exit
 #     status, and a baseline failure then prints `exit 0` beside a run that tested **nothing**.
@@ -127,6 +131,26 @@ esac
 # and always in the flattering direction.
 COMMON=(--copy-vcs true --jobs 1 --timeout-multiplier 3 --minimum-test-timeout 120)
 
+# Run the mutation pass, then split its MISSED rows into "untested here" and "not compiled here"
+# (trap 1). **Mechanical rather than remembered**: the trap was a prose warning in this header for
+# a day and the run it warned about still published 16 phantom rows inside a score (M46).
+#
+# `cargo mutants`'s own exit status is what this script returns — 2 for survivors, ~101 for a
+# broken baseline — because the header promises callers that status carries information, and a
+# classifier that overwrote it would be throwing away more than it adds. A classifier that cannot
+# answer says so on stderr and is impossible to miss beside the score it qualifies.
+run_and_classify() {
+  "$@"
+  status=$?
+  if [ -f mutants.out/outcomes.json ]; then
+    echo
+    # Root-relative rather than $0-relative: this script cd'd to the repo root at line 2, so a
+    # `dirname $0` here resolves to "." whenever it is invoked from inside tools/ itself.
+    python3 tools/cfg_phantoms.py mutants.out || true
+  fi
+  exit $status
+}
+
 if [ "${1:-}" = "--diff" ]; then
   shift
   DIFF="$(mktemp)"; trap 'rm -f "$DIFF"' EXIT
@@ -136,7 +160,7 @@ if [ "${1:-}" = "--diff" ]; then
     exit 0
   fi
   printf '\033[33m! diff mode is blind to changes in test code — see this script'\''s header\033[0m\n' >&2
-  exec cargo mutants "${COMMON[@]}" --in-diff "$DIFF"
+  run_and_classify cargo mutants "${COMMON[@]}" --in-diff "$DIFF"
 fi
 
 if [ $# -eq 0 ]; then
@@ -155,4 +179,4 @@ done
 
 echo "target dir: $CARGO_TARGET_DIR"
 echo "run nothing else until this finishes."
-exec cargo mutants "${COMMON[@]}" "${FILES[@]}"
+run_and_classify cargo mutants "${COMMON[@]}" "${FILES[@]}"

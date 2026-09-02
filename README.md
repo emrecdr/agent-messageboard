@@ -12,7 +12,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 584 tests (585 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 589 tests (591 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -853,7 +853,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 584 tests (585 on Linux)
+cargo test                       # all 589 tests (591 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -861,8 +861,15 @@ cargo fmt                        # `cargo fmt --check` is what the gate below ru
 ./tools/bench.sh                 # run every measurement harness; asserts coverage, not values
 ./tools/mutants.sh src/claims.rs # mutation-test one module — run nothing else meanwhile
 ./tools/eyeball.sh               # print what a session actually sees, against a copy of the board
+python3 tools/cfg_phantoms.py    # mutants.sh runs this itself; --self-test checks the classifier
 python3 tools/check_secret_literals.py   # refuse a credential-shaped literal in tracked source
 ```
+
+`cfg_phantoms.py` exists because a `cargo mutants` MISSED row can mean *"this code is not compiled
+on this host"* rather than *"this code is untested"*, and the two print identically — 16 of one
+module's 29 missed rows in a single run (M46). `cargo mutants` does not evaluate `#[cfg]` and says
+so in its own Limitations chapter, so the split is made afterwards, against the host that actually
+ran. It refuses rather than guesses on a predicate it cannot model.
 
 **Turn the gate on once, and it runs before every commit:**
 
