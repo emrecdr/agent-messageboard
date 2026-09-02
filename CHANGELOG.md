@@ -11,6 +11,12 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`memory/events.rs` under exhaustive mutation: 89 of 90 viable caught on the first pass**
+  (M52) — the instrument module's D89–D95 truth-table discipline corroborated by machine. The
+  one survivor was equivalent under the lane/session invariant and is now pinned by an
+  impossible receipt whose comment owns the vacancy: the all-zero gate is the first decision,
+  so an inconsistent receipt fails safe to silence.
+
 - **`install.sh` replaces binaries by sibling-then-rename, never in-place `cp`** — on macOS an
   in-place copy reuses a vnode whose code signature the kernel has cached, and a later exec dies
   with SIGKILL. Observed on the PATH copy while the hook copy landed clean, which is the nastiest

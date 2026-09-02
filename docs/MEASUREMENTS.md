@@ -3960,3 +3960,29 @@ machine.
 **Re-run after the guards: 91 mutants in 17m — 85 caught, 6 unviable, zero missed, zero
 timeouts.** 55 of 78 viable becomes 85 of 85; the guard tests themselves added six mutants of
 new surface and every one of those died too.
+
+## M52 · events.rs: the instrument held, and the one survivor was equivalent until pinned
+
+**2026-09-02.** `tools/mutants.sh src/memory/events.rs` — the instrument module: the receipt,
+the searches ledger, the verdict, the window. 1,426 lines, the biggest target of the session,
+built up by hand through D89–D95's rounds. Held for a foreign nextest build to drain before
+launching; quiet machine, 34s baseline.
+
+**92 mutants in 26m: 89 caught, 2 unviable, 1 missed — the best viable score of the session
+(89/90), and the machine's corroboration that the D89–D95 truth-table discipline works.** The
+23 tests with both-directions rows, absence rows and arrival notes killed everything with one
+exception:
+
+- **`lane_caveat`'s all-zero gate could flip its second `==` and nothing could ever notice**,
+  because the distinguishing state — session counts with zero injections — cannot arise from
+  the production query. `a_lane_with_no_injections_has_no_sessions_either` is that invariant,
+  asserted; so the mutant was equivalent everywhere the invariant holds, and the empty-receipt
+  test passed through the *other* `None` arm (M27's unproven-premise shape, in the module that
+  taught it). Pinned with a deliberately inconsistent receipt whose comment spells out the
+  vacancy: the gate is the first decision, so an invariant-violating receipt fails safe to
+  silence. Applied by hand and seen red; revert byte-identical.
+
+A survivor that is *equivalent under a data invariant* is a new row in the catalogue: neither a
+weak test nor a mistargeted mutation, but a guard whose only observable input is a state the
+system cannot produce. The choice is delete the guard or pin it with an impossible fixture that
+owns its impossibility — deleting fail-safe defense on an instrument was the wrong half.

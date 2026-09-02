@@ -1051,6 +1051,22 @@ mod tests {
         r.recency_sessions = 0;
         r.path_sessions = 0;
         assert_eq!(r.lane_caveat(), None);
+
+        // A receipt this shape cannot arise from the production query — a lane with no
+        // injections has no sessions either, and the equivalence test below owns that invariant
+        // — so this row is not a behavior claim. It pins the all-zero gate as the *first*
+        // decision: a receipt that somehow violates the invariant fails safe to silence rather
+        // than printing a caveat about lanes that never fired. M52's one survivor lived here:
+        // flipping the gate's second `==` was equivalent everywhere the invariant holds, and
+        // only an impossible receipt can see the gate at all (the kept-vacuous-needle rule,
+        // with the vacancy spelled out).
+        r.recency_sessions = 2;
+        r.path_sessions = 1;
+        assert_eq!(
+            r.lane_caveat(),
+            None,
+            "an inconsistent receipt stays silent, never alarming"
+        );
     }
     /// D59's floor must not fire on a small sample — the failure that would retire the layer for
     /// a run of quiet afternoons rather than for a real absence of value.
