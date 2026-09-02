@@ -781,6 +781,177 @@ mod tests {
         }
     }
 
+    /// **A straight chain of four is the fixture the cycle breaks needed, and the two-note cycle
+    /// already here could not provide it** (M56, M17's shape). Both walks in [`history`] break on
+    /// `descendants.iter().any(|s| s.id == step.id)`; flipped to `!=`, `any` is satisfied the
+    /// moment the list holds anything *different* from the new step, so the walk stops after one
+    /// hop on every ordinary lineage.
+    ///
+    /// The existing cycle test cannot see it. With a→b→a the honest walk collects two and the
+    /// mutant collects one, and its assertions — that `nest/b` is present, and that the length is
+    /// at most two — are true of both. **A three-hop chain separates them**, and it has to be a
+    /// chain rather than a cycle, because the defect is that a chain is truncated, not that a
+    /// cycle runs away.
+    ///
+    /// Both directions, because they are two independent breaks and each survived on its own.
+    #[test]
+    fn a_lineage_of_four_is_walked_to_both_ends() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let proj = dir.path().join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&proj).expect("vault dir");
+        // a superseded by b superseded by c superseded by d, and only d is still active.
+        for (slug, next) in [
+            ("a", Some("b")),
+            ("b", Some("c")),
+            ("c", Some("d")),
+            ("d", None),
+        ] {
+            let link = next
+                .map(|n| format!("superseded_by: nest/{n}\n"))
+                .unwrap_or_default();
+            let status = if next.is_some() {
+                "superseded"
+            } else {
+                "active"
+            };
+            std::fs::write(
+                proj.join(format!("{slug}.md")),
+                format!("---\nscope: nest\ntitle: t{slug}\nstatus: {status}\n{link}---\nbody\n"),
+            )
+            .expect("note");
+        }
+        crate::memory::reindex(&conn, dir.path(), 0.0).expect("index");
+
+        let (_, down) = history(&conn, &NoteId::observation("nest", "a")).expect("forward");
+        assert_eq!(
+            down.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["nest/b", "nest/c", "nest/d"],
+            "the forward walk reaches the end of the chain, not the first hop"
+        );
+
+        let (up, _) = history(&conn, &NoteId::observation("nest", "d")).expect("backward");
+        assert_eq!(
+            up.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["nest/a", "nest/b", "nest/c"],
+            "and the backward walk reaches the start, oldest first"
+        );
+    }
+
+    /// **`validate_links` reports a cycle by walking forward and arriving back**, and `s.id == id`
+    /// flipped to `!=` makes that condition true for any chain with a second note in it — so
+    /// every ordinary supersession would be reported as a cycle, in the command a person runs to
+    /// find real ones.
+    ///
+    /// A truth table: the healthy chain proves the false positive is absent, and the real cycle
+    /// proves the check still fires. The absence row alone would pass on a `validate_links` that
+    /// had stopped looking at all (M27's premise trap).
+    #[test]
+    fn only_a_chain_that_returns_to_itself_is_reported_as_a_cycle() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+        let proj = dir.path().join(vault_dir(OBSERVATION, "nest"));
+        std::fs::create_dir_all(&proj).expect("vault dir");
+        let note = |slug: &str, status: &str, next: &str| {
+            std::fs::write(
+                proj.join(format!("{slug}.md")),
+                format!("---\nscope: nest\ntitle: t\nstatus: {status}\nsuperseded_by: nest/{next}\n---\nbody\n"),
+            )
+            .expect("note");
+        };
+        // A healthy chain: x replaced by y, y still active and replacing nothing.
+        note("x", "superseded", "y");
+        std::fs::write(
+            proj.join("y.md"),
+            "---\nscope: nest\ntitle: t\nstatus: active\n---\nbody\n",
+        )
+        .expect("y");
+        // A genuine cycle beside it.
+        note("p", "superseded", "q");
+        note("q", "superseded", "p");
+        crate::memory::reindex(&conn, dir.path(), 0.0).expect("index");
+
+        let cycles: Vec<String> = validate_links(&conn)
+            .expect("validate")
+            .into_iter()
+            .filter(|p| p.kind == "cycle")
+            .map(|p| p.note)
+            .collect();
+        assert!(
+            !cycles.contains(&"nest/x".to_string()),
+            "an ordinary supersession is not a cycle: {cycles:?}"
+        );
+        assert!(
+            cycles.contains(&"nest/p".to_string()) || cycles.contains(&"nest/q".to_string()),
+            "and a chain that returns to itself is still caught: {cycles:?}"
+        );
+    }
+
+    /// **Two rules on one `match`, and the arm order is the whole of both** (M56).
+    ///
+    /// `_ if kind == CANDIDATE => String::new()` is D50/D81: a candidate carries the *empty*
+    /// scope, because SQLite permits NULLs in a composite primary key and does not compare them
+    /// equal, so the absence has to be `''`. Replace that guard with `false` and a candidate is
+    /// filed under a project scope, where nothing looking for it will look.
+    ///
+    /// `Ok(Scope::Project(p)) => safe_component(&p)` is containment, and deleting it still
+    /// compiles — the next arm returns the project name unsanitised. **The existing hostile-scope
+    /// test asserts `vault_dir`, a different function** (D90's shape: one rule, two layers, one
+    /// assertion), so nothing here was guarded. `sync_dir` is what actually writes the row.
+    #[test]
+    fn the_scope_a_row_is_filed_under_is_emptied_for_candidates_and_sanitised_for_projects() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = crate::db::open_at(&dir.path().join("board.db")).expect("open");
+
+        let write_as = |kind: &str, dir_scope: &str, slug: &str, declared: &str| {
+            let d = dir.path().join(vault_dir(kind, dir_scope));
+            std::fs::create_dir_all(&d).expect("dir");
+            std::fs::write(
+                d.join(format!("{slug}.md")),
+                format!("---\nscope: {declared}\ntitle: t\nstatus: active\n---\nbody\n"),
+            )
+            .expect("note");
+        };
+        let write = |kind: &str, scope: &str, slug: &str| write_as(kind, scope, slug, scope);
+        write(CANDIDATE, "nest", "cand");
+        // **Two hostile scopes, because they reach different arms and only one of them reaches
+        // the arm under test** (M17, twice over). `../../../etc` contains a `/`, so `parse_scope`
+        // refuses it and the `Err` arm sanitises — deleting the `Project` arm changes nothing for
+        // it, and a test using only this string passes under the mutant. `..` parses *fine* as a
+        // project id (only `/`, `@` and `#` are refused), so it is the one string that reaches
+        // `Ok(Scope::Project(p))` while still being a traversal component.
+        //
+        // The frontmatter must also name a *different* scope than the directory, or the
+        // correction never fires and the row keeps the frontmatter's spelling either way.
+        write_as(OBSERVATION, "..", "dotdot", "nest");
+        write_as(OBSERVATION, "../../../etc", "hostile", "nest");
+
+        sync_dir(&conn, dir.path(), CANDIDATE, "nest", 0.0, None).expect("candidates");
+        sync_dir(&conn, dir.path(), OBSERVATION, "..", 0.0, None).expect("dotdot");
+        sync_dir(&conn, dir.path(), OBSERVATION, "../../../etc", 0.0, None).expect("hostile");
+
+        let scope_of = |slug: &str| -> String {
+            conn.query_row(
+                "SELECT scope FROM notes WHERE slug = ?1",
+                params![slug],
+                |r| r.get(0),
+            )
+            .expect("row")
+        };
+        assert_eq!(
+            scope_of("cand"),
+            "",
+            "a candidate is filed under the empty scope, whatever directory it came from"
+        );
+        for slug in ["dotdot", "hostile"] {
+            let filed = scope_of(slug);
+            assert!(
+                !filed.contains('/') && filed != ".." && filed != ".",
+                "{slug}: a scope is sanitised before it becomes a key, whichever arm it took: {filed:?}"
+            );
+        }
+    }
+
     /// **The index receipt is a counter whose only reader is a person** — the fourth sighting of
     /// the shape M27 named, after `Redacted.removed`, `capture.rs`'s marker and `export.rs`'s
     /// `written`. Every `+=` in `sync_dir` and `reindex` could become `*=` and stay zero forever,

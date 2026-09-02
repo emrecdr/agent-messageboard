@@ -4270,3 +4270,53 @@ M56's other five are in `memory/index.rs`: the cycle-break `==` in `history` (tw
 `main.rs` is clear. The crate's inventory of *rounds* was closed by M57's derived check; this
 closes the binary's inventory of *survivors*, which is a different question and the one that
 decides whether a round produced anything.
+
+## M59 · The last five, and two fixtures that reached the wrong arm before they reached the right one
+
+**2026-09-02.** M56's remaining survivors, all in `src/memory/index.rs`. No new mutation run —
+M56 names each — so this is the guarding pass, every mutant applied by hand and reverted
+byte-identical. **All five dead.** 594 → 597 tests on macOS, 596 → 599 on Linux. With M58's nine,
+**M56's thirty-four are now eighteen guarded at the time, plus these fourteen, with two named
+unreachable on this host** — the round is closed.
+
+### The two cycle breaks, and why the test already sitting on them could not see them
+
+`history` walks a lineage in both directions and breaks on
+`descendants.iter().any(|s| s.id == step.id)`. Flipped to `!=`, `any` is satisfied the moment the
+list holds anything *different* from the new step — so the walk stops after one hop on every
+ordinary chain, and a four-note lineage reports one ancestor instead of three.
+
+`a_supersession_cycle_terminates_the_walk_without_flooding_it` runs directly over this code and
+cannot distinguish it. Its fixture is a two-note cycle: the honest walk collects two, the mutant
+collects one, and both of its assertions — that `nest/b` is present, and that the length is at
+most two — hold either way. **M17's shape, in a test written specifically about these guards.**
+The fixture had to become a *chain* rather than a cycle, because the defect is that a chain is
+truncated, not that a cycle runs away.
+
+### The scope match, where the fixture reached the wrong arm twice
+
+Two rules sit on one `match`, and both survived.
+
+`_ if kind == CANDIDATE => String::new()` is D50/D81 — a candidate carries the empty scope,
+because SQLite permits NULLs in a composite primary key and does not compare them equal, so the
+absence has to be `''`. Replaced with `false`, a candidate is filed under a project scope, where
+nothing that looks for it will look.
+
+`Ok(Scope::Project(p)) => safe_component(&p)` is containment, and deleting it still *compiles* —
+the next arm hands back the project name unsanitised. The rule was asserted at a different layer:
+`a_hostile_scope_name_stays_inside_the_vault_whatever_the_kind` tests `vault_dir`, and `sync_dir`
+is what actually writes the row (D90's shape — one rule, two layers, one assertion).
+
+**Getting a fixture onto that arm took two attempts, and the first failure is the more useful
+one.** `../../../etc` contains a `/`, so `parse_scope` refuses it and the `Err` arm sanitises:
+the mutant changes nothing for that string and a test using only it passes. The one string that
+reaches `Ok(Scope::Project(p))` while still being a traversal component is **`..`** — `parse_scope`
+refuses only `/`, `@` and `#`, so `..` is a perfectly ordinary project id, and `safe_component`
+turns it into `unknown` because it trims dots. Both are now in the fixture with a comment naming
+which arm each takes.
+
+And a third correction before that: the note's frontmatter has to declare a *different* scope than
+the directory, or the "disk outranks status" correction never fires and the row keeps the
+frontmatter's spelling under both versions. **Three fixtures in one test, each a case of the
+input never reaching the branch** — which is what makes hand-applying every mutant the standard
+rather than a formality. Each was found by the mutant surviving, not by reading.

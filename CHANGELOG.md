@@ -11,6 +11,16 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **M56's round is closed: the last five survivors in `memory/index.rs` are guarded** (M59).
+  `history`'s two cycle breaks flipped to `!=` truncate every ordinary lineage after one hop, and
+  the cycle test already sitting on that code could not see it — its two-note fixture makes the
+  honest walk and the mutant agree, so the fixture had to become a four-note *chain*. On the scope
+  `match`: a candidate must carry the empty scope (D50/D81) or it is filed where nothing looks for
+  it, and deleting the project arm still compiles while handing back an unsanitised name — a rule
+  that was asserted against `vault_dir` while `sync_dir` is what writes the row. Reaching that arm
+  needed `..` rather than `../../../etc`: the latter contains a `/`, so `parse_scope` refuses it
+  and a different arm sanitises it anyway.
+
 - **The nine surviving mutants in `src/main.rs` are guarded, and three of them needed the
   binary's rendering moved into the library first** (M58). `report_plan`'s retry line is a guard
   over a count whose three relaxations all survived, and it could not be asserted where it lived:
