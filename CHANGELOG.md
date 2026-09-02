@@ -11,6 +11,17 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`find_unread_fields.py` no longer reports a live function as dead when a doc comment contains
+  a glob.** It stripped block comments before line comments, so `~/.config/amb/vendors/*.json` —
+  or the `**/*.rs` that had been sitting in `topics.rs` all along — opened a block comment that
+  ran forward across the *concatenated* corpus until it found a `*/`, blanking whatever sat
+  between. It swallowed `main.rs`'s only reference to `hooks::plan_uninstall` and printed that
+  function under "NOTHING IN PRODUCTION MENTIONS AT ALL", on the run of the very commit that
+  added the glob. The tool's docstring calls over-removal the safe direction and it was — the
+  advisory is loud, and D84 says to read it rather than scroll past it, which is how this was
+  found — but safe is not right: a false dead-function report on the function `amb uninstall`
+  depends on is an invitation to delete it. Line comments are stripped first now.
+
 - **A vendor can now be added by dropping one JSON file — no rebuild, no code change** (D111
   phase 3). `~/.config/amb/vendors/*.json` (or `$AMB_VENDORS`) is read at startup and appended to
   the shipped list; `amb install --vendor copilot-cli` then writes that CLI's own event

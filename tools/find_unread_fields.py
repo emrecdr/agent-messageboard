@@ -81,7 +81,17 @@ def _uncommented(text: str) -> str:
     strings. It over-removes rather than under-removes, which for a *reference* count means a
     false "nothing mentions it" — loud and checkable — rather than a false reassurance.
     """
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    # **Line comments first, and the order is the whole fix.** Doing block comments first made a
+    # glob in a doc comment — `~/.config/amb/vendors/*.json`, or `**/*.rs` — open a block comment
+    # that ran forward across the *concatenated* corpus until it found a `*/`, blanking whatever
+    # sat between. On 2026-09-02 that swallowed `main.rs`'s only reference to `plan_uninstall`
+    # and printed a live function under "NOTHING IN PRODUCTION MENTIONS AT ALL". The docstring
+    # above says over-removal is the safe direction, and it was — the advisory was loud and it
+    # was checked — but "safe" is not "right": a false dead-function report on a function that
+    # `amb uninstall` depends on is an invitation to delete it. Stripping line comments first
+    # removes every glob before the block pattern can see one. `src` contains no real block
+    # comments at all, so the reorder costs nothing; a `//` inside a genuine block comment would
+    # confuse it, and that is worth knowing if one ever appears.
     out = []
     for line in text.splitlines():
         i = line.find("//")
@@ -91,7 +101,7 @@ def _uncommented(text: str) -> str:
                 break
             i = line.find("//", i + 2)
         out.append(line)
-    return "\n".join(out)
+    return re.sub(r"/\*.*?\*/", " ", "\n".join(out), flags=re.S)
 
 
 PROD_CODE = _uncommented(PROD)
