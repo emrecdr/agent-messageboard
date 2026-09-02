@@ -374,7 +374,7 @@ impl Receipt {
         // evidence for withdrawal. `Unknown` is deliberately allowed through to the numeric arms
         // rather than blocking them: an unreadable settings file is not proof the layer is off,
         // and refusing every verdict on that basis would be its own kind of wrong.
-        if let crate::hooks::HookState::Incomplete { missing } = hooks {
+        if let crate::hooks::HookState::Incomplete { missing, .. } = hooks {
             return Verdict::NotRunning {
                 missing: missing.clone(),
             };
@@ -1114,7 +1114,8 @@ mod tests {
         let missing = vec!["SessionStart".to_string(), "PreToolUse".to_string()];
         assert_eq!(
             damning.verdict(&crate::hooks::HookState::Incomplete {
-                missing: missing.clone()
+                missing: missing.clone(),
+                total: 3,
             }),
             Verdict::NotRunning {
                 missing: missing.clone()

@@ -62,7 +62,7 @@ pub fn resolve() -> Result<Identity> {
     // where one arrives first, since a session is simply whoever exported an id.
     let id = std::env::var("AMB_AGENT")
         .ok()
-        .or_else(|| crate::vendors::CLAUDE_CODE.session_id_from_env())
+        .or_else(|| crate::vendors::detect().session_id_from_env())
         .ok_or(Error::NoIdentity)?;
     if id.trim().is_empty() {
         return Err(Error::NoIdentity);

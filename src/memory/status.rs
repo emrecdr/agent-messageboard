@@ -77,7 +77,7 @@ impl Status {
             "memory_hooks": hooks.as_str(),
             "verdict": self.receipt.verdict(hooks).as_str(),
         });
-        if let crate::hooks::HookState::Incomplete { missing } = hooks {
+        if let crate::hooks::HookState::Incomplete { missing, .. } = hooks {
             doc["memory_hooks_missing"] = missing.clone().into();
         }
         doc
@@ -1034,6 +1034,7 @@ mod tests {
         let missing = vec!["PreToolUse".to_string()];
         let doc = st.to_json(&crate::hooks::HookState::Incomplete {
             missing: missing.clone(),
+            total: 3,
         });
         assert_eq!(doc["memory_hooks"], "incomplete", "{doc}");
         assert_eq!(

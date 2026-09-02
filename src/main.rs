@@ -139,8 +139,15 @@ enum Command {
         #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u64).range(messages::MIN_POLL_MS..))]
         poll: u64,
     },
-    /// Install the delivery hooks into ~/.claude/settings.json (D9).
+    /// Install the delivery hooks into the host CLI's settings file (D9).
     Install {
+        /// Which agent CLI to install into: `claude-code` (default) or `gemini-cli`.
+        ///
+        /// Each writes into its own settings file with its own event vocabulary (D111). The
+        /// board itself is shared, so a Gemini session and a Claude session reach each other —
+        /// and reach each other's projects — without either knowing the other's vendor.
+        #[arg(long, default_value = "claude-code")]
+        vendor: String,
         /// session = at session start only · turn = also between turns · monitor = also blocking.
         #[arg(long, default_value = "turn")]
         mode: String,
@@ -157,6 +164,9 @@ enum Command {
     },
     /// Remove the delivery hooks, leaving other tools' hooks untouched.
     Uninstall {
+        /// Which agent CLI to remove them from.
+        #[arg(long, default_value = "claude-code")]
+        vendor: String,
         /// Show the change without writing it.
         #[arg(long)]
         dry_run: bool,
@@ -449,9 +459,21 @@ fn run(cli: Cli) -> Result<(), Error> {
     match cli.command {
         Command::Install {
             ref mode,
+            ref vendor,
             dry_run,
             memory,
         } => {
+            let v = amb::vendors::by_id(vendor).ok_or_else(|| Error::BadAddress {
+                input: vendor.clone(),
+                reason: format!(
+                    "unknown vendor; known: {}",
+                    amb::vendors::VENDORS
+                        .iter()
+                        .map(|v| v.id)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            })?;
             let mode = hooks::Mode::parse(mode).ok_or_else(|| Error::BadAddress {
                 input: mode.clone(),
                 reason: "expected session, turn or monitor".into(),
@@ -459,16 +481,23 @@ fn run(cli: Cli) -> Result<(), Error> {
             let exe = std::env::current_exe()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| "amb".to_string());
-            let path = hooks::settings_path(&amb::vendors::CLAUDE_CODE)?;
+            let path = hooks::settings_path(v)?;
             // The whole read-plan-write cycle lives in the library, where it is testable and
             // where its retry loop is not logic sitting in the binary (D78, D99).
             let done = hooks::apply(&path, dry_run, |cur| {
-                hooks::plan_install(cur, &exe, mode, memory, &amb::vendors::CLAUDE_CODE)
+                hooks::plan_install(cur, &exe, mode, memory, v)
             })?;
             return report_plan(&cli, &path, &done, dry_run, mode.as_str());
         }
-        Command::Uninstall { dry_run } => {
-            let path = hooks::settings_path(&amb::vendors::CLAUDE_CODE)?;
+        Command::Uninstall {
+            ref vendor,
+            dry_run,
+        } => {
+            let v = amb::vendors::by_id(vendor).ok_or_else(|| Error::BadAddress {
+                input: vendor.clone(),
+                reason: "unknown vendor".into(),
+            })?;
+            let path = hooks::settings_path(v)?;
             let done = hooks::apply(&path, dry_run, hooks::plan_uninstall)?;
             return report_plan(&cli, &path, &done, dry_run, "removed");
         }
@@ -942,13 +971,16 @@ fn hook_memory(input: &serde_json::Value) -> Result<(), Error> {
     // A failure is disproportionately what is worth remembering, and capturing it needs none of
     // 4a's blocking machinery — it is a hook that reads a payload and writes a file. This is the
     // "worth noting for later" the plan flagged, taken now because it is the cheap half.
-    if event == "PostToolUseFailure" {
+    // Compared against the host vendor's spelling rather than Claude's: a Gemini session
+    // sends `AfterTool`, and a literal here would make every lane a silent no-op there.
+    let vendor = amb::vendors::detect();
+    if vendor.events.tool_failed == Some(event) {
         return capture_failure(&conn, &me, input, at);
     }
 
     // The source travels with the injection, because it decides which ledger the notes land in
     // and therefore which number the receipt divides. See `memory::Source`.
-    let (injection, source) = if event == "PreToolUse" {
+    let (injection, source) = if event == vendor.events.tool_pre {
         (
             memory_for_file(&conn, &me, input, at)?,
             memory::Source::File,
@@ -1114,7 +1146,8 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
 
     // An edit that already happened: record the claim, and — since PostToolUse output *is*
     // injected into the model's context — say so now rather than at the next turn boundary.
-    if event == "PostToolUse" {
+    let vendor = amb::vendors::detect();
+    if event == vendor.events.tool_post {
         return post_tool_use(&mut conn, &me, input);
     }
 
@@ -1122,7 +1155,7 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
     // Nothing is printed: the session is over, so there is no context to inject into, and
     // the platform reads nothing from a SessionEnd hook. Best effort — a crash never fires
     // this, and the TTL remains the backstop.
-    if event == "SessionEnd" {
+    if event == vendor.events.session_end {
         claims::end_session(&conn, &me)?;
         return Ok(());
     }
@@ -1131,7 +1164,7 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
     // spend, so it backs off after MAX_OFFERS. An explicit `amb inbox` still shows everything.
     let unread = messages::deliverable(&conn, &me)?;
     let conflicts = claims::my_conflicts(&conn, &me)?;
-    let is_start = event == "SessionStart";
+    let is_start = event == vendor.events.session_start;
     let Some(mut rendered) = delivery::render_all(&unread, &conflicts, db::now()?, is_start) else {
         return Ok(());
     };

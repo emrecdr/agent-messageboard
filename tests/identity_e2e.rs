@@ -476,3 +476,79 @@ fn a_blank_amb_project_falls_back_to_the_directory() {
         );
     }
 }
+
+/// **A Gemini session and a Claude session reach each other, across projects** (D111).
+///
+/// This is the requirement the vendor descriptor exists to serve, and it is asserted end to end
+/// because every part of it is a *silence* when it breaks: a session whose CLI exported no
+/// variable `amb` recognises simply has no identity, and "no identity" looks exactly like "no
+/// mail" from the outside. The Gemini session here is identified by `GEMINI_SESSION_ID` alone —
+/// `AMB_AGENT` is removed, and so is Claude's variable — so the only thing that can make this
+/// pass is the descriptor list being consulted.
+///
+/// The reply address is asserted too: `from` is a display name, and a name resolves only inside
+/// its own project (U8). Cross-project is the case where that distinction stops being academic.
+#[test]
+fn a_gemini_session_can_message_a_claude_session_in_another_project() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("board.db");
+    let run = |session_var: &str, session: &str, project: &str, args: &[&str]| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_amb"))
+            .args(args)
+            .current_dir(dir.path())
+            .env("AMB_DB", &db)
+            .env("AMB_PROJECT", project)
+            .env(session_var, session)
+            .env_remove("AMB_AGENT")
+            .env_remove(if session_var == "GEMINI_SESSION_ID" {
+                "CLAUDE_CODE_SESSION_ID"
+            } else {
+                "GEMINI_SESSION_ID"
+            })
+            .env_remove("CLAUDE_CODE_MESSAGING_SOCKET")
+            .env_remove("AMB_VAULT")
+            .output()
+            .expect("amb runs");
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let claude = |args: &[&str]| run("CLAUDE_CODE_SESSION_ID", "claude-sess", "beta", args);
+    let gemini = |args: &[&str]| run("GEMINI_SESSION_ID", "gemini-sess", "alpha", args);
+
+    claude(&["register", "--name", "bob"]);
+    let registered = gemini(&["register", "--name", "gwen"]);
+    assert!(
+        registered.contains("gwen"),
+        "a session identified only by GEMINI_SESSION_ID must still get an identity: {registered}"
+    );
+
+    let sent = gemini(&[
+        "send",
+        "bob@beta",
+        "--subject",
+        "cross-vendor",
+        "--body",
+        "from Gemini to Claude",
+    ]);
+    assert!(sent.contains("sent"), "{sent}");
+
+    let inbox = claude(&["inbox"]);
+    assert!(
+        inbox.contains("cross-vendor") && inbox.contains("gwen"),
+        "the Claude session must receive it: {inbox}"
+    );
+
+    let json = claude(&["inbox", "--json"]);
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
+    assert_eq!(
+        doc["messages"][0]["address"], "gwen@alpha",
+        "and be handed an address that resolves from here, not a bare name: {json}"
+    );
+}

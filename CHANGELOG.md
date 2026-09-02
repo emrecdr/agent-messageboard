@@ -11,6 +11,17 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **Gemini CLI is a supported vendor, and a Gemini session can message a Claude one across
+  projects** (D111). `amb install --vendor gemini-cli` writes Gemini's own event vocabulary
+  (`AfterAgent`, `AfterTool`, `BeforeTool`) into `~/.gemini/settings.json`; every value was read
+  out of the installed 0.55.1 bundle, which has **no `PreToolUse` or `PostToolUse` at all**, so
+  a descriptor written from the docs would have installed silently-ignored entries. It hosts two
+  memory lanes rather than three because nothing in it fires only on failure, and `HookState`
+  now carries the total it was measured against so that is never misreported as a partial
+  install. The host vendor is detected from the session-id environment rather than passed as a
+  hook argument (D97). Cross-vendor delivery needed no new code — the board was never
+  Claude-specific — and is asserted end to end through the real binary.
+
 - **A vendor is data now, not code** (D111). `src/vendors.rs` holds a `Vendor` descriptor —
   config directory, settings filenames, the six event spellings, the session-id environment
   variables — and the install path takes one instead of assuming Claude's. Claude Code remains

@@ -5658,6 +5658,35 @@ answer a question nobody asked — `CLAUDE.md`'s own rule about a numerator and 
 describing the same opportunity, firing in advance for once rather than in a post-mortem. Cheap
 now, a corrupted instrument later.
 
+### Gemini CLI, and what reading the binary changed
+
+**Every value in the second descriptor was read out of the installed bundle, and it disagreed
+with the documentation on the thing that mattered.** Gemini CLI 0.55.1 implements `SessionStart`,
+`SessionEnd`, `BeforeAgent`, `AfterAgent`, `BeforeTool`, `AfterTool`, `BeforeModel`, `AfterModel`,
+`BeforeToolSelection`, `Notification` and `PreCompress` — and contains **no occurrence of
+`PreToolUse` or `PostToolUse` at all**. A descriptor written from the docs' family resemblance
+would have installed entries the runtime ignores in silence, on the one project whose stated
+failure mode is silence. It also has no event that fires only on a *failed* tool call, so
+`Events::tool_failed` is `Option` and Gemini hosts two memory lanes rather than three;
+`HookState::Incomplete` now carries the total it was measured against, so a complete two-lane
+install is never reported as a partial three-lane one.
+
+The injection envelope needed no vendor branch: the same bundle carries `hookSpecificOutput`
+(200 occurrences) and `additionalContext` (128), which is Claude's envelope exactly.
+
+**The host vendor is detected from the environment, never passed as an argument** — a hook-safety
+decision (D97). Every installed entry is `<exe> hook <mode>`; adding a `--vendor` token would put
+a new argument on the one path contracted to always exit 0, where an older binary meeting a newer
+entry exits `2` and the runner reads that as *blocking*. The session id already identifies the
+host.
+
+**Cross-vendor messaging falls out rather than being built.** The board, the four addressing modes
+and `name@project` were never Claude-specific; the only thing standing between a Gemini session
+and the board was an identity, and identity now consults the registry. A Gemini session in one
+project messaging a Claude session in another is asserted end to end through the real binary,
+because every failure on that path is a silence: a session `amb` cannot identify looks exactly
+like a session with no mail.
+
 ### Rejected
 
 **A trait with per-vendor implementations.** Above: the variation is data.

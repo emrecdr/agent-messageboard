@@ -51,7 +51,7 @@ fn marker_name(session: Option<&str>) -> String {
 fn session_key() -> Option<String> {
     let raw = std::env::var("AMB_AGENT")
         .ok()
-        .or_else(|| crate::vendors::CLAUDE_CODE.session_id_from_env())?;
+        .or_else(|| crate::vendors::detect().session_id_from_env())?;
     sanitise_key(&raw)
 }
 

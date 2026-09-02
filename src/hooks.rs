@@ -233,20 +233,23 @@ const MEMORY_TOOLS: &str = "Read|Edit|Write|NotebookEdit";
 /// `PreToolUse` over `PostToolUse`: the point is to say what is known about a file *before* it is
 /// opened, which is the strictest form of scoping the injection to its consumer. At
 /// `SessionStart` the relevant file is a guess; here it is stated.
-/// How many lanes the memory layer installs. Named because `HookState::caveat` compares against
-/// it without a vendor in scope: three is a property of `amb`'s design (recency, path, capture),
-/// not of any one CLI's event vocabulary.
-pub const MEMORY_LANES: usize = 3;
-
-fn memory_events(v: &Vendor) -> [(&'static str, Option<&'static str>); MEMORY_LANES] {
-    [
+/// The memory lanes this vendor can host, with the matcher each needs.
+///
+/// **Length is a property of the vendor, not of `amb`.** A CLI with no failure event hosts two
+/// lanes rather than three, and `HookState` carries the total it was measured against so a
+/// complete two-lane install is never reported as a partial three-lane one.
+fn memory_events(v: &Vendor) -> Vec<(&'static str, Option<&'static str>)> {
+    let mut out = vec![
         (v.events.session_start, None),
         (v.events.tool_pre, Some(MEMORY_TOOLS)),
-        // Phase 4b's cheap half. Failures are disproportionately what is worth remembering, and
-        // capturing one needs no model, no transcript and no blocking — unlike 4a, which is
-        // deliberately not installed.
-        (v.events.tool_failed, None),
-    ]
+    ];
+    // Phase 4b's cheap half. Failures are disproportionately what is worth remembering, and
+    // capturing one needs no model, no transcript and no blocking — unlike 4a, which is
+    // deliberately not installed.
+    if let Some(failed) = v.events.tool_failed {
+        out.push((failed, None));
+    }
+    out
 }
 
 /// Plan the installation of delivery hooks into an existing settings document.
@@ -397,7 +400,14 @@ fn is_memory_entry(entry: &Value) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookState {
     Installed,
-    Incomplete { missing: Vec<String> },
+    Incomplete {
+        missing: Vec<String>,
+        /// How many lanes this vendor could have hosted. Travels with the state for the reason
+        /// the paragraph above gives about `missing`: a two-lane vendor missing both is "NOT
+        /// INSTALLED", and without the total that is indistinguishable from a three-lane vendor
+        /// missing two.
+        total: usize,
+    },
     Unknown,
 }
 
@@ -412,10 +422,10 @@ impl HookState {
     pub fn caveat(&self) -> Option<String> {
         match self {
             HookState::Installed => None,
-            HookState::Incomplete { missing } => Some(format!(
+            HookState::Incomplete { missing, total } => Some(format!(
                 "memory hooks: {} — missing {}. The counts that follow predate this and are not \
                  evidence about the corpus; run `amb install --memory` to restore them",
-                if missing.len() == MEMORY_LANES {
+                if missing.len() == *total {
                     "NOT INSTALLED"
                 } else {
                     "PARTIALLY INSTALLED"
@@ -448,7 +458,10 @@ pub fn memory_state(settings: &Value, v: &Vendor) -> HookState {
     if missing.is_empty() {
         HookState::Installed
     } else {
-        HookState::Incomplete { missing }
+        HookState::Incomplete {
+            total: memory_events(v).len(),
+            missing,
+        }
     }
 }
 
@@ -1058,6 +1071,8 @@ mod tests {
 
     /// A vendor that is not Claude, so the seam is asserted rather than assumed.
     const OTHER: crate::vendors::Vendor = crate::vendors::Vendor {
+        id: "other",
+        label: "Other CLI",
         config_dir: ".other",
         settings_file: "config.json",
         local_settings_file: None,
@@ -1068,7 +1083,7 @@ mod tests {
             tool_post: "AfterTool",
             session_end: "Sleep",
             tool_pre: "BeforeTool",
-            tool_failed: "ToolFailed",
+            tool_failed: Some("ToolFailed"),
         },
         session_env: &["OTHER_SESSION_ID"],
     };
@@ -1356,6 +1371,7 @@ mod tests {
         // Exactly the machine state that produced D69, minus one event: some, not none.
         let partial = HookState::Incomplete {
             missing: vec!["PreToolUse".to_string()],
+            total: 3,
         };
         let line = partial.caveat().expect("a partial layer must say so");
         assert!(
