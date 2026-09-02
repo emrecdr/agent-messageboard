@@ -33,6 +33,75 @@ fn claim_paths(b: &Board, agent: &str) -> Vec<String> {
         .collect()
 }
 
+/// **A claim is recorded from the host CLI's own edit vocabulary, not from Claude's** (D111).
+///
+/// `claims::edited_path` gated on a `const EDITING_TOOLS` naming Claude's four tools, and it is
+/// the *sole* filter on that path — `Mode::events` installs the tool-completed hook with no
+/// matcher, so nothing upstream narrows it. Gemini's names for the same two acts are `write_file`
+/// and `replace`, so every `AfterTool` payload fell straight through and **a Gemini session
+/// recorded zero claims, ever, without an error anywhere**. One of `amb`'s three surfaces inert
+/// on a vendor it advertises, and indistinguishable from a project where nobody edits anything.
+///
+/// Three rows, because two would not separate the fix from a shortcut. The Claude row proves the
+/// harness reaches the writer at all; the Gemini row is the one that was broken; and the third
+/// row — Claude's `Edit` fired at a *Gemini* session — is what fails if someone "fixes" this by
+/// unioning every vendor's vocabulary into one list, which would make each CLI claim on words its
+/// runtime never emits.
+#[test]
+fn an_edit_is_claimed_in_the_vocabulary_of_the_cli_that_fired_it() {
+    let b = Board::new();
+    // The board has to exist first: a hook does nothing at all when it does not (D9), so without
+    // this every row passes its exit-code check and records nothing, for the right reason.
+    b.run("uuid-claude", &["register", "--name", "claude-side"]);
+    b.run("uuid-gemini", &["register", "--name", "gemini-side"]);
+
+    let fire = |agent: &str, session_var: &str, event: &str, tool: &str, file: &str| {
+        let payload = serde_json::json!({
+            "hook_event_name": event,
+            "tool_name": tool,
+            "tool_input": { "file_path": file },
+        })
+        .to_string();
+        let mut c = b.cmd(agent);
+        c.args(["hook", "turn"]).env(session_var, "sess");
+        let (code, _) = common::with_stdin(c, &payload);
+        assert_eq!(code, 0, "a hook must always succeed");
+    };
+
+    fire(
+        "uuid-claude",
+        "CLAUDE_CODE_SESSION_ID",
+        "PostToolUse",
+        "Edit",
+        &b.path("src/claude.rs"),
+    );
+    fire(
+        "uuid-gemini",
+        "GEMINI_SESSION_ID",
+        "AfterTool",
+        "write_file",
+        &b.path("src/gemini.rs"),
+    );
+    fire(
+        "uuid-gemini",
+        "GEMINI_SESSION_ID",
+        "AfterTool",
+        "Edit",
+        &b.path("src/not-gemini-vocabulary.rs"),
+    );
+
+    // The whole set, not three `contains` — the third row is an *absence*, and an absence proves
+    // nothing unless the rows around it are pinned exactly (M27).
+    let mut claimed = claim_paths(&b, "uuid-claude");
+    claimed.sort();
+    assert_eq!(
+        claimed,
+        vec!["src/claude.rs".to_string(), "src/gemini.rs".to_string()],
+        "each CLI claims on its own words: Claude's Edit and Gemini's write_file both land, and \
+         Claude's Edit fired at Gemini lands nowhere"
+    );
+}
+
 #[test]
 fn two_agents_can_hold_the_same_path() {
     // D5, stated as a test. `PRIMARY KEY (path, agent)` makes exclusivity unrepresentable, and

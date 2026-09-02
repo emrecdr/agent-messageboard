@@ -359,7 +359,18 @@ pub fn vendors_check(problems: &[crate::vendors::Problem], loaded: usize) -> Che
             "vendors",
             Health::Ok,
             format!(
-                "{loaded} vendor(s) available{}",
+                "{loaded} vendor(s) available: {}{}",
+                // **`Vendor::label` had no production reader at all until this line**, and
+                // `find_unread_fields.py` could not see it: the script counts a field by *name*
+                // across the whole corpus, so `hooks::label_of` and `Nearness::label()` scored it
+                // `reads=7` while every real mention was in `mod tests`. A false clean on the one
+                // gate check whose whole job is unread fields — D39 and D45's defect, arriving
+                // through the instrument built to catch it.
+                crate::vendors::all()
+                    .iter()
+                    .map(|v| v.label)
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 match loaded.saturating_sub(crate::vendors::VENDORS.len()) {
                     0 => String::new(),
                     n => format!(" — {n} from ~/.config/amb/vendors"),
@@ -588,7 +599,7 @@ pub fn gather(now: f64) -> Report {
                     Health::Warn,
                     format!(
                         "memory hooks missing on {} — `amb install --memory` restores them. A \
-                         later `amb install` without --memory removes all three (D69)",
+                         later `amb install` without --memory removes every one of them (D69)",
                         missing.join(", ")
                     ),
                 )

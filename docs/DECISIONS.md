@@ -5664,7 +5664,7 @@ now, a corrupted instrument later.
 with the documentation on the thing that mattered.** Gemini CLI 0.55.1 implements `SessionStart`,
 `SessionEnd`, `BeforeAgent`, `AfterAgent`, `BeforeTool`, `AfterTool`, `BeforeModel`, `AfterModel`,
 `BeforeToolSelection`, `Notification` and `PreCompress` — and contains **no occurrence of
-`PreToolUse` or `PostToolUse` at all**. A descriptor written from the docs' family resemblance
+`PreToolUse` at all, and `PostToolUse` only 4 times, none of them a fired event**. A descriptor written from the docs' family resemblance
 would have installed entries the runtime ignores in silence, on the one project whose stated
 failure mode is silence. It also has no event that fires only on a *failed* tool call, so
 `Events::tool_failed` is `Option` and Gemini hosts two memory lanes rather than three;

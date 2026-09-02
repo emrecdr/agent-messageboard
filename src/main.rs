@@ -634,14 +634,12 @@ fn run(cli: Cli) -> Result<(), Error> {
                 println!("nothing unread");
             } else {
                 if !shown.is_empty() {
-                    let block = delivery::render_inbox(&shown, &me.name, &me.project);
-                    print!("{block}");
-                    // The renderer does not end its last line, so without this the body runs
-                    // straight into `marked #1 read` — the join defect M24 and U6 both record,
-                    // which no `contains` assertion on either side can see.
-                    if !block.ends_with('\n') {
-                        println!();
-                    }
+                    // `println!`, like the two sibling arms at `inbox` and `watch`. This was
+                    // `print!` guarded by `if !block.ends_with('\n')` — a branch whose false arm
+                    // is unreachable, because `render_inbox` ends `out.trim_end()`. Three callers
+                    // of one renderer had three tail idioms, one of them defending against its
+                    // own renderer's documented contract, and no mutation could redden the guard.
+                    println!("{}", delivery::render_inbox(&shown, &me.name, &me.project));
                 }
                 let list: Vec<String> = ids.iter().map(|i| format!("#{i}")).collect();
                 println!("marked {} read", list.join(" "));
@@ -1224,7 +1222,7 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
     // injected into the model's context — say so now rather than at the next turn boundary.
     let vendor = amb::vendors::detect();
     if event == vendor.events.tool_post {
-        return post_tool_use(&mut conn, &me, input, event);
+        return post_tool_use(&mut conn, &me, input, event, vendor);
     }
 
     // A session that ends lapses its claims now instead of running out their TTL (D109).
@@ -1307,8 +1305,9 @@ fn post_tool_use(
     me: &identity::Identity,
     input: &serde_json::Value,
     event: &str,
+    vendor: &amb::vendors::Vendor,
 ) -> Result<(), Error> {
-    let conflicts = observe_edit(conn, me, input)?;
+    let conflicts = observe_edit(conn, me, input, vendor)?;
     let unread = messages::undelivered(conn, me)?;
     let Some(rendered) = delivery::render_all(&unread, &conflicts, db::now()?, false) else {
         return Ok(());
@@ -1328,9 +1327,10 @@ fn observe_edit(
     conn: &rusqlite::Connection,
     me: &identity::Identity,
     input: &serde_json::Value,
+    vendor: &amb::vendors::Vendor,
 ) -> Result<Vec<claims::Claim>, Error> {
     let (tool, file) = hooks::tool_and_file(input);
-    let Some(rel) = claims::edited_path(&me.root, tool, file) else {
+    let Some(rel) = claims::edited_path(vendor.edit_tools, &me.root, tool, file) else {
         return Ok(Vec::new());
     };
     let taken = claims::take(conn, me, &rel, None, None, claims::Source::Observed)?;

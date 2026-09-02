@@ -4475,3 +4475,73 @@ have worked. Neither is a cleanup pass's call to make quietly, so the lint is re
 decision someone should take deliberately, with the backlog counted, instead of being bolted on.
 The five instances are fixed; the mechanism is not yet guarded, and this paragraph is the only
 thing saying so.
+
+## M64 · the claims surface was dead on Gemini, and the constant guarding it was the one D111 called an optimisation
+
+**Modules:** `src/claims.rs`, `src/vendors.rs`, `src/main.rs`, `src/doctor.rs`
+
+**2026-09-02.** D111 moved the memory lane's tool matcher onto the descriptor because
+`Read|Edit|Write|NotebookEdit` is Claude's vocabulary and Gemini's is `read_file`, `write_file`,
+`replace`. `Vendor::tool_matcher`'s own doc records the reasoning and ends: *"the matcher is an
+optimisation rather than the guard."* **The guard was `claims::EDITING_TOOLS`, it was still
+Claude's four names, and it was never moved.**
+
+It is also the *only* filter on that path. `Mode::events` installs the tool-completed hook with no
+matcher at all, so nothing upstream narrows it: every `AfterTool` payload reached `edited_path`,
+carried `write_file`, missed the list and returned `None`. **A Gemini session recorded zero claims,
+ever, and said nothing** — one of `amb`'s three surfaces inert on a vendor the README advertises,
+in a shape indistinguishable from a project where nobody edits anything. Measured against the
+installed `@google/gemini-cli` 0.55.1 package rather than its docs: `write_file` 89 occurrences,
+`read_file` 96, `read_many_files` 50, and `"Write"`, `"MultiEdit"`, `"NotebookEdit"` **zero each**.
+
+`Vendor::edit_tools` now carries it, required in a manifest rather than defaulted — a descriptor
+that cannot say which tools write files describes a vendor whose claims surface is dead, and
+defaulting to Claude's names is the precise mistake being fixed. The guard is a three-row truth
+table: Claude's `Edit` claims, Gemini's `write_file` claims, and **Claude's `Edit` fired at a
+Gemini session claims nothing** — the third row is what fails if someone "fixes" this by unioning
+every vendor's vocabulary. Against the code as it shipped, the guard reports the defect exactly
+backwards, which is the clearest statement of it available: `["src/claude.rs",
+"src/not-gemini-vocabulary.rs"]` where `["src/claude.rs", "src/gemini.rs"]` was expected.
+
+**What generalises is where the fix stopped.** D111's own generalisation sentence reads *"read the
+other vendor's own words for everything you are about to **write into its file**"*, and every
+finding still open after it is on the **read** side — what `amb` reads out of a vendor's runtime:
+tool names in a payload, event names in a payload, environment variables. The seam was drawn
+around writes because writes were what the install command did, and the sentence that recorded the
+lesson inherited that scope. A generalisation stated in terms of the operation you happened to be
+performing will not cover the operation you were not.
+
+**Two more instruments, from the same audit, both left standing with reasons:**
+`memory::events::lane_caveat` explains the receipt as *"`PreToolUse` fires only on a Read/Edit/Write
+tool call"* — the one sentence that stops D74's two lane ratios being read as a comparison, in a
+vocabulary a Gemini reader will dismiss. `hooks::event_name` degrades a malformed payload to the
+literal `"SessionStart"`, documented as *"every consumer treats that as the ordinary banner case"*;
+consumers now compare against `vendor.events.session_start`, so that contract is true only because
+both shipped vendors happen to spell it the same, and false for any manifest that does not. Both
+are real; both change rendered output or a public signature, and neither is a cleanup pass's call.
+
+## M65 · a field with no reader at all, cleared by the gate check written to catch exactly that
+
+**Modules:** `src/vendors.rs`, `src/doctor.rs`, `tools/find_unread_fields.py`
+
+**2026-09-02.** `Vendor::label` was added by D111 with the docstring *"The product's own name, for
+a line a person reads."* Nothing read it. Every `.label` in production was
+`hooks::label_of` — a free function — or `Nearness::label()` in `memory/inject.rs`; all four real
+mentions were inside `mod tests`. This is D23, D39 and D45's defect, and the module's own header
+argues against it in advance: *"a speculative field is a field nothing reads"*, citing that
+`find_unread_fields.py` is in the gate.
+
+**The script reported `Vendor label reads=7` and passed.** It counts a field by *name* across the
+corpus, so two unrelated `label`s in other modules cleared it. Its docstring states its error
+direction — *"it over-removes rather than under-removes, which for a reference count means a false
+'nothing mentions it' — loud and checkable — rather than a false reassurance"* — and that is true
+of its comment stripping and **false of its name matching**, which fails in the flattering
+direction and silently. An instrument whose stated failure direction is safe in one subsystem and
+unsafe in another is worse than one with no stated direction, for the same reason a false comment
+beats an absent one: the sentence is what stops you checking.
+
+`label` now has its reader — `doctor`'s vendors check names the vendors rather than counting them,
+which is what the field was for. The script's name-collision blind spot is **recorded and not
+fixed**: making it type-aware is a rewrite of a deliberate heuristic, and the honest interim is
+that a field whose every mention is in `mod tests` currently passes. That is the next thing to
+build here, and the count in its summary line is what should stop reading as a guarantee.

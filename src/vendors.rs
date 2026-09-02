@@ -89,6 +89,23 @@ pub struct Vendor {
     /// bounded anyway by `memory::SKIP_TOOLS` and by the injection itself, which is why the
     /// matcher is an optimisation rather than the guard.
     pub tool_matcher: Option<&'static str>,
+    /// The tool names that mean *this agent wrote to a file*, in this CLI's own vocabulary.
+    ///
+    /// **`tool_matcher` is an optimisation; this is the guard, and for one release only one of
+    /// them was data.** `claims::edited_path` gated on a `const EDITING_TOOLS` spelling Claude's
+    /// four names, and it is the *sole* filter on that path — `Mode::events` installs `tool_post`
+    /// with no matcher at all, so nothing upstream narrows it. Gemini calls the same two acts
+    /// `write_file` and `replace`, so every `AfterTool` payload fell through the gate and **a
+    /// Gemini session recorded zero claims, ever, in silence** — one of `amb`'s three surfaces
+    /// inert on a vendor it advertises, with no error anywhere. D14's whole claim is that claims
+    /// are *observed* so nobody has to remember them; observing nothing looks identical to a
+    /// project where nobody claims anything.
+    ///
+    /// Required in a manifest rather than defaulted, for the reason the rest of this parser
+    /// refuses rather than guesses: a descriptor that cannot say which tools write files
+    /// describes a vendor whose claims surface is dead, and defaulting to Claude's names is the
+    /// precise mistake `tool_matcher` was fixed for one commit earlier.
+    pub edit_tools: &'static [&'static str],
     /// Session-id environment variables, most specific first. `AMB_AGENT` overrides all of them
     /// and is not listed here, because it belongs to `amb` rather than to any vendor.
     pub session_env: &'static [&'static str],
@@ -113,6 +130,11 @@ pub const CLAUDE_CODE: Vendor = Vendor {
         tool_failed: Some("PostToolUseFailure"),
     },
     tool_matcher: Some("Read|Edit|Write|NotebookEdit"),
+    // `MultiEdit` is here and deliberately absent from `tool_matcher` above: that matcher is the
+    // memory lane's and was measured against Claude's own docs, while this is the claims gate and
+    // has counted MultiEdit as an edit since D14. Two sets, one union, and naming them separately
+    // is what keeps the difference visible instead of averaging it away.
+    edit_tools: &["Edit", "Write", "MultiEdit", "NotebookEdit"],
     session_env: &["CLAUDE_CODE_SESSION_ID"],
 };
 
@@ -142,7 +164,7 @@ impl Vendor {
 /// the two disagree in a way that matters. Gemini 0.55.1's bundle implements `SessionStart`,
 /// `SessionEnd`, `BeforeAgent`, `AfterAgent`, `BeforeTool`, `AfterTool`, `BeforeModel`,
 /// `AfterModel`, `BeforeToolSelection`, `Notification` and `PreCompress` — and contains **no
-/// occurrence of `PreToolUse` or `PostToolUse` at all**. Installing Claude's spellings here would
+/// occurrence of `PreToolUse` at all, and `PostToolUse` only 4 times, none of them a fired event**. Installing Claude's spellings here would
 /// have written entries the runtime ignores in silence, which is this project's least favourite
 /// kind of failure and the reason the check was made against the shipped artefact.
 ///
@@ -169,6 +191,10 @@ pub const GEMINI_CLI: Vendor = Vendor {
     // Gemini's own names, counted in the installed bundle: `replace` 65, `read_file` 28,
     // `read_many_files` 12, `write_file` 8. Claude's `NotebookEdit` appears zero times.
     tool_matcher: Some("read_file|read_many_files|write_file|replace"),
+    // The write half of the matcher above. Counted in the installed 0.55.1 package: `write_file`
+    // 89, `read_file` 96, `read_many_files` 50 — and `"Write"`, `"MultiEdit"` and `"NotebookEdit"`
+    // zero times each, which is what made the Claude-named gate silent rather than wrong.
+    edit_tools: &["write_file", "replace"],
     session_env: &["GEMINI_SESSION_ID"],
 };
 
@@ -208,11 +234,13 @@ pub fn detect() -> &'static Vendor {
 
 /// [`detect`] with the environment injected, so precedence is testable (M51).
 pub fn detect_with(lookup: impl Fn(&str) -> Option<String>) -> &'static Vendor {
-    all()
-        .iter()
-        .copied()
-        .find(|v| v.session_id(&lookup).is_some())
-        .unwrap_or(&CLAUDE_CODE)
+    let hit = |vs: &[&'static Vendor]| vs.iter().copied().find(|v| v.session_id(&lookup).is_some());
+    // **The shipped vendors first, so the common case never reaches the disk.** `all()` forces
+    // the manifest load, and `detect` sits under `identity::resolve`, which runs on the
+    // `tool_post` hook — every edit, every session, every machine. Provably the same answer:
+    // `loaded()` builds `VENDORS.to_vec()` and pushes manifests after it, so a shipped match is
+    // the first match either way, and a miss falls through to the identical scan.
+    hit(VENDORS).or_else(|| hit(all())).unwrap_or(&CLAUDE_CODE)
 }
 
 // ── User-added vendors ──────────────────────────────────────────────────────
@@ -288,6 +316,25 @@ pub fn parse_manifest(doc: &Value, shipped: &[&str]) -> Result<Vendor, String> {
                 .collect()
         })
         .unwrap_or_default();
+    let edit_tools: Vec<&'static str> = doc
+        .get("edit_tools")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(leak)
+                .collect()
+        })
+        .unwrap_or_default();
+    if edit_tools.is_empty() {
+        return Err(
+            "edit_tools must name at least one tool that writes a file, or this vendor's \
+             sessions record no claims at all — silently, since nothing else filters that hook"
+                .into(),
+        );
+    }
     if session_env.is_empty() {
         return Err(
             "session_env must name at least one environment variable, or no session of this \
@@ -324,6 +371,7 @@ pub fn parse_manifest(doc: &Value, shipped: &[&str]) -> Result<Vendor, String> {
                 .map(leak),
         },
         tool_matcher: opt(doc, "tool_matcher"),
+        edit_tools: Box::leak(edit_tools.into_boxed_slice()),
         session_env: Box::leak(session_env.into_boxed_slice()),
     })
 }
@@ -348,10 +396,19 @@ fn leak(s: &str) -> &'static str {
 
 /// Every vendor: the ones `amb` ships, then the ones a user dropped in a file.
 ///
-/// **Loaded once per process, never on a schedule.** `detect` runs on the hook path, so the cost
-/// has to be a `stat` on a directory that usually does not exist — which is what it is: the
-/// `OnceLock` means at most one directory read per invocation, and the common case returns
-/// before opening anything.
+/// **Loaded once per process, never on a schedule**, and the cost is stated for both cases
+/// because an earlier version of this sentence stated only the flattering one. It called the cost
+/// "a `stat` on a directory that usually does not exist"; it is a `read_dir`, and that sentence
+/// describes the *empty* case only. With manifests present it is `read_dir` + `read_to_string` +
+/// `serde_json::from_str` per file — bounded by how many files the user dropped in, and paid on
+/// the `tool_post` hook path, which fires on every edit in every session (D9's path).
+///
+/// Measured on this machine against the shipped binary, 60 interleaved samples of `amb inbox`
+/// each: no directory **3.38 ms**, empty directory **3.47 ms**, one manifest **3.43 ms**. The
+/// spread between the two *no-op* conditions is larger than the cost of parsing a manifest, so
+/// today's price is below what this harness can resolve. `detect` short-circuits on the shipped
+/// vendors before touching disk at all, which is why: a session that exported
+/// `CLAUDE_CODE_SESSION_ID` or `GEMINI_SESSION_ID` never reaches the loader.
 pub fn all() -> &'static [&'static Vendor] {
     &loaded().0
 }
@@ -495,6 +552,7 @@ mod tests {
                 "session_start": "Start", "turn_end": "Done", "tool_post": "AfterTool",
                 "session_end": "End", "tool_pre": "BeforeTool", "tool_failed": "Failed"
             },
+            "edit_tools": ["put_file", "patch"],
             "session_env": ["ACME_SESSION"]
         });
         let v = parse_manifest(&full, &["claude-code"]).expect("a complete manifest loads");
@@ -503,9 +561,13 @@ mod tests {
         assert_eq!(v.events.turn_end, "Done");
         assert_eq!(v.events.tool_failed, Some("Failed"));
         assert_eq!(v.session_env, &["ACME_SESSION"]);
+        // Its own vocabulary, not Claude's — the gate `claims::edited_path` runs.
+        assert_eq!(v.edit_tools, &["put_file", "patch"]);
 
         // Each required key, removed one at a time: the reach rows for every refusal.
-        for key in ["id", "config_dir", "settings_file"] {
+        // `edit_tools` is in this list rather than defaulted: a vendor that cannot say which
+        // tools write files records no claims at all, and says nothing while doing it.
+        for key in ["id", "config_dir", "settings_file", "edit_tools"] {
             let mut doc = full.clone();
             doc.as_object_mut().expect("object").remove(key);
             let err = parse_manifest(&doc, &[]).expect_err("{key} is required");
@@ -592,9 +654,11 @@ mod tests {
     }
 
     /// **Read out of the installed binary, and the binary disagreed with the documentation.**
-    /// Gemini 0.55.1 has no event that fires only on a failed tool call, and no `PreToolUse` or
-    /// `PostToolUse` at all. Both facts are asserted here because both were the difference
-    /// between a working install and one whose entries the runtime ignores in silence.
+    /// Gemini 0.55.1 has no event that fires only on a failed tool call, and does not fire
+    /// `PreToolUse` or `PostToolUse` — `PreToolUse` appears in the package zero times and
+    /// `PostToolUse` four, none of them an event it raises. Both facts are asserted here because
+    /// both were the difference between a working install and one whose entries the runtime
+    /// ignores in silence.
     #[test]
     fn gemini_declares_the_lane_it_cannot_host_rather_than_borrowing_claudes_spelling() {
         assert_eq!(

@@ -754,6 +754,7 @@ fn the_unknown_vendor_error_lists_vendors_that_came_from_a_manifest() {
             "session_start": "Begin", "turn_end": "Done", "tool_post": "AfterTool",
             "session_end": "Finish", "tool_pre": "BeforeTool"
           },
+          "edit_tools": ["put_file", "patch"],
           "session_env": ["ACME_SESSION_ID"]
         }"#,
     )
@@ -806,6 +807,7 @@ fn a_vendor_amb_never_heard_of_installs_from_a_dropped_in_manifest() {
             "session_start": "Begin", "turn_end": "Done", "tool_post": "AfterTool",
             "session_end": "Finish", "tool_pre": "BeforeTool", "tool_failed": "ToolBroke"
           },
+          "edit_tools": ["put_file", "patch"],
           "session_env": ["ACME_SESSION_ID"]
         }"#,
     )
@@ -890,13 +892,18 @@ fn doctor_names_a_manifest_it_refused_and_still_loads_the_good_one() {
     let dir = tempfile::tempdir().expect("tempdir");
     let vendors = dir.path().join("vendors");
     std::fs::create_dir_all(&vendors).expect("mkdir");
-    // Carries an id and a session_env on purpose: the parser refuses on the *first* thing
-    // missing, so a manifest with only an id fails on `session_env` and never reaches the
+    // Carries an id, a session_env and edit_tools on purpose: the parser refuses on the *first*
+    // thing missing, so a manifest with only an id fails on `session_env` and never reaches the
     // field this test is about. The fixture has to get past the earlier gates to test a later
     // one — M17's rule, applied to a fixture written minutes after re-reading it.
+    //
+    // `edit_tools` joined those earlier gates later and this fixture went red immediately, which
+    // is the comment above proving itself: a new required key silently moves every fixture's
+    // refusal forward, and only a test that asserts the *reason* rather than the failure notices.
     std::fs::write(
         vendors.join("broken.json"),
-        r#"{"id": "half-a-vendor", "session_env": ["HALF_SESSION"]}"#,
+        r#"{"id": "half-a-vendor", "session_env": ["HALF_SESSION"],
+            "edit_tools": ["put_file"]}"#,
     )
     .expect("write");
     std::fs::write(
@@ -907,6 +914,7 @@ fn doctor_names_a_manifest_it_refused_and_still_loads_the_good_one() {
             "session_start": "A", "turn_end": "B", "tool_post": "C",
             "session_end": "D", "tool_pre": "E"
           },
+          "edit_tools": ["put_file", "patch"],
           "session_env": ["GOOD_SESSION_ID"]
         }"#,
     )

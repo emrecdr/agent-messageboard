@@ -158,19 +158,18 @@ pub fn relative_to(root: &str, file: &str) -> Option<String> {
     }
 }
 
-/// Tool names whose use means the agent wrote to a file.
-///
-/// Lives here rather than in the binary so it is testable without spawning a process, and so
-/// there is one place to add the next editing tool.
-const EDITING_TOOLS: &[&str] = &["Edit", "Write", "MultiEdit", "NotebookEdit"];
-
 /// The project-relative path an edit touched, or `None` when this tool call did not write a
 /// file inside this project.
 ///
 /// Pure: the whole "should this become a claim, and under what path" rule, decided without a
 /// database. The caller only performs the write.
-pub fn edited_path(root: &str, tool: &str, file_path: Option<&str>) -> Option<String> {
-    if !EDITING_TOOLS.contains(&tool) {
+pub fn edited_path(
+    edit_tools: &[&str],
+    root: &str,
+    tool: &str,
+    file_path: Option<&str>,
+) -> Option<String> {
+    if !edit_tools.contains(&tool) {
         return None;
     }
     relative_to(root, file_path?)
@@ -421,13 +420,15 @@ pub fn list(conn: &Connection, project: Option<&str>, live_only: bool) -> Result
 /// correct. That is what made this invisible: nothing was wrong, only slow, and only at a table
 /// size the fixtures never reached.
 ///
-/// The project clause is unconditional: every caller has one, and an earlier form assembled
-/// clause and bind lists to generalise over a `None`-project case nothing could reach — ~25
-/// lines of machinery for an axis that does not exist. `?1` is always the project; `?2`,
-/// present only when `live_at` is given, is the liveness instant. Clause and bind are appended
-/// by the same `if let`, so the positional order is held by structure — an interim form kept
-/// the SQL here and the binds in [`list`], two branches agreeing by comment, with a third
-/// hand-built copy in the plan test.
+/// **The project clause used to be unconditional and this paragraph used to argue for that**, on
+/// the grounds that every caller had one and that the `None` case was ~25 lines of machinery for
+/// an axis that did not exist. It was right when written and `amb claims --all` is the caller
+/// that made it wrong: `None` is now every project, and a doc that argues against the change
+/// beneath it is the hardest kind to disbelieve (D88). Neither `?N` is fixed any more — the
+/// numbers come from `binds.len()`, so clause and bind are appended by the same `if let` and the
+/// positional order is held by structure rather than by a comment. An interim form kept the SQL
+/// here and the binds in [`list`], two branches agreeing by comment, with a third hand-built copy
+/// in the plan test.
 fn list_sql(project: Option<&str>, live_at: Option<f64>) -> (String, Vec<rusqlite::types::Value>) {
     let mut query = String::from(
         "SELECT c.path, c.agent, a.name, c.project, c.intent, c.source, c.taken_at,
@@ -659,6 +660,14 @@ pub fn conflicts_to_report(taken: &Taken) -> Vec<Claim> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Claude's row of `Vendor::edit_tools`, for fixtures written in Claude's vocabulary.
+    ///
+    /// This used to be a production constant and was the **sole** gate on the claims lane, which
+    /// is why a Gemini session recorded nothing: `Mode::events` installs `tool_post` with no
+    /// matcher, so nothing upstream narrowed it and `write_file` simply fell through. The names
+    /// belong to the descriptor now; only the fixtures still name one vendor.
+    const EDITING_TOOLS: &[&str] = crate::vendors::CLAUDE_CODE.edit_tools;
 
     /// D19: a renewal is not news, a fresh take is.
     #[test]
@@ -963,14 +972,14 @@ mod tests {
 
         for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
             assert_eq!(
-                edited_path(&root, tool, Some(&f)).as_deref(),
+                edited_path(EDITING_TOOLS, &root, tool, Some(&f)).as_deref(),
                 Some("a.rs"),
                 "{tool}"
             );
         }
         for tool in ["Read", "Bash", "Grep", "Glob", "WebFetch"] {
             assert_eq!(
-                edited_path(&root, tool, Some(&f)),
+                edited_path(EDITING_TOOLS, &root, tool, Some(&f)),
                 None,
                 "{tool} does not write"
             );
@@ -979,14 +988,17 @@ mod tests {
 
     #[test]
     fn an_edit_without_a_file_path_claims_nothing() {
-        assert_eq!(edited_path("/tmp", "Edit", None), None);
+        assert_eq!(edited_path(EDITING_TOOLS, "/tmp", "Edit", None), None);
     }
 
     #[test]
     fn an_edit_outside_the_project_claims_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().to_string_lossy().into_owned();
-        assert_eq!(edited_path(&root, "Edit", Some("/etc/hosts")), None);
+        assert_eq!(
+            edited_path(EDITING_TOOLS, &root, "Edit", Some("/etc/hosts")),
+            None
+        );
     }
 
     #[test]

@@ -1088,6 +1088,7 @@ mod tests {
             tool_failed: Some("ToolFailed"),
         },
         tool_matcher: Some("Grab|Stash"),
+        edit_tools: &["Edit"],
         session_env: &["OTHER_SESSION_ID"],
     };
 
@@ -1173,6 +1174,7 @@ mod tests {
     #[test]
     fn a_session_id_comes_from_the_first_vendor_variable_that_answers() {
         let two = crate::vendors::Vendor {
+            edit_tools: &["Edit"],
             session_env: &["FIRST", "SECOND"],
             ..OTHER
         };
