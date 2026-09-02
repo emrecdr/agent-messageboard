@@ -580,6 +580,28 @@ fn run(cli: Cli) -> Result<(), Error> {
         }
 
         Command::Read { ref ids, all } => {
+            // **Show it, then acknowledge it — in that order** (U9). `read` is the obvious thing
+            // to type when a banner says "1 unread", and it used to print `marked #1 read` and
+            // nothing else: the body was never shown, and acknowledging had just dropped the
+            // message out of `amb inbox --unread`, the view the primer teaches. Two sessions
+            // reached for `--json | python3` to recover a message they had been told about and
+            // never seen. Acknowledging is now a consequence of reading rather than a substitute
+            // for it.
+            //
+            // Rendered through `delivery::render_inbox`, deliberately: it already quotes every
+            // sender-written field and carries `UNTRUSTED`, so this adds a *caller*, not a
+            // fourth renderer for the containment enumeration to fall behind (D90, M23).
+            //
+            // `--all` keeps the terse summary. It is the bulk verb — sixty acknowledgements at
+            // once — and spelling sixty bodies into a context window is the opposite of what
+            // the caller asked for.
+            let shown = if all || cli.json {
+                Vec::new()
+            } else {
+                ids.iter()
+                    .filter_map(|i| messages::get(&conn, *i).ok())
+                    .collect::<Vec<_>>()
+            };
             let ids = if all {
                 messages::mark_read_all(&mut conn, &me)?
             } else {
@@ -591,6 +613,16 @@ fn run(cli: Cli) -> Result<(), Error> {
             } else if ids.is_empty() {
                 println!("nothing unread");
             } else {
+                if !shown.is_empty() {
+                    let block = delivery::render_inbox(&shown, &me.name, &me.project);
+                    print!("{block}");
+                    // The renderer does not end its last line, so without this the body runs
+                    // straight into `marked #1 read` — the join defect M24 and U6 both record,
+                    // which no `contains` assertion on either side can see.
+                    if !block.ends_with('\n') {
+                        println!();
+                    }
+                }
                 let list: Vec<String> = ids.iter().map(|i| format!("#{i}")).collect();
                 println!("marked {} read", list.join(" "));
             }

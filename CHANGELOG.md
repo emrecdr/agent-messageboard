@@ -11,6 +11,17 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`amb read <id>` shows the message before it acknowledges it** (U9). The verb was the bug: a
+  banner says "1 unread", `amb read 3` is the obvious thing to type, and it printed
+  `marked #3 read` and nothing else — while the acknowledgement dropped the message out of
+  `amb inbox --unread`, the view the primer teaches. Two sessions independently ended up piping
+  `--json` through Python to recover a message they had been told about and never seen.
+  Acknowledging is now a consequence of reading rather than a substitute for it. Rendered through
+  the existing `render_inbox`, so this adds a caller rather than a fourth renderer for the
+  containment enumeration to fall behind; `--all` keeps its terse summary, being the bulk verb.
+  The first version ran the body straight into `marked #1 read` on one line — M24's join defect,
+  now asserted.
+
 - **Gemini CLI is a supported vendor, and a Gemini session can message a Claude one across
   projects** (D111). `amb install --vendor gemini-cli` writes Gemini's own event vocabulary
   (`AfterAgent`, `AfterTool`, `BeforeTool`) into `~/.gemini/settings.json`; every value was read

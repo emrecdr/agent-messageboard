@@ -28,7 +28,7 @@ use std::fmt::Write as _;
 pub const PRIMER: &str = "\
 [amb] You are on the agent messageboard. Other Claude sessions on this machine can reach you.
   amb inbox [--unread]           what is waiting for you (--unread hides what you have read)
-  amb read <id>                  acknowledge one (only this marks it read)
+  amb read <id>                  show one and acknowledge it (only this marks it read)
   amb reply <id> --body \"...\"     answer its sender
   amb send <to> --subject S --body B      (--body-file F for anything long or multi-line)
       <to> is  alice  ·  alice@otherproject  ·  @  (everyone here)  ·  @@  (everyone, everywhere)

@@ -606,3 +606,48 @@ fn a_snapshot_says_which_scope_it_rendered_and_renders_that_scope() {
         "and carries both: {all:?}"
     );
 }
+
+/// **`read` shows the message before it acknowledges it** (U9).
+///
+/// The verb was the bug: a banner says "1 unread", `amb read 3` is the obvious thing to type, and
+/// it printed `marked #3 read` and nothing else — while the acknowledgement dropped the message
+/// out of `amb inbox --unread`, the view the primer teaches. Two sessions independently ended up
+/// piping `--json` through Python to recover a message they had been told about and never seen.
+///
+/// Three claims, because each failed differently: the body is shown, the acknowledgement still
+/// happens, and the two are separated by a line ending. That last one is not decoration — the
+/// first version ran `> THE BODY` straight into `marked #1 read` on one line, which is the join
+/// defect M24 records and which no `contains` assertion on either side can see.
+#[test]
+fn read_shows_the_body_before_it_marks_the_message_read() {
+    let b = Board::new();
+    b.run(
+        "uuid-a",
+        &["send", "@", "--subject", "s", "--body", "THE BODY ITSELF"],
+    );
+
+    let out = b.run("uuid-b", &["read", "1"]);
+    assert!(
+        out.contains("THE BODY ITSELF"),
+        "the body must be shown: {out}"
+    );
+    assert!(
+        out.contains("marked #1 read"),
+        "and still acknowledged: {out}"
+    );
+    assert!(
+        out.contains("THE BODY ITSELF\n") || out.contains("THE BODY ITSELF\r\n"),
+        "the body and the acknowledgement must not share a line: {out:?}"
+    );
+    assert!(
+        out.contains(amb::delivery::UNTRUSTED),
+        "a sender's words are shown, so whose they are travels with them: {out}"
+    );
+
+    // Acknowledged for real: the second read has nothing left to mark.
+    let again = b.run("uuid-b", &["inbox", "--unread"]);
+    assert!(
+        !again.contains("THE BODY ITSELF"),
+        "still unread after read: {again}"
+    );
+}
