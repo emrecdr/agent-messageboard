@@ -4320,3 +4320,57 @@ the directory, or the "disk outranks status" correction never fires and the row 
 frontmatter's spelling under both versions. **Three fixtures in one test, each a case of the
 input never reaching the branch** — which is what makes hand-applying every mutant the standard
 rather than a formality. Each was found by the mutant surviving, not by reading.
+
+## M60 · The seam audit: three decisions that no test could reach, and one of them was a kill switch
+
+**2026-09-02.** The audit item outstanding since the round-at-569 report, done as reading rather
+than as a mutation run. **The question is not "is this function tested" but "can a test reach the
+decision at all"** — and the mechanical form is: grep `std::env::var` across the library, and for
+each one ask whether the value it turns into a decision is reachable without setting process
+environment, which a parallel test runner makes unsafe.
+
+Six shells hold a real decision. **Three passed and three did not.**
+
+### The one that matters: D49's kill switch accepted three spellings and one was tested
+
+`AMB_MEMORY_PROMOTION` disables the promotion pipeline. The README's environment table publishes
+**`0`, `off` and `false`**; `the_promotion_pipeline_has_a_kill_switch` drives the binary with
+`off`. Replacing the match with `Ok("off")` alone — deleting the other two published spellings —
+**left the entire suite green.**
+
+So a person who read the documentation, wrote `AMB_MEMORY_PROMOTION=0`, and expected promotion to
+stop would have got promotion. On the mechanism **D49 names as the response to approval degrading
+into a rubber stamp** — the thing you reach for precisely when the pipeline is misbehaving.
+
+This is D58's shape arriving from a new direction. D58 is about a mechanism that cannot reach the
+party positioned to use it; here the mechanism is documented, reachable, and *two thirds inert*,
+and the documentation is what makes the gap dangerous rather than harmless.
+
+### The other two
+
+- **`broadcast_horizon` had one caller and no test of any kind.** Its docstring argues a real
+  decision — an unparseable value falls back rather than failing, because D9 puts delivering mail
+  above honouring a typo in an environment variable — and D96 sets the default. Nothing asserted
+  either. `unwrap_or(BROADCAST_HORIZON)` relaxed to a zero duration puts the cutoff at *now*, so
+  **no broadcast is ever delivered**: a silence on the delivery path, which is this project's
+  signature failure, in the one number that decides how far back a broadcast reaches.
+- **`vault_path` holds D35 in its first two lines and neither was asserted.** "`AMB_VAULT` has no
+  default. Unset means memory is off" — and a variable set to *nothing* has to mean the same,
+  because `PathBuf::from("")` is the working directory. Delete the emptiness check and memory
+  switches **on**, pointed at whatever repository the session is sitting in, which is a D11
+  question as much as a D35 one.
+
+### What passed, and why that is the useful half
+
+`threshold` and `skip_tools` already carry their seams — `threshold_from` and `parse_skip_list`,
+both extracted in M55 for exactly this reason. `session_pid` has `pid_from_socket` beneath it and
+an `AMB_SESSION_PID` override that `identity_e2e.rs` drives. `db_path` is exercised by every e2e
+test in the suite.
+
+**The three that failed and the three that passed differ by one thing: whether somebody had
+already pulled the decision out of the shell.** Not by importance, not by age, not by how much
+the code is used — the kill switch is named in a decision record and the horizon is on the
+delivery path. So the audit's rule generalises past `env`: **a decision that can only be reached
+by arranging the process's own environment will not be tested, and the fix is extraction rather
+than a cleverer test.** Every guard added here is a truth table over an injected argument, and
+each was confirmed by mutating the decision and watching it redden.
