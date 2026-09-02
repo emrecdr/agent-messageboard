@@ -4054,6 +4054,17 @@ and only a count assertion at the caller's distance catches it.
 
 ## M55 · The tail in one pass: eight modules, 360 mutants, and the crate-wide inventory closes
 
+> **Correction, same day, by another session.** This pass covered every module the *record*
+> named, which is not every module in the crate. `cargo mutants --list` finds **79 mutants in
+> `src/memory/index.rs` and 61 in `src/main.rs`**, and neither file has ever appeared in a round —
+> this run's own `mutants.out/mutants.json` lists eight files and neither is among them.
+> `src/lib.rs` and the `memory.rs` facade are genuinely exempt: both generate zero mutants, being
+> re-exports. So the title's claim, and `CHANGELOG.md`'s, were two files short — one of them the
+> binary carrying D9's exit-0 guarantee, which is behaviourally guarded (sixteen tests in
+> `tests/hook_safety.rs` assert `code == 0`) but has never been systematically mutated. The gap is
+> recorded rather than quietly closed, because **a completeness claim is the one kind that stops
+> the next person looking.**
+
 **2026-09-02.** `tools/mutants.sh` over every module never exhaustively mutated —
 memory/{id,text,topics,config}, address, duration, version, error — 1,912 lines in one
 invocation: one cold build, one baseline, deliberately, because the machine hit ENOSPC three

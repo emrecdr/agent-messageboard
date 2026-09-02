@@ -11,13 +11,14 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
-- **The mutation inventory closes: every module in the crate has now been exhaustively
-  mutation-tested** (M55). The final eight ran as one pass — 360 mutants, 45 missed, all
-  guarded or named: calendar round-trips, FNV-1a pinned to published vectors, exact-boundary
-  rows for every render unit, id-grammar truth tables, two more env-shell seam extractions,
+- **The final eight library modules under exhaustive mutation** (M55) — one pass, 360 mutants,
+  45 missed, all guarded or named: calendar round-trips, FNV-1a pinned to published vectors,
+  exact-boundary rows for every render unit, id-grammar truth tables, two more env-shell seams,
   and the error cause-chain read for the first time. One equivalent mutant kept with its
   reasoning; one wrong equivalence claim of mine caught by applying the mutant instead of
-  believing the argument.
+  believing the argument. **The crate-wide inventory does not close yet** — `memory/index.rs`
+  (79 mutants) and `main.rs` (61) have never been in a round, while `lib.rs` and the `memory.rs`
+  facade are exempt because they generate none at all.
 
 - **`memory/export.rs` under exhaustive mutation: one missed of 26 viable, and it was the
   exporter's own receipt** (M54). `written += 1` could become `*=` and the person running

@@ -446,9 +446,22 @@ roster row, so forgetting `amb register` yields a less readable name, not a fail
   The checker fails the gate on any rejoin and was verified by rejoining one. It tripped on the
   comment that documents it, which is a fair demonstration.
 
-  History still holds the originals, so the first push needs GitHub's two allowlist URLs. Rewriting
-  it was rejected: `DECISIONS.md`, `MEASUREMENTS.md`, `CHANGELOG.md` and the vault cite commit SHAs
-  constantly, and `filter-repo` would silently invalidate every citation.
+  **This paragraph used to say the originals were still in history, and that rewriting had been
+  rejected because `DECISIONS.md`, `MEASUREMENTS.md`, `CHANGELOG.md` and the vault cite SHAs
+  constantly. The rewrite happened anyway.** On 2026-08-31 the history was reset to publish the
+  repository — `check_secret_literals.py`'s own docstring names getting past secret scanning as
+  the reset's purpose — and the predicted cost was paid in full: every pre-publish SHA is now a
+  dangling label, which is why `DECISIONS.md`, `OPEN-QUESTIONS.md` and the README's conventions
+  each open by saying so. What is true now is simpler. **No commit in the published history holds
+  a contiguous credential shape**, checked with the gate's own pattern over every commit on every
+  ref, so there is no allowlist to click through and `concat!` is the only thing standing between
+  this repository and a blocked push.
+
+  **How the false sentence survived is the reusable part.** The three files that were given a
+  banner are ones a person opens on purpose. This one is loaded into every session automatically,
+  so nobody had to open it and nobody did — and a rejection recorded as settled reads as current
+  for as long as it stands. **When an event overturns a decision, the file likeliest to keep the
+  old version is the one that is always already open.**
 
 - **Documentation drifts from the code silently, and there is a script for the mechanical half.**
   `python3 tools/check_docs.py`. It checks what has one source of truth: every doc in `docs/` is
@@ -537,6 +550,16 @@ roster row, so forgetting `amb register` yields a less readable name, not a fail
   the writer alone clears the code. **A field's importance is set by its reader, so when you check
   a counter, go and read what reads it.** The guard belongs where the meaning is, which is usually
   not where the increment is.
+
+  **Three instances in one week make it a shape rather than an incident, and the shape has a
+  name: a counter whose writer works and whose only reader is a human report.** `Redacted.removed`
+  (M27), `capture.rs`'s failure marker (M51), and `export.rs`'s `written` (M54) — where
+  `written += 1` could become `*=`, zero forever, so `amb memory export` tells a person nothing
+  was written while every file lands, on the one path that authors into a repository (D11). The
+  mechanical property is what makes it recur: **`find_unread_fields.py` structurally cannot see
+  these**, because the field *is* read — by the print. Nothing is dead and nothing is unwired, so
+  the only thing that catches it is an assertion at the caller's distance that the count itself is
+  right. When a number reaches a person, test the number and not just the sentence around it.
 
 - **This project's failures are silences, not errors.** Three real bugs here were a message
   accepted and never delivered, a `strip_prefix` returning `None` on macOS so no edit was ever
