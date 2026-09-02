@@ -651,3 +651,44 @@ fn read_shows_the_body_before_it_marks_the_message_read() {
         "still unread after read: {again}"
     );
 }
+
+/// **`reply` takes `--body-file` because `send` does, and the asymmetry was found by hitting it**
+/// (U10). A reply is the longer message of the two — it quotes, it explains, it carries the
+/// decision — so the command most likely to need the escape hatch was the one without it.
+///
+/// Both halves: the file's content arrives intact, and `-` reads stdin, which is the form that
+/// needs no temporary file at all.
+#[test]
+fn reply_takes_a_body_from_a_file_and_from_stdin() {
+    let b = Board::new();
+    b.run(
+        "uuid-a",
+        &["send", "@", "--subject", "q", "--body", "a question"],
+    );
+
+    let path = b.cwd.join("answer.txt");
+    let long = "first line\n\nsecond paragraph with \"quotes\" and $dollars";
+    std::fs::write(&path, long).expect("write");
+    b.run(
+        "uuid-b",
+        &["reply", "1", "--body-file", path.to_str().expect("utf8")],
+    );
+
+    let inbox = b.run("uuid-a", &["inbox"]);
+    assert!(
+        inbox.contains("second paragraph with \"quotes\""),
+        "the file's content must arrive unmangled: {inbox}"
+    );
+
+    let (code, _) = with_stdin(
+        &b,
+        "uuid-b",
+        &["reply", "1", "--body-file", "-"],
+        "from stdin",
+    );
+    assert_eq!(code, 0, "`-` reads stdin, so no temporary file is needed");
+    assert!(
+        b.run("uuid-a", &["inbox"]).contains("from stdin"),
+        "and that body arrives too"
+    );
+}

@@ -85,8 +85,20 @@ enum Command {
         /// The message being answered, from `inbox` or the banner.
         id: i64,
         /// The answer. Goes to that message's sender, on its thread.
-        #[arg(long)]
-        body: String,
+        ///
+        /// Use `--body-file` for anything multi-line, exactly as `send` does.
+        #[arg(long, required_unless_present = "body_file")]
+        body: Option<String>,
+        /// Read the answer from a file, or from stdin with `-`.
+        ///
+        /// **`send` had this and `reply` did not, which is backwards** (U10). A reply is the
+        /// longer message of the two — it quotes, it explains, it carries a decision — and it is
+        /// the one an agent writes most often. The asymmetry was found by hitting it: a session
+        /// composing a long answer to a field report about `--body-file` was refused by the very
+        /// command it was answering with. `read_body` was already shared; only the flag was
+        /// missing.
+        #[arg(long, conflicts_with = "body")]
+        body_file: Option<String>,
     },
     /// Record a display name for this session. Optional — every command registers (D12).
     Register {
@@ -628,8 +640,13 @@ fn run(cli: Cli) -> Result<(), Error> {
             }
         }
 
-        Command::Reply { id, ref body } => {
-            let new_id = messages::reply(&mut conn, &me, id, body)?;
+        Command::Reply {
+            id,
+            ref body,
+            ref body_file,
+        } => {
+            let body = read_body(body.as_deref(), body_file.as_deref())?;
+            let new_id = messages::reply(&mut conn, &me, id, &body)?;
             if cli.json {
                 print_json(&serde_json::json!({ "sent": new_id, "in_reply_to": id }));
             } else {

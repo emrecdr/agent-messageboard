@@ -11,6 +11,12 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`amb reply` takes `--body-file`, which only `send` had** (U10). A reply is the longer message
+  of the two — it quotes, it explains, it carries the decision — so the command most likely to
+  need the escape hatch was the one without it. Found by being refused while composing a long
+  answer to a field report *about* `--body-file`. `read_body` was already shared; only the flag
+  was missing. The primer's reply line says so now.
+
 - **`vendors.rs` re-mutated after tripling in size, and three survivors were found in a day-old
   module** (M62). The coverage checker answers "has this module ever had a round", not "was it
   mutated in its current form" — a blind spot now named in its own docstring. The survivors:
