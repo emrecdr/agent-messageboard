@@ -773,7 +773,9 @@ $ amb doctor
 BAD   binary          the PostToolUse hook runs /Users/you/.local/bin/amb
          which reports  0.1.0 (f9f79f9 2026-08-31, schema 12, sqlite 3.53.2)
          but this build is  0.2.0 (16d672b 2026-09-01, schema 13, sqlite 3.53.2)
-         Manual commands work and every hook is stale. Copy it: cp "$(command -v amb)" /Users/you/.local/bin/amb
+         Manual commands work and every hook is stale. Run tools/install.sh
+         from the amb checkout — or by hand: rm /Users/you/.local/bin/amb && cp "$(command -v amb)" /Users/you/.local/bin/amb
+         (rm first: an in-place cp onto a cached signature leaves macOS killing the copy)
 ok    hook dupes      no amb hook is registered in more than one settings scope
 ok    hooks           memory hooks installed on SessionStart, PreToolUse, PostToolUseFailure
 ok    sqlite          bundled sqlite 3.53.2, past the 3.51.3 WAL-reset fix

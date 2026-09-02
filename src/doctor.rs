@@ -160,12 +160,14 @@ pub fn build_check(running: &str, hooks: &[HookBinary]) -> Check {
             Health::Bad,
             format!(
                 "the {} hook runs {}\n         which reports  {}\n         but this build is  \
-                 {}\n         Manual commands work and every hook is stale. Copy it: cp \"$(command \
-                 -v amb)\" {}",
+                 {}\n         Manual commands work and every hook is stale. Run tools/install.sh \
+                 from the amb checkout — or by hand: rm {} && cp \"$(command -v amb)\" {}\n         \
+                 (rm first: an in-place cp onto a cached signature leaves macOS killing the copy)",
                 h.event,
                 h.exe,
                 h.banner.as_deref().unwrap_or("?"),
                 running,
+                h.exe,
                 h.exe
             ),
         ),
