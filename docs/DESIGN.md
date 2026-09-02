@@ -77,9 +77,9 @@ CREATE TABLE messages (
   ts         REAL    NOT NULL,
   from_agent TEXT    NOT NULL,
   from_proj  TEXT    NOT NULL,
-  to_agent   TEXT,                  -- NULL = broadcast to every agent in to_proj
-  to_proj    TEXT    NOT NULL,
-  kind       TEXT    NOT NULL,      -- note | question | claim_notice | proposal | ...
+  to_agent   TEXT,                  -- NULL = not addressed to one agent
+  to_proj    TEXT,                  -- NULL = every project (NULL/NULL is the global `@@`)
+  kind       TEXT    NOT NULL,      -- a lowercase tag: note | question | proposal | ... (D107)
   subject    TEXT    NOT NULL,
   body       TEXT    NOT NULL,
   thread_id  TEXT
@@ -195,8 +195,11 @@ Hooks trigger the read; the agent never has to remember (D9). Installed once per
 | `turn` | `Stop` | new mail at each turn boundary |
 | `monitor` | `SessionStart` → `amb watch` under the agent's Monitor tool | blocking read, seconds |
 | *(all but `session`)* | `PostToolUse` | **mid-turn, per tool call** (D25) |
+| *(all but `session`)* | `SessionEnd` | lapses the departing session's claims (D109) |
 
-`turn` and `monitor` also install a `PostToolUse` hook. It does two jobs: it records the exact
+`turn` and `monitor` also install `PostToolUse` and `SessionEnd` hooks — the second lapses the
+departing session's live claims instead of running out their TTL, best-effort, with the TTL kept
+as the crash backstop (D109). `PostToolUse` does two jobs: it records the exact
 file of every `Edit`/`Write`, which is what makes claims **observed** rather than declared (D14),
 and — since its `additionalContext` *is* injected into the model's context, verified 2026-08-27 —
 it delivers mid-turn (D25). Both halves are restricted to new facts so the hook does not repeat
@@ -237,8 +240,10 @@ amb register [--name N]                  # optional; every command auto-register
 amb claim   <path> [--intent "..."] [--ttl 4h]   # never blocks; reports conflicts
 amb release <path>                       # only ever your own claim
 amb claims  [--project P] [--live] [--raw]       # lapsed rows shown unless --live
-amb install [--mode session|turn|monitor] [--dry-run]   # hook management
-amb uninstall [--dry-run]
+amb install [--mode session|turn|monitor] [--memory] [--dry-run]   # the flag set is the
+amb uninstall [--dry-run]                                           # complete desired state
+amb doctor                               # what is silently wrong; always exits 0, read --json worst
+amb snapshot <path> [--all]              # markdown snapshot; refuses paths inside a repo (D11)
 amb hook    <mode>                       # internal; invoked by the installed hooks
 ```
 

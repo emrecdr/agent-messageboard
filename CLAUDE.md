@@ -116,7 +116,8 @@ strongest exactly where the shell meets a schema someone else owns. Typed errors
 prints.
 
 Exit codes are a contract a hook reads without parsing stderr: `64` usage, `65` no such
-agent/message/claim, `69` board unavailable, `78` misconfigured.
+agent/message/claim/note, `69` board unavailable (locked or corrupt), `70` internal bug, `73`
+file or directory could not be created, `78` misconfigured. `amb doctor` alone always exits 0.
 
 **That contract only became true on 2026-08-31, and how it was false is worth keeping** (D97).
 It covered the errors the *library* raises; `Cli::parse` terminated the process before `run` was
