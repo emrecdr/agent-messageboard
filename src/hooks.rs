@@ -563,6 +563,89 @@ pub fn tool_and_file(input: &Value) -> (&str, Option<&str>) {
     (tool, file)
 }
 
+/// Why a tool call failed, as the payload chose to say it.
+///
+/// **A schema fallback chain, and D78's own explanation of why it was in `main.rs`**: the binary
+/// is where the `Value` already is, so a function that needs one arrives there. Its siblings
+/// [`tool_and_file`] and `memory::failure_note` were extracted; this was the one left standing,
+/// which is the pattern this project keeps rediscovering under a different name each time.
+///
+/// Two keys because two vendors spell it differently and neither is guaranteed: `error` is the
+/// direct form, `tool_response` the one that carries the tool's own output. A payload with
+/// neither still produces a note — an untitled failure is a worse record than a vague one, and
+/// silence here is the thing D52's counter exists to make impossible.
+pub fn failure_detail(input: &Value) -> &str {
+    input
+        .get("error")
+        .and_then(Value::as_str)
+        .or_else(|| input.get("tool_response").and_then(Value::as_str))
+        .unwrap_or("no detail in the payload")
+}
+
+/// Which memory lane a hook event belongs to, for the vendor that sent it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryLane {
+    /// A failed tool call, recorded as a `capture` and never injected (D86).
+    Capture,
+    /// Before a file tool call — the path-anchored lane (D42).
+    File,
+    /// Session start — the recency lane.
+    Session,
+}
+
+/// Route a hook event to its memory lane.
+///
+/// **A vendor's event vocabulary decides this, and a constant here would be a silent no-op on
+/// every other vendor** — the defect D111 phase 2 shipped and M64 found, in a neighbouring
+/// function. `tool_failed` is `Option` because Gemini CLI hosts two lanes rather than three:
+/// nothing in it fires only on a failed tool call. So a vendor that cannot report failure must
+/// never route to [`MemoryLane::Capture`], and `None == Some(event)` is false for every event,
+/// which is what makes that fall through correctly rather than by accident.
+///
+/// Session is the fallback rather than a fourth arm: the memory hook is installed on exactly
+/// three events, and an unexpected one injecting by recency is the harmless answer where
+/// injecting nothing would be a lane that silently stopped firing.
+pub fn memory_lane(v: &crate::vendors::Vendor, event: &str) -> MemoryLane {
+    if v.events.tool_failed == Some(event) {
+        MemoryLane::Capture
+    } else if event == v.events.tool_pre {
+        MemoryLane::File
+    } else {
+        MemoryLane::Session
+    }
+}
+
+/// What the delivery hook does with an event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliverAction {
+    /// A file was just written: record the claim and report conflicts in the same breath (D14).
+    RecordEdit,
+    /// The session is over: lapse its claims now rather than waiting out the TTL (D109).
+    LapseClaims,
+    /// Offer whatever mail is waiting. `start` distinguishes the session banner from a turn
+    /// boundary — the banner is longer and only earns its context once.
+    Offer { start: bool },
+}
+
+/// Route a hook event to what the delivery hook should do with it.
+///
+/// Extracted for the same reason as [`memory_lane`]: it is a decision about somebody else's
+/// vocabulary, it lived in `main.rs` where no test could reach it, and its failure mode is a lane
+/// that does nothing on a vendor nobody checked. Exhaustively testable across every shipped
+/// descriptor now, which is what turns "we remembered to use the vendor's spelling" into
+/// something the suite asserts.
+pub fn deliver_action(v: &crate::vendors::Vendor, event: &str) -> DeliverAction {
+    if event == v.events.tool_post {
+        DeliverAction::RecordEdit
+    } else if event == v.events.session_end {
+        DeliverAction::LapseClaims
+    } else {
+        DeliverAction::Offer {
+            start: event == v.events.session_start,
+        }
+    }
+}
+
 /// True when this Stop firing is the wake the hook's own previous output caused.
 ///
 /// The runner counts a Stop hook that injects `additionalContext` as blocking the turn from
@@ -1073,6 +1156,117 @@ mod tests {
     //! descriptor rather than this one; if these shims ever disagree with those, the seam is
     //! what broke.
     use crate::vendors::CLAUDE_CODE;
+
+    use crate::vendors::{GEMINI_CLI, VENDORS};
+
+    /// **Every shipped vendor routes its own three events to three distinct lanes.** Enumerated
+    /// rather than spot-checked: a vendor added to `VENDORS` whose spellings collide, or whose
+    /// `tool_pre` was copied from another descriptor, fails here rather than becoming a lane that
+    /// silently never fires. That is the defect class D111 phase 2 shipped and M64 found.
+    #[test]
+    fn every_vendors_events_reach_the_lane_they_name() {
+        for v in VENDORS {
+            assert_eq!(
+                super::memory_lane(v, v.events.tool_pre),
+                super::MemoryLane::File,
+                "{}: tool_pre must be the path lane",
+                v.label
+            );
+            assert_eq!(
+                super::memory_lane(v, v.events.session_start),
+                super::MemoryLane::Session,
+                "{}: session_start must be the recency lane",
+                v.label
+            );
+            assert_eq!(
+                super::deliver_action(v, v.events.tool_post),
+                super::DeliverAction::RecordEdit,
+                "{}: tool_post must record the edit",
+                v.label
+            );
+            assert_eq!(
+                super::deliver_action(v, v.events.session_end),
+                super::DeliverAction::LapseClaims,
+                "{}: session_end must lapse claims (D109)",
+                v.label
+            );
+            assert_eq!(
+                super::deliver_action(v, v.events.session_start),
+                super::DeliverAction::Offer { start: true },
+                "{}: session_start is the banner",
+                v.label
+            );
+            assert_eq!(
+                super::deliver_action(v, v.events.turn_end),
+                super::DeliverAction::Offer { start: false },
+                "{}: a turn boundary offers without the banner",
+                v.label
+            );
+        }
+    }
+
+    /// **A vendor with no failure event must never reach the capture lane, and `Option` is what
+    /// makes that true rather than a comment.** Gemini CLI hosts two memory lanes rather than
+    /// three: nothing in it fires only on a failed tool call. `None == Some(event)` is false for
+    /// every event, so its `AfterTool` falls through to the recency lane instead of writing
+    /// captures nobody asked for — asserted here because the alternative reads identically.
+    #[test]
+    fn a_vendor_that_cannot_report_failure_never_captures() {
+        assert_eq!(
+            super::memory_lane(&CLAUDE_CODE, "PostToolUseFailure"),
+            super::MemoryLane::Capture,
+            "Claude Code does report failure, and that is the lane"
+        );
+        for event in [
+            "AfterTool",
+            "BeforeTool",
+            "SessionStart",
+            "PostToolUseFailure",
+        ] {
+            assert_ne!(
+                super::memory_lane(&GEMINI_CLI, event),
+                super::MemoryLane::Capture,
+                "Gemini has no failure event, so {event} must not capture"
+            );
+        }
+    }
+
+    /// One vendor's vocabulary must not steer another's hook — the same rule `tool_matcher`
+    /// carries, applied to routing. Gemini's `AfterTool` reaching Claude's `RecordEdit` would be
+    /// a claim recorded on an event Claude never sends.
+    #[test]
+    fn one_vendors_spelling_does_not_route_anothers_hook() {
+        assert_eq!(
+            super::deliver_action(&CLAUDE_CODE, "AfterTool"),
+            super::DeliverAction::Offer { start: false },
+            "Gemini's tool_post is not Claude's"
+        );
+        assert_eq!(
+            super::deliver_action(&GEMINI_CLI, "PostToolUse"),
+            super::DeliverAction::Offer { start: false },
+            "and Claude's is not Gemini's"
+        );
+    }
+
+    /// The payload chain, including the arm that exists so a failure is never untitled.
+    #[test]
+    fn a_failure_detail_prefers_error_then_the_tool_response_then_says_neither_was_there() {
+        let j = serde_json::json!({"error": "boom", "tool_response": "ignored"});
+        assert_eq!(super::failure_detail(&j), "boom", "error wins");
+        let j = serde_json::json!({"tool_response": "fallback"});
+        assert_eq!(super::failure_detail(&j), "fallback");
+        let j = serde_json::json!({"error": 7, "tool_response": "fallback"});
+        assert_eq!(
+            super::failure_detail(&j),
+            "fallback",
+            "a wrongly-typed error falls through rather than stringifying a number"
+        );
+        assert_eq!(
+            super::failure_detail(&serde_json::json!({})),
+            "no detail in the payload",
+            "an empty payload still yields a note (D52)"
+        );
+    }
 
     fn plan_install(existing: &Value, exe: &str, mode: Mode, memory: bool) -> Plan {
         super::plan_install(existing, exe, mode, memory, &CLAUDE_CODE)

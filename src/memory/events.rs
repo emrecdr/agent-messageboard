@@ -212,6 +212,28 @@ pub const LANE_TEXT: &str = "text";
 pub const LANE_PATH: &str = "path";
 pub const LANE_ACROSS: &str = "across";
 
+/// Which lane a `recall` invocation is recorded under.
+///
+/// **Extracted from `main.rs`, and it is the sharpest instance of D78 in the file.** The binary is
+/// where `Cli`'s parsed flags already are, so a three-way `match (file, across_repos)` grew there
+/// naturally and stayed untested — `main.rs` has no tests at all. What made it worth moving is not
+/// its size but what it feeds: this value chooses the denominator D89's receipt divides, and Q10's
+/// verdict on cross-project memory is read off those numbers. A silently wrong lane here does not
+/// break recall; it misfiles the evidence, which this project has already been wrong about three
+/// times on this exact question.
+///
+/// `--across-repos` without `--file` is `TEXT` rather than `ACROSS`, and that is the behaviour
+/// rather than an oversight: the flag only re-sorts a path lookup, so counting a plain text search
+/// as cross-repo would inflate the differentiator's numerator with searches that never used it
+/// (D91's finding, from the other side).
+pub fn search_lane(has_file: bool, across_repos: bool) -> &'static str {
+    match (has_file, across_repos) {
+        (true, true) => LANE_ACROSS,
+        (true, false) => LANE_PATH,
+        (false, _) => LANE_TEXT,
+    }
+}
+
 /// Record that recall ran, and whether it answered.
 ///
 /// **One row per search, never per note.** A search that matched nothing has no note to key on,
@@ -701,6 +723,25 @@ impl WindowChange {
 
 #[cfg(test)]
 mod tests {
+
+    /// The lane a search is filed under decides which denominator D89's receipt divides, and Q10
+    /// is read off those numbers — so this is a truth table, not a spot check. The `(false, true)`
+    /// row is the one worth having: `--across-repos` without `--file` only re-sorts a path lookup,
+    /// so counting it as cross-repo would inflate the differentiator with searches that never used
+    /// it. Delete that row's distinction and the flag D91 was written about starts lying again.
+    #[test]
+    fn the_lane_a_search_is_recorded_under_follows_the_flags_that_actually_change_it() {
+        use super::{LANE_ACROSS, LANE_PATH, LANE_TEXT, search_lane};
+        assert_eq!(search_lane(true, true), LANE_ACROSS);
+        assert_eq!(search_lane(true, false), LANE_PATH);
+        assert_eq!(
+            search_lane(false, true),
+            LANE_TEXT,
+            "--across-repos without --file re-sorts nothing, so it is not a cross-repo search"
+        );
+        assert_eq!(search_lane(false, false), LANE_TEXT);
+    }
+
     use super::*;
 
     /// All three window outcomes stay distinct in JSON — D87's rule surviving the format.

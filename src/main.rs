@@ -1057,22 +1057,18 @@ fn hook_memory(input: &serde_json::Value) -> Result<(), Error> {
     // Compared against the host vendor's spelling rather than Claude's: a Gemini session
     // sends `AfterTool`, and a literal here would make every lane a silent no-op there.
     let vendor = amb::vendors::detect();
-    if vendor.events.tool_failed == Some(event) {
-        return capture_failure(&conn, &me, input, at);
-    }
-
     // The source travels with the injection, because it decides which ledger the notes land in
     // and therefore which number the receipt divides. See `memory::Source`.
-    let (injection, source) = if event == vendor.events.tool_pre {
-        (
+    let (injection, source) = match hooks::memory_lane(vendor, event) {
+        hooks::MemoryLane::Capture => return capture_failure(&conn, &me, input, at),
+        hooks::MemoryLane::File => (
             memory_for_file(&conn, &me, input, at)?,
             memory::Source::File,
-        )
-    } else {
-        (
+        ),
+        hooks::MemoryLane::Session => (
             Some(memory_for_session(&conn, &me, &vault, at)?),
             memory::Source::Session,
-        )
+        ),
     };
 
     let Some(injection) = injection else {
@@ -1110,11 +1106,7 @@ fn capture_failure(
         return Ok(());
     }
     let file = file.and_then(|f| claims::relative_to(&me.root, f));
-    let detail = input
-        .get("error")
-        .and_then(|v| v.as_str())
-        .or_else(|| input.get("tool_response").and_then(|v| v.as_str()))
-        .unwrap_or("no detail in the payload");
+    let detail = hooks::failure_detail(input);
     // Title and cap are `memory::failure_note`'s decision, not this function's.
     let (title, detail) = memory::failure_note(tool, detail);
 
@@ -1230,24 +1222,25 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
     // An edit that already happened: record the claim, and — since PostToolUse output *is*
     // injected into the model's context — say so now rather than at the next turn boundary.
     let vendor = amb::vendors::detect();
-    if event == vendor.events.tool_post {
-        return post_tool_use(&mut conn, &me, input, event, vendor);
-    }
-
     // A session that ends lapses its claims now instead of running out their TTL (D109).
-    // Nothing is printed: the session is over, so there is no context to inject into, and
-    // the platform reads nothing from a SessionEnd hook. Best effort — a crash never fires
-    // this, and the TTL remains the backstop.
-    if event == vendor.events.session_end {
-        claims::end_session(&conn, &me)?;
-        return Ok(());
-    }
+    // Nothing is printed for it: the session is over, so there is no context to inject into, and
+    // the platform reads nothing from a SessionEnd hook. Best effort — a crash never fires this,
+    // and the TTL remains the backstop.
+    let is_start = match hooks::deliver_action(vendor, event) {
+        hooks::DeliverAction::RecordEdit => {
+            return post_tool_use(&mut conn, &me, input, event, vendor);
+        }
+        hooks::DeliverAction::LapseClaims => {
+            claims::end_session(&conn, &me)?;
+            return Ok(());
+        }
+        hooks::DeliverAction::Offer { start } => start,
+    };
 
     // deliverable(), not inbox(): automatic injection spends context the agent did not ask to
     // spend, so it backs off after MAX_OFFERS. An explicit `amb inbox` still shows everything.
     let unread = messages::deliverable(&conn, &me)?;
     let conflicts = claims::my_conflicts(&conn, &me)?;
-    let is_start = event == vendor.events.session_start;
     let Some(mut rendered) = delivery::render_all(&unread, &conflicts, db::now()?, is_start) else {
         return Ok(());
     };
@@ -1448,11 +1441,7 @@ fn run_memory(
             all_projects,
             limit,
         } => {
-            let lane = match (file, across_repos) {
-                (Some(_), true) => memory::LANE_ACROSS,
-                (Some(_), false) => memory::LANE_PATH,
-                (None, _) => memory::LANE_TEXT,
-            };
+            let lane = memory::search_lane(file.is_some(), *across_repos);
             let notes = match file {
                 // A path lookup deliberately ignores --project: "who touched this file, in any
                 // repo on this machine" is the one question no per-repo tool can answer.
