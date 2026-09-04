@@ -732,6 +732,24 @@ Gemini session with no id to go and be a different CLI.
   and said so in no way at all.** `cargo clean -p amb` fixed it and removed 17.3 GiB — the volume
   under one package name is the collision, measured.
 
+  **That 17.3 GiB is a post-mutation-run number and had been standing here without its
+  condition, which made it read as general advice.** It is not. Two measurements, both real:
+  after the crate-wide campaign of 2026-08-29 the volume under package `amb` was 17.3 GiB,
+  because every mutant it compiled landed there; on an ordinary day `cargo clean -p amb`
+  *reports* 1.4 GiB and moves `debug/deps` — 96% of the directory — by **235 MB, under 1%**
+  (measured independently by two sessions, 2026-09-04). The scale is real and checkable: 226
+  mutants across three runs on 2026-09-04 left **1.6 GiB** in a private target directory, so a
+  campaign an order of magnitude larger reaching 17.3 GiB is exactly right.
+
+  The reachable misreading is the point. A session at 0 bytes free reads the number above, runs
+  the command, sees `Removed … 1.4GiB total`, and believes the outage is addressed — the command
+  prints a large number while the number that matters barely moves, because what fills
+  `debug/deps` belongs to *dependencies* and no `-p` scope owns them. **Treat `-p` as first aid
+  that may buy back the ability to run commands at all, not as a fix**, and note that this
+  paragraph exists because the disk advice derived from the sentence above was broadcast, acted
+  on, and then retracted along with its evidence: the free space that appeared to follow the
+  clean was macOS reclaiming purgeable space over the same interval, never isolated.
+
   So: run it as `CARGO_TARGET_DIR=<somewhere private> cargo mutants … --jobs 1`, run nothing else
   meanwhile, and treat any mutation result produced while another `cargo` was running as void
   rather than as evidence. It also needs `--copy-vcs true`, or `build.rs` cannot fingerprint the
