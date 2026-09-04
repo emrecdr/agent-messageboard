@@ -675,3 +675,54 @@ fn a_session_whose_vendor_exports_no_variable_is_still_reached_through_its_paylo
         "and says nothing rather than inventing an agent: {out:?}"
     );
 }
+
+/// **An identity without a vendor is worse than no session at all** (D114).
+///
+/// D113 let a payload-only CLI be identified, and it then registered and appeared *alive* on the
+/// board — while `vendors::detect` still read `session_env` alone, found nothing, and fell back to
+/// Claude Code. Every arm downstream compares against that vendor's spellings, so a session
+/// sending `AfterTool` matched no arm: no claim recorded, no `SessionEnd` lapse (D109), and
+/// Claude's `edit_tools` would have applied if it had been reached. A peer running `amb claims`
+/// saw a working session editing nothing. Absence is honest; a live session recording nothing is
+/// not.
+///
+/// The control is the point. Both arms are identical but for the event spelling, so a run where
+/// *neither* records proves nothing about the treatment — which is exactly what my first two
+/// attempts at this probe did, for unrelated reasons (no board existed, then relative paths).
+#[test]
+fn a_claim_is_recorded_under_the_vendors_own_event_spelling_not_only_claudes() {
+    let b = Board::new();
+    b.run("uuid-seed", &["register", "--name", "seed"]);
+    let file = b.cwd.join("edited.rs");
+    std::fs::write(&file, "// edited\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    let fire = |event: &str, tool: &str, session: &str| {
+        let mut cmd = b.cmd_unscoped("");
+        cmd.args(["hook", "turn"])
+            .env("AMB_PROJECT", "nest")
+            .env_remove("GEMINI_SESSION_ID");
+        let payload = format!(
+            r#"{{"hook_event_name":"{event}","session_id":"{session}","tool_name":"{tool}","tool_input":{{"file_path":"{path}"}}}}"#
+        );
+        let (code, _) = common::with_stdin(cmd, &payload);
+        assert_eq!(code, 0, "{event}: the hook always exits 0 (D9)");
+    };
+
+    // Control: Claude's vocabulary, which worked before this fix and must keep working.
+    fire("PostToolUse", "Edit", "sess-claude");
+    let claims = b.run("uuid-seed", &["claims", "--all"]);
+    assert!(
+        claims.contains("edited.rs"),
+        "the control must record, or this test compares two failures: {claims}"
+    );
+
+    // Treatment: Gemini's vocabulary from a session with no environment variable at all.
+    fire("AfterTool", "write_file", "sess-gemini");
+    let both = b.run("uuid-seed", &["claims", "--all"]);
+    let holders = both.lines().filter(|l| l.contains("edited.rs")).count();
+    assert_eq!(
+        holders, 2,
+        "both sessions edited the same file and both must hold a claim on it: {both}"
+    );
+}

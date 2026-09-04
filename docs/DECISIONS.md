@@ -5948,3 +5948,76 @@ answer means one session reading another's mail.
 **Leaving it to the manifest author.** A manifest cannot express "and also export this variable" —
 the vendor's own runtime decides what it exports, so no amount of configuration on this side
 reaches it.
+
+---
+
+## D114 · The hook event names the vendor when the environment cannot, and a shared spelling names nobody
+
+**Decided 2026-09-04**, hours after D113 and because of it. `vendors::detect_for_hook(event)`
+consults the payload's event name first when exactly one vendor uses that spelling, then the
+environment, then Claude Code.
+
+### D113 bought an identity and not a vendor, and that combination is worse than the silence
+
+D113 let a payload-only CLI be *identified*. `vendors::detect` still read `session_env` alone, so
+those sessions fell back to Claude Code — and every arm downstream compares against the detected
+vendor's spellings. A session sending `AfterTool` therefore matched no arm of `deliver_action`: no
+claim recorded, `session_end` never lapsing claims (D109), and Claude's `edit_tools` applying if
+`post_tool_use` had been reached.
+
+**The session meanwhile registers and appears alive.** Before D113 it was absent from the board;
+after D113 a peer running `amb claims` sees a working session that is editing nothing. An absent
+session is honest about what is known. A live one recording nothing is a false statement in the
+one surface D14 exists to make true, and D5 makes it load-bearing: claims are advisory precisely
+so people *act* on them.
+
+**Found by a peer session's probe, reproduced here with a control**, and the reproduction is worth
+recording because two attempts failed first — a board that did not exist (D9's create-nothing
+guarantee, working correctly) and then relative `file_path`s that `relative_to` rejects. Both
+produced "neither arm records", which proves nothing about the treatment. The third attempt:
+
+| hook | result |
+|---|---|
+| `PostToolUse` + `Edit` + payload id | claim recorded |
+| `AfterTool` + `write_file` + payload id | nothing, session alive on the board |
+
+### Unambiguous or nothing
+
+`SessionStart` and `SessionEnd` are spelled identically by Claude Code, Gemini CLI and most of the
+field. Only the distinctive spellings carry information — `AfterTool`, `BeforeTool`, `AfterAgent`
+against `PostToolUse`, `PreToolUse`, `Stop`. **A first-match rule would make a shared name mean
+"whichever descriptor is listed first"**, which reads as detection and is a guess; the mechanism
+returns `None` instead and lets the environment answer. A test enumerates `VENDORS` and fails if a
+vendor is ever added whose vocabulary is entirely shared, because such a vendor is undetectable by
+this route and would be served silently by the fallback.
+
+**The event outranks the environment, and only here.** An environment variable is a statement about
+the whole process tree; an event name is a statement about *this invocation*, which is more
+specific. The command path keeps `detect` unchanged — there is no event there to be specific about.
+
+### Rejected
+
+**A `--vendor` token on the hook command line.** D97 rules it out: a new argument on the hook path
+is one an older installed binary cannot parse, and `Cli::parse` failing exits 2, which Claude
+Code's runner reads as *blocking*. The stale-binary condition D94 records five times would turn
+into a blocked session.
+
+**Guessing on a shared spelling.** Above.
+
+**Making `session_env` optional in a manifest, in this decision.** It is the right question and it
+is a different one — see below.
+
+### What this does not fix
+
+**A manifest cannot say "my environment carries nothing."** `parse_manifest` *requires*
+`session_env` and refuses without it, so the author of a manifest for a payload-only CLI must name
+a variable that will never exist. The descriptor is then accepted and can never be matched by
+`detect`. After this decision that no longer breaks the hook lanes — the event carries it — but the
+schema still forces a false statement to be written down, and a field that must be filled with
+fiction is a field that will be filled with fiction badly.
+
+Raised by the same peer probe and recorded rather than fixed, because relaxing a required field is
+a manifest-format change and D111's ordering is that the format follows a real second vendor rather
+than anticipating one. **The condition:** the first manifest written for a CLI that exports no
+session variable. That is now a thing someone can actually do, which is what makes this a
+condition rather than a note (D112).

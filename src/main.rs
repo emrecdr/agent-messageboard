@@ -1060,7 +1060,9 @@ fn hook_memory(input: &serde_json::Value) -> Result<(), Error> {
     // "worth noting for later" the plan flagged, taken now because it is the cheap half.
     // Compared against the host vendor's spelling rather than Claude's: a Gemini session
     // sends `AfterTool`, and a literal here would make every lane a silent no-op there.
-    let vendor = amb::vendors::detect();
+    // Detected from the event when that is unambiguous, because a payload-only vendor exports
+    // nothing for `detect` to read and would otherwise be served Claude's vocabulary (D114).
+    let vendor = amb::vendors::detect_for_hook(event);
     // The source travels with the injection, because it decides which ledger the notes land in
     // and therefore which number the receipt divides. See `memory::Source`.
     let (injection, source) = match hooks::memory_lane(vendor, event) {
@@ -1227,7 +1229,9 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
 
     // An edit that already happened: record the claim, and — since PostToolUse output *is*
     // injected into the model's context — say so now rather than at the next turn boundary.
-    let vendor = amb::vendors::detect();
+    // `detect_for_hook`, not `detect`: on a vendor that exports no session variable the latter
+    // falls back to Claude Code, and every arm below then fails to match this event (D114).
+    let vendor = amb::vendors::detect_for_hook(event);
     // A session that ends lapses its claims now instead of running out their TTL (D109).
     // Nothing is printed for it: the session is over, so there is no context to inject into, and
     // the platform reads nothing from a SessionEnd hook. Best effort — a crash never fires this,

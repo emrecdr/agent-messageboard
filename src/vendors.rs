@@ -228,11 +228,70 @@ pub fn known_ids() -> String {
 ///
 /// Falls back to Claude Code, which is what a session with no vendor variable at all has always
 /// been treated as.
+/// Every event spelling this vendor answers to.
+///
+/// `tool_failed` is `Option`, so a vendor hosting two memory lanes contributes five names rather
+/// than six — see [`Events::tool_failed`].
+impl Events {
+    pub fn all(&self) -> Vec<&'static str> {
+        let mut v = vec![
+            self.session_start,
+            self.turn_end,
+            self.tool_post,
+            self.session_end,
+            self.tool_pre,
+        ];
+        v.extend(self.tool_failed);
+        v
+    }
+}
+
+/// The vendor whose vocabulary contains `event`, when exactly one does.
+///
+/// **`None` unless the answer is unambiguous, and that is most of the value.** `SessionStart` and
+/// `SessionEnd` are spelled identically by Claude Code, Gemini CLI and most of the field, so they
+/// identify nobody; only the distinctive spellings — `AfterTool`, `BeforeTool`, `AfterAgent`
+/// against `PostToolUse`, `PreToolUse`, `Stop` — carry information. Returning the first match
+/// would make a shared name mean "whichever descriptor happens to be listed first", which is a
+/// guess wearing a detection's clothes.
+pub fn vendor_for_event(event: &str) -> Option<&'static Vendor> {
+    let mut found: Option<&'static Vendor> = None;
+    for v in all() {
+        if v.events.all().contains(&event) {
+            if found.is_some() {
+                return None; // more than one vendor spells it this way: decides nothing
+            }
+            found = Some(v);
+        }
+    }
+    found
+}
+
 pub fn detect() -> &'static Vendor {
     detect_with(|k| std::env::var(k).ok())
 }
 
 /// [`detect`] with the environment injected, so precedence is testable (M51).
+/// The vendor for a hook invocation, which may know its event even when the environment is blank.
+///
+/// **D113 gave the payload-only CLIs an identity and not a vendor, and the result was worse than
+/// the silence it replaced.** `detect_with` reads `session_env` alone, so a session whose
+/// environment carries nothing falls back to Claude Code — and then `deliver_action(CLAUDE_CODE,
+/// "AfterTool")` matches no arm, so no claim is recorded, `session_end` never lapses (D109), and
+/// `post_tool_use` would apply Claude's `edit_tools` if it were reached. The session meanwhile
+/// registers and appears **alive** on the board, so a peer running `amb claims` sees a working
+/// session that is editing nothing. An absent session is honest; a live one recording nothing is
+/// not.
+///
+/// The event decides first *only when it decides unambiguously* (see [`vendor_for_event`]), then
+/// the environment, then Claude Code. Order matters and is the conservative one: the environment
+/// is a statement about the whole process tree while an event name is a statement about this one
+/// invocation, so the event is more specific — but a shared spelling is no statement at all, which
+/// is why it must yield rather than pick.
+pub fn detect_for_hook(event: &str) -> &'static Vendor {
+    vendor_for_event(event).unwrap_or_else(detect)
+}
+
 pub fn detect_with(lookup: impl Fn(&str) -> Option<String>) -> &'static Vendor {
     let hit = |vs: &[&'static Vendor]| vs.iter().copied().find(|v| v.session_id(&lookup).is_some());
     // **The shipped vendors first, so the common case never reaches the disk.** `all()` forces
@@ -478,6 +537,73 @@ fn loaded() -> &'static (Vec<&'static Vendor>, Vec<Problem>) {
 
 #[cfg(test)]
 mod tests {
+
+    /// **A spelling only one vendor uses identifies it; a shared one identifies nobody.** This is
+    /// the whole contract of `vendor_for_event`, and the failing direction is silent: returning
+    /// the first match for `SessionStart` would mean "whichever descriptor is listed first",
+    /// which reads as detection and is a guess.
+    #[test]
+    fn only_a_spelling_one_vendor_owns_identifies_that_vendor() {
+        assert_eq!(
+            super::vendor_for_event("AfterTool").map(|v| v.id),
+            Some("gemini-cli"),
+            "Gemini alone spells tool_post this way"
+        );
+        assert_eq!(
+            super::vendor_for_event("PostToolUse").map(|v| v.id),
+            Some("claude-code"),
+            "and Claude alone spells it that way"
+        );
+        assert_eq!(
+            super::vendor_for_event("SessionStart"),
+            None,
+            "shared by every shipped vendor, so it decides nothing"
+        );
+        assert_eq!(
+            super::vendor_for_event("SessionEnd"),
+            None,
+            "likewise — and a first-match rule would have answered claude-code here"
+        );
+        assert_eq!(super::vendor_for_event("NotAnEvent"), None);
+    }
+
+    /// Every shipped vendor must be reachable by at least one spelling it alone owns, or the
+    /// mechanism cannot serve it. Enumerated, so a vendor added with fully-shared vocabulary
+    /// fails here rather than becoming undetectable in production.
+    #[test]
+    fn every_shipped_vendor_owns_at_least_one_spelling_that_identifies_it() {
+        for v in super::VENDORS {
+            let mine: Vec<&str> = v
+                .events
+                .all()
+                .into_iter()
+                .filter(|e| super::vendor_for_event(e).map(|f| f.id) == Some(v.id))
+                .collect();
+            assert!(
+                !mine.is_empty(),
+                "{} shares every event spelling, so no payload can identify it",
+                v.label
+            );
+        }
+    }
+
+    /// The fallback chain, at the seam that matters: an unambiguous event beats the environment,
+    /// and an ambiguous one defers to it rather than guessing.
+    #[test]
+    fn an_unambiguous_event_outranks_the_environment_and_a_shared_one_defers_to_it() {
+        assert_eq!(
+            super::detect_for_hook("AfterTool").id,
+            "gemini-cli",
+            "the event is a statement about this invocation"
+        );
+        // `SessionStart` decides nothing, so this falls through to `detect`, which on a host with
+        // no vendor variable set answers Claude Code — the documented default.
+        assert_eq!(
+            super::detect_for_hook("SessionStart").id,
+            super::detect().id
+        );
+    }
+
     use super::*;
 
     /// **Detection is how a second vendor arrives, so its precedence is asserted rather than
