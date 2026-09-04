@@ -320,8 +320,14 @@ by probe, both directions), but that is a mitigation for a hazard the design nee
 
 **What survives:** nothing is written into any repository. `amb inbox --json` covers debugging.
 
-**What would change this.** A target agent tool with no hook mechanism at all. None of the five
-surveyed qualifies.
+**What would change this.** A target agent tool with no hook mechanism at all.
+
+> **Checked 2026-09-04, and the sentence that stood here was stale.** It read *"None of the five
+> surveyed qualifies"*; the survey is now fourteen tools and one of them, Aider, has no hook system
+> at all — Python scripting and lint/test commands only. **The decision is unaffected**, because
+> the condition asks about a *target* and nobody has asked for Aider, but the count was wrong and a
+> reader checking the claim would have found it false. Recorded rather than quietly corrected: a
+> number in a condition is part of the condition (D112).
 
 ---
 
@@ -855,6 +861,13 @@ claimed.
 **What would change this.** If the platform ever persists messages for absent sessions *and*
 grows a broadcast address, the messaging half of this project is finished and only claims remain.
 That would be worth noticing early rather than late.
+
+> **Checked 2026-09-04: not fired, and neither half is close.** Native cross-session messaging is
+> on by default and hardening weekly, and its documentation is explicit that delivery is to live
+> sessions over a per-session socket — no store-and-forward, no offline delivery, no broadcast, no
+> place addressing, no file claims, no durable log. The two halves of this condition are
+> independent and neither is met. Dated per D112; an undated version of this line would read as
+> current however old it was.
 
 **Not adopted, and why:** an MCP interface reintroduces the resident process D8's argument was
 built to avoid; a cross-machine relay is better served by `hcom`'s MQTT or by Remote Control; and
@@ -5764,3 +5777,86 @@ static binary, which is D3's premise rather than a convenience.
 **Shipping Gemini in this commit.** The extraction had to be provably behaviour-preserving first,
 and a second descriptor arriving in the same diff would have made "604 before, 604 after"
 unreadable as evidence.
+
+---
+
+## D112 · An external condition carries the date it was last checked, because one nobody has looked at reads as current
+
+**Decided 2026-09-04**, after a landscape pass that checked several of them at once and found one
+already stale.
+
+**D95 established that a stated condition which *cannot fire* is worse than no condition** — a
+reader sees a standard and assumes something is watching. This is its sibling, and it is the more
+common of the two: a condition that *can* fire, that nothing checks, and that therefore reads as
+current for as long as it stands. `DECISIONS.md` holds eight **"What would change this"** clauses,
+and several are claims about **someone else's product** — the platform's roadmap, a competitor's
+feature set, a protocol's capabilities. Not one of them carried a date.
+
+That matters more here than for an internal condition. An internal one is checkable against this
+repository, and `check_docs.py` catches a class of them mechanically. An external one is a
+photograph of a product taken at whatever moment somebody wrote the sentence, and the subject keeps
+moving. `tools/check_docs.py` says so in its own limits: it verifies that structure agrees with the
+code, and *a sentence about someone else's product has no source of truth in this repository* —
+which D27 already learned when its provider row went false and had to be amended rather than
+deleted.
+
+### The rule
+
+**An external condition carries the date it was last checked, and what was checked.** A landscape
+pass updates the dates. A condition with no date is not trusted: it is a claim frozen at an unknown
+moment, and the honest reading of an undated one is *nobody knows*.
+
+**Deliberately no automation, and that is the decision rather than a gap.** Naming a checker that
+does not exist would be D95's failure wearing this decision's clothes, and a scraper over four
+vendors' documentation is a thing that breaks silently and then reports success — the exact shape
+this project keeps finding in its own instruments. **The date is the instrument.** A reader seeing
+`checked 2026-09-04` knows precisely how much to trust the line; a reader seeing no date knows
+there is nothing behind it. That is a smaller claim than a monitor and it is one that cannot rot
+into a false positive.
+
+### What the 2026-09-04 pass found
+
+| Condition | Verdict |
+|---|---|
+| **D27** — platform persists for absent sessions *and* grows a broadcast address | **Not fired**, neither half. Native messaging is live-socket-only by documented design. |
+| **D101** condition 1 — a cross-vendor push mechanism `amb` could integrate once | **Further from firing than when written.** MCP's 2026-07-28 revision *removed* server-initiated requests and deprecated Sampling; `anthropics/claude-code#35072` and `#36665` are both still closed `NOT_PLANNED`. |
+| **D101** condition 2 — a second agent tool actually in use | **Fired**, and already recorded — that is what D111 is. |
+| **D11** — a target agent tool with no hook mechanism at all | **The sentence was stale.** "None of the five surveyed" was a count from a survey that is now fourteen; Aider has no hook system. Decision unaffected, wording corrected in place. |
+
+Three of four still hold. The fourth was wrong in its *number* rather than its judgement, which is
+the failure mode this rule exists for: nobody re-reads a clause that is not obviously about them.
+
+### Two conditions this pass adds
+
+**1. Agent Plugins 1.0 standardises hooks.** Launched 2026-08-06 with Amazon, Cursor, Microsoft,
+OpenAI and Vercel on its technical steering committee, it standardises skills and MCP packaging and
+**explicitly excludes hooks from v1** — *"commands, hooks, agents, rules, and LSP servers — remain
+too client-specific for a stable portable contract and are outside the v1 format until their
+formats converge"* — while keeping them on the roadmap. Goose already lays its hooks out in that
+draft's directory shape.
+
+This is an **opportunity** condition, not a threat, which is why it is worth stating: if a hooks
+standard lands, D111's per-vendor descriptors collapse toward a single manifest, the vendor table
+stops being a differentiator, and the work of adding a vendor stops being work at all. *Checked
+by:* the spec repository, for a hooks component type.
+
+**2. `agmsg` grows advisory file claims and automatic late-join.** The nearest architecture in the
+field — shared SQLite, no daemon, hook-based push, nine vendors, npm and plugin-marketplace
+distribution, and roughly 1,486 stars in the five months since 2026-04-02. Today it has neither
+claims nor automatic replay: its history exists but a late-joining session must ask for it.
+
+If both land, `amb`'s differentiation narrows from four properties to two — vendor-as-data and the
+memory layer — and D27's "durable, place-addressed board with advisory file claims" stops
+describing something only this project does. That is the condition under which the positioning
+paragraph needs rewriting rather than defending. *Checked by:* its repository.
+
+### Rejected
+
+**Adding dates to internal conditions too.** They have a source of truth in this repository and a
+gate that reads it; a date would be ceremony on the half that already works.
+
+**A scraper.** Above: it is the failure this decision is written to avoid.
+
+**Filing these as open questions instead.** `OPEN-QUESTIONS.md` holds what is *undecided*. These are
+decided — the answer is "not yet, and here is what would change it" — which is a decision with a
+trigger, not a question.

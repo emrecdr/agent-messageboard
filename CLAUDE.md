@@ -94,7 +94,7 @@ AMB_VAULT=/tmp/v cargo run -- memory observe --title t --learned l   # memory is
 
 ## `docs/DECISIONS.md` is the specification
 
-D1–D111 are **settled**, and each records *what was rejected and why*. Read it before proposing a
+D1–D112 are **settled**, and each records *what was rejected and why*. Read it before proposing a
 design change — the argument has probably already been had. `docs/OPEN-QUESTIONS.md` holds what is
 genuinely undecided; when one is settled, delete it there and record it as a new decision.
 
