@@ -140,9 +140,18 @@ COMMON=(--copy-vcs true --jobs 1 --timeout-multiplier 3 --minimum-test-timeout 1
 # classifier that overwrote it would be throwing away more than it adds. A classifier that cannot
 # answer says so on stderr and is impossible to miss beside the score it qualifies.
 run_and_classify() {
+  # **A marker, because `mutants.out/outcomes.json` outlives the run that wrote it.** On
+  # 2026-09-04 a `--diff` run aborted before testing a single mutant — the diff no longer matched
+  # the working tree — and the block below then classified the *previous* run's leftover report
+  # and printed `10 missed row(s): 3 real, 7 not compiled here` under it. Read from the tail, that
+  # is indistinguishable from a clean verification of the current code, and it was very nearly
+  # taken for one. The file's existence answers "has a run ever happened here", never "did THIS
+  # run produce a result", which is the question being asked of it (D89's shape, in a shell).
+  local marker
+  marker="$(mktemp -t amb-mutants-marker)"
   "$@"
   status=$?
-  if [ -f mutants.out/outcomes.json ]; then
+  if [ -f mutants.out/outcomes.json ] && [ mutants.out/outcomes.json -nt "$marker" ]; then
     echo
     # Root-relative rather than $0-relative: this script cd'd to the repo root at line 2, so a
     # `dirname $0` here resolves to "." whenever it is invoked from inside tools/ itself.
@@ -152,7 +161,12 @@ run_and_classify() {
     # is this project's own recurring defect pointed at its newest instrument (M35, M40).
     python3 tools/cfg_phantoms.py --self-test || true
     python3 tools/cfg_phantoms.py mutants.out || true
+  elif [ -f mutants.out/outcomes.json ]; then
+    echo
+    echo "not classifying: mutants.out/outcomes.json predates this run, so it describes a" >&2
+    echo "previous one. The run above produced no report — read its output, not a leftover." >&2
   fi
+  rm -f "$marker"
   exit $status
 }
 

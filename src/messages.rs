@@ -912,6 +912,22 @@ mod tests {
         );
         let hours = departed_note("bob", false, 3600.0 * 5.0).expect("still a warning");
         assert!(hours.contains("5 hour(s)"), "hours below two days: {hours}");
+
+        // **Both boundaries exactly, which no row above reaches.** Mutation found `<` -> `<=`
+        // surviving at each of them: the samples were 2 minutes, 5 hours and 50 hours, all
+        // comfortably inside a band, so the two instants that decide which band applies were
+        // never named. M17's shape — a fixture that tests the rule everywhere except where it
+        // is decided.
+        let one_hour = departed_note("bob", false, 3600.0).expect("still a warning");
+        assert!(
+            one_hour.contains("1 hour(s)"),
+            "exactly an hour is the first hour, not sixty minutes: {one_hour}"
+        );
+        let two_days = departed_note("bob", false, 3600.0 * 48.0).expect("still a warning");
+        assert!(
+            two_days.contains("2 day(s)"),
+            "exactly forty-eight hours is two days, not forty-eight hours: {two_days}"
+        );
     }
 
     use super::*;

@@ -718,9 +718,16 @@ fn doctor_reports_whether_the_delivery_lane_has_actually_fired() {
         .find(|l| l.contains("deliver "))
         .unwrap_or_else(|| panic!("no `deliver` row at all: {never}"));
     assert!(
-        never_row.contains("no event has ever been recorded")
-            || never_row.contains("not installed"),
-        "an unfired lane must say which, not go quiet: {never_row}"
+        never_row.contains("not installed"),
+        "with no hooks installed the row must say so: {never_row}"
+    );
+    // **Exactly one of the two messages, not either.** The `||` that stood here accepted both, so
+    // it also accepted `delivery_installed = entries.is_empty()` — the inverted flag — which
+    // mutation found surviving. This board installs no hooks, so "not installed" is the only
+    // correct answer, and excluding the other wording is what makes the flag's polarity testable.
+    assert!(
+        !never_row.contains("no event has ever been recorded"),
+        "that wording belongs to an INSTALLED lane that has not fired: {never_row}"
     );
 
     // Now actually deliver something — through the *hook*, which is the only thing that stamps

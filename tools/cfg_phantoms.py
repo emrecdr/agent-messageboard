@@ -150,6 +150,30 @@ def inactive_spans(path: Path, keys: dict, bare: set):
     return spans, unknowns
 
 
+def mutant_line(mut: dict) -> int:
+    """The line whose compiled-or-not status decides this mutant.
+
+    **The mutant's own span, never the enclosing function's, and getting this wrong made this
+    script report the exact failure it exists to prevent.** cargo-mutants reports a function span
+    that *starts at the doc comment*, which sits **above** the `#[cfg]` attribute — so for a
+    documented `#[cfg(not(unix))] fn`, the function span begins outside the inactive block while
+    every mutant inside it begins within. Looking up the function line therefore answered "this
+    code is compiled here" for code the host never compiled.
+
+    Observed 2026-09-04: seven mutants of `identity::is_alive`'s non-unix arm were reported as
+    **real survivors on macOS**, and the summary line read `0 not compiled here` — a classifier
+    confidently asserting the opposite of the truth, which is worse than the raw MISSED rows it
+    was written to explain. The mutant span is always inside the item the `cfg` governs, because
+    that is where the mutated code is.
+
+    The self-test did not catch it: its fixtures put the attribute directly above `fn` with no
+    doc comment, so function span and mutant span coincided. A fixture that cannot reach the
+    failing shape is this project's most-repeated defect, committed here inside the very check
+    written to stop guessing.
+    """
+    return mut["span"]["start"]["line"]
+
+
 def block_end(lines, start: int) -> int:
     """1-based last line of the item beginning at or after `start`, by brace matching."""
     depth, started = 0, False
@@ -213,6 +237,39 @@ def self_test() -> int:
                 failures.append(f"  line {ln} {attr or '(no cfg)'}: want {expect}, got {got}")
         if len(unknowns) != 1:
             failures.append(f"  expected exactly 1 unmodelled predicate, got {len(unknowns)}")
+    # **The shape that defeated this script, reproduced.** Above, every fixture puts the attribute
+    # directly on top of `fn`, so the function span and the mutant span coincide and the lookup
+    # rule cannot be wrong. Real code documents its functions, and cargo-mutants reports a function
+    # span starting at the doc comment — *above* the attribute, therefore outside the inactive
+    # block. Seven mutants of a `#[cfg(not(unix))]` function were reported as real survivors on
+    # macOS before this was found. The assertion is on `mutant_line`'s contract rather than on
+    # `inactive_spans`, because that is where the defect was.
+    doc_fixture = [
+        "/// A documented function.",
+        "///",
+        "/// Two more lines of prose, as any real one has.",
+        "#[cfg(not(unix))]",
+        "pub fn f() -> u32 {",
+        "    41",
+        "}",
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "doc.rs"
+        src.write_text("\n".join(doc_fixture))
+        spans, _ = inactive_spans(src, keys, bare)
+        inside = {t for t, a, b in spans if a <= 5 <= b}   # the `fn` line: inside the cfg block
+        above = {t for t, a, b in spans if a <= 1 <= b}    # the doc comment: outside it
+        if "off" not in inside:
+            failures.append("  a cfg'd function's own body must be seen as not-compiled")
+        if above:
+            failures.append(
+                "  the doc comment above a cfg attribute is outside the block — if this ever "
+                "starts matching, the lookup rule below is no longer load-bearing"
+            )
+        # The contract that actually broke: the line used must be the mutant's, not the function's.
+        if mutant_line({"span": {"start": {"line": 5}}, "function": {"span": {"start": {"line": 1}}}}) != 5:
+            failures.append("  mutant_line must take the mutant's span, never the function's")
+
     if failures:
         print(f"self-test FAILED on {sys.platform}:", file=sys.stderr)
         print("\n".join(failures), file=sys.stderr)
@@ -249,8 +306,7 @@ def main() -> int:
             cache[f] = inactive_spans(Path(f), keys, bare)
         spans, unk = cache[f]
         unknowns.extend(unk)
-        line = mut["function"]["span"]["start"]["line"] if mut.get("function") else \
-            mut["span"]["start"]["line"]
+        line = mutant_line(mut)
         verdicts = {tag for tag, a, b in spans if a <= line <= b}
         if "off" in verdicts:
             phantoms.append(mut["name"])
