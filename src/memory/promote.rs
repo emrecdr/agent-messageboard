@@ -53,11 +53,17 @@ pub fn independent(conn: &Connection, session: &str, paths: &[String]) -> Result
         .map_err(sql("checking derivation independence"))?
         .flatten()
         .collect();
-    // The same segment-aware predicate claims use, for the same reason: `src/a` must not be taken
-    // to have primed a note about `src/abc.rs`.
+    // **The same predicate the path lane retrieves with — necessarily the same one, or this
+    // check answers a different question than the one that did the priming.** It was
+    // `claims::overlaps` while retrieval was too; when retrieval learned patterns this had to
+    // learn them in the same breath, because a session shown a note declaring `src/memory/**`
+    // would otherwise pass here as though it had never been shown anything about
+    // `src/memory/index.rs`, and the ledger would record a primed derivation as independent.
+    // That is D49's arithmetic rather than a retrieval nicety, which is why the three sites move
+    // together. `src/a` still must not be taken to have primed a note about `src/abc.rs`.
     Ok(!shown
         .iter()
-        .any(|g| paths.iter().any(|p| claims::overlaps(g, p))))
+        .any(|g| paths.iter().any(|p| path_matches(g, p))))
 }
 
 /// Candidates concerning these paths, for the `observe`-time linking affordance.
@@ -83,12 +89,9 @@ pub fn candidates_concerning(conn: &Connection, paths: &[String]) -> Result<Vec<
 fn concerning_kind(conn: &Connection, kind: &str, path: &str) -> Result<Vec<IndexedNote>> {
     let sql_text = format!(
         "{SELECT_NOTE}
-          WHERE n.kind = ?1 AND n.status = ?2
-            AND EXISTS (SELECT 1 FROM note_paths p
-                         WHERE p.kind = n.kind AND p.scope = n.scope AND p.slug = n.slug
-                           AND (p.path_glob = ?3 OR p.path_glob LIKE ?3 || '%'
-                                OR ?3 LIKE p.path_glob || '%'))
-          ORDER BY n.created DESC LIMIT {PATH_LOOKUP_WINDOW}"
+          WHERE n.kind = ?1 AND n.status = ?2 AND {}
+          ORDER BY n.created DESC LIMIT {PATH_LOOKUP_WINDOW}",
+        path_prefilter("?3")
     );
     let mut stmt = conn
         .prepare(&sql_text)
@@ -97,7 +100,7 @@ fn concerning_kind(conn: &Connection, kind: &str, path: &str) -> Result<Vec<Inde
         .query_map(params![kind, ACTIVE, path], row_to_note)
         .map_err(sql("running a candidate lookup"))?
         .flatten()
-        .filter(|n| n.paths.iter().any(|g| claims::overlaps(g, path)))
+        .filter(|n| n.paths.iter().any(|g| path_matches(g, path)))
         .collect();
     Ok(rows)
 }
@@ -752,6 +755,7 @@ mod tests {
                 id: NoteId::candidate("x"),
                 path: PathBuf::from("/v/x.md"),
                 redacted: 2,
+                inert_paths: Vec::new(),
                 cited: Vec::new(),
                 superseded: None,
             },

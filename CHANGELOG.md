@@ -11,6 +11,23 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **A declared path containing a glob anchored a note to nothing, and bought less than the plainer
+  spelling it looks like an improvement on** (D119). `--files 'src/memory/**'` is not a
+  directory-prefix of anything, so `claims::overlaps` refused it and the note was never retrieved
+  for any file — while a bare `src/memory` would have matched. Probed before the change:
+  `src/memory/**` against `src/memory/index.rs` returned 0, the bare `src/claims` against
+  `src/claims/foo.rs` returned 1. `memory::path_matches` now matches a declaration containing `*`
+  as a glob (`**` spans separators, a single `*` does not) and falls through to `overlaps`
+  unchanged for every declaration without one. **The rule moved at all three sites that apply it**
+  — `query::concerning`, `promote::concerning_kind` and `promote::independent` — because changing
+  only retrieval would have let a session shown a pattern-anchored note record a primed derivation
+  as an independent one, which is D49's arithmetic rather than a retrieval nicety. `claims` does
+  *not* gain globs: a claim on `src/**` covering every file is D5's cry-wolf failure by
+  construction. `observe` now names any declaration carrying `?`, `[`, `]`, `{` or `}`, since the
+  read side can never report it — a pattern that matches nothing and a path nobody edited are the
+  same zero (D89). No note in the vault carried a metacharacter, so the existing corpus behaves
+  bit-identically and D87's window is undisturbed.
+
 - **A session with no environment variable shared one failure marker with every other session on
   the machine** (M68). `memory::capture::session_key` read `AMB_AGENT` then `Vendor::session_env`
   and stopped, while its own doc comment claimed *"the same precedence as `identity::resolve`"* —

@@ -6275,3 +6275,72 @@ a board that still works, and this must never be the thing that fails an open.
 against plan degradation as the board grows, not a fix for an observed regression. It belongs in
 `MEASUREMENTS.md` only after `bench.sh` has something to say, and the M-rule applies: repeat any
 measurement before quoting it.
+
+---
+
+## D119 · A declared path may be a pattern, and the rule moves at three sites or not at all
+
+**Decided.** `memory::path_matches` is the one predicate the memory path lane retrieves with. A
+declaration containing `*` is matched as a glob — `**` spans separators, a single `*` does not.
+A declaration without one keeps `claims::overlaps` unchanged. `observe` names any declaration
+carrying `?`, `[`, `]`, `{` or `}`, which this build does not implement.
+
+### The defect, which was silent and pointed the wrong way
+
+A note declaring `--files 'src/memory/**'` anchored to **nothing**. Probed on an isolated board
+before the change: `src/memory/**` against `src/memory/index.rs` returned `count=0`, while the
+bare `src/claims` against `src/claims/foo.rs` returned `count=1`. `src/memory/**` is not a
+directory-prefix of anything, so `overlaps` refused it and the note was never retrieved for any
+file.
+
+**So the pattern bought strictly less than the plainer spelling it looks like an improvement on**,
+and nothing said so. An author who wrote the more precise-looking thing got worse retrieval than
+one who wrote less. That is this project's documented worst shape rather than a missing feature.
+
+Nothing in the vault was affected: `note_paths` held 84 declarations and **none contained a glob
+metacharacter**, checked before the change. The path lane's behaviour on the existing corpus is
+bit-identical, which is what makes this landable inside D87's open measurement window — the window
+forbids changing what a note *renders*, and this changes what a declaration *matches*, for a set
+of declarations that is currently empty.
+
+### Three sites, and the third is the reason this is a decision
+
+`claims::overlaps` was applied to notes in three places, and CLAUDE.md's own arithmetic —
+count the layers a rule passes through, count the layers that assert it — is what found them:
+
+| Site | What it decides |
+|---|---|
+| `query::concerning` | the injection lane, `recall --file`, `coverage`, the cross-repo axis |
+| `promote::concerning_kind` | the `--same-as` dedup affordance |
+| `promote::independent` | whether a derivation was primed by something the session was shown |
+
+Changing only the first is the tempting scope and it corrupts the ledger. A session shown a note
+declaring `src/memory/**` would still pass `independent` as though it had been shown nothing about
+`src/memory/index.rs`, and **a primed derivation would be recorded as an independent one** — which
+is D49's arithmetic, not a retrieval nicety. `coverage` needed no change at all, because it calls
+`concerning` rather than replicating the predicate; status.rs's own comment says that is what it
+was built for, and this is the first time that paid.
+
+### Rejected: putting the glob in `claims::overlaps`
+
+That is the one-line version and it is wrong. The predicate has **two** consumers, and the other
+one is the claims subsystem, where a claim on `src/**` would cover every file in the repository
+and warn every agent off everything. D5's segment-aware rule exists precisely because *a claim
+system that cries wolf is one agents learn to ignore*. Claims stay literal. `path_matches` falls
+through to `overlaps` for every declaration without a `*`, and a test asserts the two agree
+row-for-row so the fall-through is a pinned contract rather than an implementation detail.
+
+### Rejected: `?`, `[a-z]` and `{a,b}`
+
+Each is a surface with no consumer at this corpus size, and a speculative surface is what
+`find_unread_fields.py` is in the gate to catch. **They are refused out loud rather than accepted
+as literals**, because accepting them silently is the original defect wearing different syntax.
+
+### Rejected: refusing the write outright
+
+D18's precedent — *an unknown name is an error, not a stored row* — argues for exit 64. Against it:
+`observe` is on the agent's happy path, and an agent handed an error is an agent that drops the
+observation. The note is worth more than the anchor. So the write proceeds and the author is told,
+which is exactly the shape `redacted` already had: **surfaced while the only person who can fix it
+is still in the session.** The read side can never report this — a pattern that matches nothing and
+a path nobody edited are the same zero (D89).

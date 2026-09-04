@@ -1,7 +1,11 @@
-//! Pure text and time helpers: slugs, ages, hashes, dates.
+//! Pure text and time helpers: slugs, ages, hashes, dates, and path anchoring.
 //!
 //! No filesystem, no database, no environment. The civil-calendar arithmetic
 //! is Howard Hinnant's, thirty lines against a dependency.
+//!
+//! [`path_matches`] is the odd one out and belongs here for the same reason as the rest: it is a
+//! decision about a string, taken without asking anything else. It is *not* in `claims.rs`
+//! deliberately — see its own docs.
 
 /// A URL-safe, filesystem-safe stem for a title.
 pub fn slugify(title: &str) -> String {
@@ -160,6 +164,114 @@ pub fn parse_ts(s: &str) -> Option<f64> {
         secs += (h * 3600 + mi * 60 + sec) as f64;
     }
     Some(secs)
+}
+
+// ── Path anchoring ──────────────────────────────────────────────────────────
+
+/// Whether a note's declared path anchors it to `actual`.
+///
+/// **Two rules under one name, and which one applies is decided by the declaration.** A
+/// declaration with no `*` is a *literal* and keeps [`crate::claims::overlaps`] — the
+/// segment-aware directory-prefix rule, unchanged, which is what all 84 declared paths in the
+/// real vault are. A declaration containing `*` is a *pattern* and is matched by [`glob_matches`].
+///
+/// **The glob deliberately does not live in `claims::overlaps`, and that is a decision rather
+/// than a layering accident.** That predicate has two consumers. The other one is the claims
+/// subsystem, where a claim on `src/**` would cover every file in the repository and warn every
+/// agent off everything — precisely the cry-wolf failure the segment-aware rule exists to
+/// prevent (D5). Claims stay literal; only the memory path lane learns patterns.
+///
+/// **Before this existed a pattern anchored a note to nothing, silently.** `src/memory/**` is not
+/// a directory-prefix of `src/memory/index.rs`, so `overlaps` returned false and the note was
+/// never retrieved for any file — while a bare `src/memory` would have matched. A declaration
+/// that *looks* more precise bought strictly less than one that looked less precise, with nothing
+/// said out loud. That is this project's documented worst shape, and [`unsupported_glob`] is the
+/// write-side half of the answer.
+pub fn path_matches(declared: &str, actual: &str) -> bool {
+    let (d, a) = (normalise_path(declared), normalise_path(actual));
+    // **Both branches refuse an empty side, and the guard is here so they cannot disagree.**
+    // `claims::covers` already refuses it — *"an empty claim would cover the entire
+    // repository"* — and a bare `*` would otherwise have answered the same question `true`,
+    // reintroducing on the pattern side exactly what the literal side refuses by name. Found by
+    // the empty-case test, which is the first one to write for a backtracking loop.
+    if d.is_empty() || a.is_empty() {
+        return false;
+    }
+    if d.contains('*') {
+        glob_matches(d, a)
+    } else {
+        crate::claims::overlaps(declared, actual)
+    }
+}
+
+/// The spelling `claims::normalise` applies, repeated here because the glob branch never reaches
+/// it. `a_pattern_and_a_literal_normalise_the_same_way` is what keeps the two from drifting —
+/// counting the sites that apply a rule is this repository's check for exactly this shape.
+fn normalise_path(p: &str) -> &str {
+    p.trim().trim_start_matches("./").trim_end_matches('/')
+}
+
+/// Anchored glob match over a path, with `gitignore`'s distinction between the two stars.
+///
+/// `**` spans separators; a single `*` does not. That difference is the whole reason this is not
+/// a `LIKE`: `src/*.rs` must match `src/main.rs` and must *not* match `src/memory/index.rs`, and
+/// one wildcard cannot express both.
+///
+/// **`?`, `[a-z]` and `{a,b}` are not supported, and are not oversights.** Each is a surface with
+/// no consumer at this corpus size, and a speculative surface is what `find_unread_fields.py` is
+/// in the gate to catch. They are refused loudly at the write path rather than silently accepted
+/// as literals — see [`unsupported_glob`].
+///
+/// Backtracking rather than recursive, so a pathological pattern cannot blow the stack on the
+/// hook that fires before every file tool call.
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let s: Vec<char> = path.chars().collect();
+    let (mut pi, mut si) = (0usize, 0usize);
+    // Where to resume, how far the path had been consumed there, and whether that star may cross
+    // a separator. The flag is the single/double distinction, carried rather than re-read.
+    let mut star: Option<(usize, usize, bool)> = None;
+
+    while si < s.len() {
+        if pi < p.len() && p[pi] == '*' {
+            let double = pi + 1 < p.len() && p[pi + 1] == '*';
+            pi += if double { 2 } else { 1 };
+            star = Some((pi, si, double));
+            continue;
+        }
+        if pi < p.len() && p[pi] == s[si] {
+            pi += 1;
+            si += 1;
+            continue;
+        }
+        match star {
+            // Consume one more character on the star's behalf and retry. A single star refuses
+            // the separator here, which is the only place the two kinds differ.
+            Some((rp, rs, double)) if rs < s.len() && (double || s[rs] != '/') => {
+                pi = rp;
+                si = rs + 1;
+                star = Some((rp, rs + 1, double));
+            }
+            _ => return false,
+        }
+    }
+    // A pattern may end in stars the path had nothing left to feed.
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// The glob metacharacter in `declared` that this matcher does not implement, if any.
+///
+/// **The read side cannot report this, and that is why it is here.** By the time a lookup misses,
+/// the note is written, the session that wrote it is gone, and a pattern that matched nothing is
+/// indistinguishable from a path nobody edited. `observe` is the last moment anyone who could fix
+/// it is still present — the same argument D37 makes for redacting on the write path.
+pub fn unsupported_glob(declared: &str) -> Option<char> {
+    declared
+        .chars()
+        .find(|c| matches!(c, '?' | '[' | ']' | '{' | '}'))
 }
 
 #[cfg(test)]
@@ -363,5 +475,120 @@ mod tests {
         assert_eq!(content_hash("a"), content_hash("a"));
         assert_ne!(content_hash("a"), content_hash("b"));
         assert_eq!(content_hash("").len(), 16);
+    }
+
+    // ── Path anchoring ──────────────────────────────────────────────────
+
+    /// The defect this shipped to fix, pinned as a regression rather than described.
+    ///
+    /// Probed on an isolated board before the fix: a note declaring `src/memory/**` returned
+    /// `count=0` for `src/memory/index.rs`, while a note declaring the bare `src/claims`
+    /// returned `count=1` for `src/claims/foo.rs`. The pattern bought *less* than the plain
+    /// prefix and said nothing. Both rows are asserted here so the second cannot quietly
+    /// regress while the first is being kept green.
+    #[test]
+    fn a_pattern_anchors_where_it_used_to_anchor_to_nothing() {
+        assert!(
+            path_matches("src/memory/**", "src/memory/index.rs"),
+            "the pattern that silently matched nothing"
+        );
+        assert!(
+            path_matches("src/claims", "src/claims/foo.rs"),
+            "and the bare prefix that always worked keeps working"
+        );
+    }
+
+    /// **The one thing a `LIKE` could not express.** `*` stops at a separator and `**` does not,
+    /// so the table needs both a true and a false row for each — a presence-only reading of this
+    /// rule passes whichever way the guard is spelled.
+    #[test]
+    fn one_star_stops_at_a_separator_and_two_stars_do_not() {
+        for (pattern, path, expected) in [
+            ("src/*.rs", "src/main.rs", true),
+            ("src/*.rs", "src/memory/index.rs", false),
+            ("src/**/*.rs", "src/memory/index.rs", true),
+            ("src/**", "src/a/b/c/d.rs", true),
+            ("src/*", "src/a/b.rs", false),
+            ("*.rs", "main.rs", true),
+            ("*.rs", "src/main.rs", false),
+            ("**/*.rs", "src/main.rs", true),
+        ] {
+            assert_eq!(
+                path_matches(pattern, path),
+                expected,
+                "{pattern} vs {path} should be {expected}"
+            );
+        }
+    }
+
+    /// A declaration with no star must reach `claims::overlaps` unchanged. Every row here is one
+    /// of that function's own assertions, restated through this door — if the fall-through is
+    /// ever replaced by a reimplementation, these go red rather than drifting quietly.
+    #[test]
+    fn a_literal_declaration_still_gets_the_segment_aware_rule() {
+        for (declared, actual, expected) in [
+            ("src/auth.rs", "src/auth.rs", true),
+            ("src/auth", "src/auth/login.rs", true),
+            ("src", "src/a/b/c.rs", true),
+            ("src/a", "src/abc.rs", false),
+            ("src/auth", "src/authorization/", false),
+            ("lib", "library/x.rs", false),
+            ("", "src/main.rs", false),
+        ] {
+            assert_eq!(
+                path_matches(declared, actual),
+                expected,
+                "{declared} vs {actual}"
+            );
+            assert_eq!(
+                path_matches(declared, actual),
+                crate::claims::overlaps(declared, actual),
+                "a literal must agree with overlaps exactly: {declared} vs {actual}"
+            );
+        }
+    }
+
+    /// The glob branch never reaches `claims::normalise`, so the two spellings are a pair that
+    /// can drift. This is the assertion that notices.
+    #[test]
+    fn a_pattern_and_a_literal_normalise_the_same_way() {
+        // Leading `./` and a trailing slash are trimmed on both sides, in both branches.
+        assert!(path_matches("./src/memory/**", "src/memory/a.rs"));
+        assert!(path_matches("src/memory/**", "./src/memory/a.rs"));
+        assert!(path_matches("src/**/", "src/a.rs"));
+        // The literal branch, on the same inputs, through `overlaps`.
+        assert!(path_matches("./src/memory", "src/memory/a.rs"));
+        assert!(path_matches("src/memory", "./src/memory/a.rs"));
+    }
+
+    /// **An unsupported metacharacter must be reported, not silently taken as a literal.** The
+    /// `expected == None` rows are the ones that would pass vacuously on their own; the `Some`
+    /// rows prove the function is looking at all.
+    #[test]
+    fn an_unsupported_metacharacter_is_named_and_a_supported_one_is_not() {
+        for (declared, expected) in [
+            ("src/**", None),
+            ("src/*.rs", None),
+            ("src/main.rs", None),
+            ("src/?.rs", Some('?')),
+            ("src/[abc].rs", Some('[')),
+            ("src/{a,b}.rs", Some('{')),
+        ] {
+            assert_eq!(unsupported_glob(declared), expected, "{declared}");
+        }
+    }
+
+    /// A pattern with nothing to match, and a path with nothing to match it — the empty cases a
+    /// backtracking loop gets wrong first. `*` over an empty path answered `true` on the first
+    /// run of this test, which is `claims::covers`' refused case arriving through the new door.
+    #[test]
+    fn the_empty_cases_do_not_match_anything_by_accident() {
+        assert!(!path_matches("*", ""), "a star over an empty path");
+        assert!(!path_matches("**", ""), "nor a double star");
+        assert!(
+            !path_matches("src/**", "src"),
+            "a pattern needs something inside the directory"
+        );
+        assert!(path_matches("**", "anything/at/all"));
     }
 }

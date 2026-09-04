@@ -188,12 +188,42 @@ pub fn failure_note(tool: &str, detail: &str) -> (String, String) {
 /// The longest error detail kept from a failed tool call.
 pub const FAILURE_DETAIL_MAX: usize = 600;
 
+/// The coarse SQL that admits a `note_paths` row for the path bound at `param`.
+///
+/// **One string, used by every path lookup, because the alternative had already been written out
+/// twice.** `concerning` and `concerning_kind` carried byte-identical copies differing only in
+/// their bind index, and a fourth clause had to be added to both. Counting the sites that apply a
+/// rule is this repository's own check for that shape, so the rule stops being copied.
+///
+/// **It over-selects on purpose and [`path_matches`] has the final say.** The last clause admits
+/// any row whose pattern's literal head is a prefix of the queried path — `src/memory/**` is
+/// considered for `src/memory/index.rs` and not for `docs/DESIGN.md` — which is coarse in two
+/// directions and safe in both. `LIKE` reads `_` as a wildcard, so `src/my_mod/*` is also offered
+/// `src/myXmod/a.rs`; and a pattern whose head is empty (`**/*.rs`) is offered every path. Both
+/// merely widen the window the pure predicate then narrows. **Under-selecting would be the fatal
+/// direction** — a row excluded here is never seen by `path_matches` at all.
+pub fn path_prefilter(param: &str) -> String {
+    format!(
+        "EXISTS (SELECT 1 FROM note_paths p
+                  WHERE p.kind = n.kind AND p.scope = n.scope AND p.slug = n.slug
+                    AND (p.path_glob = {param} OR p.path_glob LIKE {param} || '%'
+                         OR {param} LIKE p.path_glob || '%'
+                         OR (instr(p.path_glob, '*') > 0
+                             AND {param} LIKE substr(p.path_glob, 1, instr(p.path_glob, '*') - 1) || '%')))"
+    )
+}
+
 /// Notes concerning a path, in any project on this machine, and how many there are in total.
 ///
-/// **The SQL over-selects and [`claims::overlaps`] decides.** That predicate is already the
-/// segment-aware rule claims use — `src/a` must not cover `src/abc.rs` — and it is already
-/// tested. Re-expressing it in SQL would be a second copy of a rule with a known sharp edge, so
-/// the query narrows with `LIKE` for the index's sake and the pure function has the final say.
+/// **The SQL over-selects and [`path_matches`] decides.** Re-expressing that rule in SQL would be
+/// a second copy of one with a known sharp edge, so the query narrows with `LIKE` for the index's
+/// sake ([`path_prefilter`]) and the pure function has the final say.
+///
+/// It used to say `claims::overlaps` decided, and it did until patterns arrived. `path_matches`
+/// still *is* `claims::overlaps` for every declaration without a `*` — `src/a` must not cover
+/// `src/abc.rs` — and is a glob matcher for the rest. **The name in this sentence is the whole
+/// difference between the two rules, which is why it was worth changing rather than leaving as a
+/// near-enough description.**
 ///
 /// **Bounded — and the bound did not make it faster, which is worth saying out loud.** The
 /// unbounded version fetched every matching note, each with a `group_concat` subquery, to display
@@ -208,11 +238,8 @@ pub const FAILURE_DETAIL_MAX: usize = 600;
 pub fn concerning(conn: &Connection, path: &str) -> Result<(Vec<IndexedNote>, usize)> {
     let kinds = injectable_sql();
     let matches = &format!(
-        "n.kind IN ({kinds}) AND n.status = ?1
-            AND EXISTS (SELECT 1 FROM note_paths p
-                         WHERE p.kind = n.kind AND p.scope = n.scope AND p.slug = n.slug
-                           AND (p.path_glob = ?2 OR p.path_glob LIKE ?2 || '%'
-                                OR ?2 LIKE p.path_glob || '%'))"
+        "n.kind IN ({kinds}) AND n.status = ?1 AND {}",
+        path_prefilter("?2")
     );
     let sql_text =
         format!("{SELECT_NOTE} WHERE {matches} ORDER BY n.created DESC LIMIT {PATH_LOOKUP_WINDOW}");
@@ -227,7 +254,7 @@ pub fn concerning(conn: &Connection, path: &str) -> Result<(Vec<IndexedNote>, us
     let exhausted = window.len() == PATH_LOOKUP_WINDOW;
     let found: Vec<IndexedNote> = window
         .into_iter()
-        .filter(|n| n.paths.iter().any(|g| claims::overlaps(g, path)))
+        .filter(|n| n.paths.iter().any(|g| path_matches(g, path)))
         .collect();
 
     // Only ask for a count when the window could not answer it. In every ordinary vault this

@@ -29,7 +29,7 @@
 //! |---|---|
 //! | [`config`] | Kinds, force, lifecycle, thresholds, and the environment they read |
 //! | [`id`] | [`NoteId`] and the indexed row shape (D50) |
-//! | [`text`] | Slugs, ages, hashes, the civil calendar |
+//! | [`text`] | Slugs, ages, hashes, the civil calendar, and path anchoring |
 //! | [`redact`] | Named secret shapes, never an entropy threshold (D46) |
 //! | [`note`] | The file: frontmatter, the derivation ledger, parsing |
 //! | [`inject`] | Ordering, the cap, and saying what the cap hid (D24, D43) |

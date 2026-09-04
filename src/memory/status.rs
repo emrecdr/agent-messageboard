@@ -620,7 +620,7 @@ pub fn coverage(conn: &Connection, project: &str) -> Result<Coverage> {
     // thing no per-repo tool can do), ignored `status` (a superseded note can never be injected),
     // and counted candidates (`INJECTABLE` excludes them, which is D51's whole point). Only the
     // glob semantics agreed, and by luck rather than intent — `concerning` applies
-    // `claims::overlaps` as a post-filter behind its SQL prefix window, so the replica happened to
+    // `path_matches` as a post-filter behind its SQL prefix window, so the replica happened to
     // match. On the board of the day the number still came out right, because every note there was
     // an active observation and no two projects named the same path: correct by accident, which is
     // the state D51 exists to warn about. One call per edited path costs more than one join and
@@ -1344,7 +1344,7 @@ mod tests {
 
         let c = coverage(&conn, "nest").expect("coverage");
         assert_eq!(c.edited, 3);
-        // The whole point of routing through `claims::overlaps`: an `=` join would score this 0.
+        // The whole point of routing through `path_matches`: an `=` join would score this 0.
         assert_eq!(c.covered, 2, "a directory note must cover files inside it");
         assert_eq!(c.declared, 1);
         assert!(c.unmatched.is_empty(), "{:?}", c.unmatched);
@@ -1354,7 +1354,7 @@ mod tests {
     ///
     /// The first version of `coverage` re-derived the predicate and got three axes wrong: it
     /// filtered by project, ignored `status`, and counted candidates. Glob semantics were the one
-    /// axis it agreed on, and by luck rather than intent — `concerning` applies `claims::overlaps`
+    /// axis it agreed on, and by luck rather than intent — `concerning` applies `path_matches`
     /// as a post-filter behind its coarse SQL prefix window, so the replica happened to match. It
     /// still produced the right number on the board of the day, because every note there was an
     /// active observation — correct by accident, which is what D51 was written about. This pins
