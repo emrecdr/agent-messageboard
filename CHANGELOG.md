@@ -9,7 +9,98 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A session with no environment variable shared one failure marker with every other session on
+  the machine** (M68). `memory::capture::session_key` read `AMB_AGENT` then `Vendor::session_env`
+  and stopped, while its own doc comment claimed *"the same precedence as `identity::resolve`"* —
+  a parity that stopped holding when D113 added the hook payload as a third source of identity and
+  nothing carried the arm over here. With no variable, the key is `None`, the filename falls back
+  to the shared pre-D108 `.memory-failures`, and any healthy session's success clears a broken
+  session's count indefinitely, which is verbatim the defect D108 exists to have fixed.
+
+  **Latent until the same day it was found.** No shipped vendor exports nothing, so the arm was
+  unreachable on 2026-09-04; D115 made `parse_manifest` accept manifests with no `session_env` on
+  2026-09-05 and it became reachable. A fix widened the door to a bug it had nothing to do with,
+  and neither change is wrong — the lesson is that making a previously impossible input possible
+  is a question about everything that assumed it could not occur.
+
+- **`anyhow` was declared, compiled into every build, and imported by no line of code** (M68), for
+  the life of the project — behind a paragraph in `src/error.rs` stating where it was used. It was
+  not used there: `main` matches on `Error` directly and maps it through `Error::exit_code`. The
+  comment is why it survived, an unused dependency looking like an oversight and a documented one
+  looking deliberate.
+
+### Added
+
+- **`amb`'s `--json` output says which contract it satisfies** (D117). Every object carries
+  `"v": 1`, on the error path as well as the success path. D56 already named `CLI + --json shapes`
+  a versioned surface *bound by agents parsing output*; until now the payload could not report
+  which version it was, because `amb --version` carries the fingerprint in a different invocation
+  from the data. A parser that cached a strategy learned the shape had moved by failing — silently,
+  on the hook path, where D9 requires exit 0. Additive, so MINOR under D56's own rule.
+
+- **`tools/check_unused_deps.py`, in the gate and in CI.** `cargo` structurally cannot report an
+  unused dependency: nothing is compiled from it, so there is no item to lint. Comments are
+  stripped before searching, because `src/error.rs` now discusses `anyhow` by name in the
+  paragraph explaining its removal — the check was verified by re-adding the dependency and
+  watching it fail while that paragraph stood.
+
+- **Query-planner statistics are now kept current** (D118). No board had ever had `ANALYZE` run on
+  it — the live one carried no `sqlite_stat1` table at all, so every plan since the project began
+  came from default estimates. `db::open_at` runs `PRAGMA optimize=0x10002` and discards the
+  result; `open_at_for_hook` deliberately does not, because `optimize` writes and the hook lane has
+  a 2 s budget against a 5 s kill. No performance number is claimed and none was measured.
+
+- **A release pipeline, settling Q14** (D116). `dist` 0.32.0 generates
+  `.github/workflows/release.yml`; `dist-workspace.toml` holds the configuration. A shell
+  installer, a source tarball, checksums, and binaries for the two targets CI actually compiles —
+  `aarch64-apple-darwin` and `x86_64-unknown-linux-gnu`.
+
+  Three things are deliberate. **`publish = false` is untouched:** `dist init` reports that the
+  workspace has nothing to release and its help text points at that flag, which would trade D56's
+  guard for a distribution feature; `[package.metadata.dist] dist = true` is the actual mechanism.
+  **The installer writes `$HOME/.local/bin`, not `CARGO_HOME`:** that is the path
+  `tools/install.sh` already writes and the hooks already invoke, so install and upgrade land on
+  the same file and D94's stale-hook condition cannot arise from it — and it does not assume the
+  user has Rust. **Windows, musl and the two untested triples are excluded on evidence:** the
+  `#[cfg(not(unix))]` half of `identity::real_pid` has never been compiled on any machine or CI
+  leg, and shipping a binary built from it would be a claim with nothing behind it.
+
+  **The workflow has never run.** It fires on a version tag. `dist plan` and `dist generate` were
+  exercised locally against the real manifest; that is strictly less than a green run, and D116
+  says so in its own last section rather than leaving it to be found. The README stays silent
+  about installing from a release until one exists.
+
+- **`tools/check_action_pins.py`, in the gate and in CI.** Every `uses:` in every workflow must
+  name a 40-hex commit rather than a tag. `ci.yml` and `audit.yml` were pinned by hand and nothing
+  was watching them; `release.yml` is *generated*, and `dist`'s default output floats, so the pin
+  lives in `dist-workspace.toml` under `github-action-commits` — where deleting one key would
+  unpin the publishing workflow with nothing failing. `dist` was also measured to **ignore unknown
+  config keys silently**, so that file cannot be trusted to report its own typos. The check refuses
+  rather than reporting success when it finds no workflows, and was verified against a truth table
+  including the rows that pass.
+
 ### Changed
+
+- **A vendor manifest no longer has to name an environment variable, and the requirement had been
+  wrong since the commit before it was read** (D115). `parse_manifest` refused an empty
+  `session_env` because *"no session of this vendor can ever be identified"* — true when written,
+  and false from D113 onward, which made `identity::resolve_from` fall back to the session id the
+  hook payload carries. Most agent CLIs name the session only in the payload, so D111 phase 3's
+  advertised capability — *add a vendor by dropping in a JSON file, no rebuild* — was closed to
+  the majority of the field it exists for.
+
+  **No test went red, because the assertion beside the guard pinned the refusal rather than the
+  rule.** `assert!(parse_manifest(&no_env, &[]).is_err(), "no session_env, no vendor")` encodes
+  the same obsolete world the guard does, so the two agree forever. A false comment misleads a
+  reader; a false *refusal* rejects working configurations with no reader required.
+
+  What replaces it is the condition `detect_for_hook` already implements: a manifest is refused
+  when it offers **no route at all** — no variable of its own, and no event spelling some other
+  vendor has not already taken. `parse_manifest`'s second parameter now carries whole descriptors
+  rather than ids, which is the id-shadowing check generalised rather than a second check beside
+  it. The partial collision is a named residual, not an oversight.
 
 - **`amb doctor` refused to run for the session most in need of it, and the contract said
   otherwise in four documents** (D73). With no session id exported, `run` fell through to

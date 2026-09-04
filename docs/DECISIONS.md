@@ -6021,3 +6021,257 @@ a manifest-format change and D111's ordering is that the format follows a real s
 than anticipating one. **The condition:** the first manifest written for a CLI that exports no
 session variable. That is now a thing someone can actually do, which is what makes this a
 condition rather than a note (D112).
+
+> **SETTLED by D115 (2026-09-05), and the condition above never fired.** The manifest was written
+> as a probe rather than by a stranger. D115 records why that is a settlement and not a shortcut:
+> the deferral's reason was about speculative *fields*, and removing a constraint that is already
+> false adds none. The refusal's own sentence — "no session of this vendor can ever be identified"
+> — had been untrue since D113 and was still being enforced.
+
+---
+
+## D115 · A vendor is reachable or it is not a vendor, and `session_env` was never the question
+
+**Decided 2026-09-05**, settling the open half D114 recorded with a condition. `parse_manifest`
+accepts a manifest with no `session_env`, and refuses one that offers **no route at all** — no
+variable of its own *and* no event spelling that some other vendor has not already taken.
+
+### The refusal was true when written and false when read, and nothing could go red
+
+`parse_manifest` refused an empty `session_env` with the reason *"or no session of this vendor can
+ever be identified"*. That was accurate on the day it was written. D113 then made
+`identity::resolve_from` fall back to the id the payload carries, and from that commit a vendor
+with no variable **is** identified — on every hook, which is where `amb` does all of its automatic
+work.
+
+**No test went red, and the test beside it is why.** The guard was pinned by
+
+```rust
+assert!(parse_manifest(&no_env, &[]).is_err(), "no session_env, no vendor");
+```
+
+which asserts the *refusal*, not the rule. Guard and assertion encode the same obsolete world, so
+they move together and agree forever. This is the catalogue's "false comment is worse than an
+absent one" with the failure mode upgraded: a false comment misleads the next reader, while a
+false **refusal** rejects working configurations, and no reader is required for it to do damage.
+**A refusal that encodes a world is not a comment about one** — when the world changes, prose rots
+quietly and a guard keeps enforcing.
+
+### What the condition should have been, and it is the one `detect_for_hook` already implements
+
+A hook reaches a vendor by exactly two routes (D114): an environment variable it exports, or an
+event spelling only it uses. The parser now refuses precisely the descriptor that offers neither,
+which is not a vendor with a missing field but one no hook can ever arrive at — its sessions would
+register, appear alive to a peer running `amb agents`, and record nothing, which is the condition
+D114 exists for arriving through the door D111 built for strangers.
+
+`parse_manifest`'s second parameter therefore carries whole descriptors rather than ids. That is a
+generalisation of the check already there — a manifest may not take a known vendor's id — rather
+than a special case beside it: both questions are *about the set this descriptor is joining*, and
+only one of them could be answered from a list of names.
+
+**Rejected: refusing any collision.** A payload-only vendor that shares one spelling with Claude
+while owning the rest is refused under that rule, and that is most of the field. What ships instead
+is the total case only, with the partial case named in `parse_manifest`'s doc comment as a residual
+hole — those lanes are silently dead, `Result<Vendor, String>` has no channel for a warning, and
+inventing one is a larger change than this decision earns.
+
+**Rejected: dropping the guard and adding nothing.** The stated reason being false does not make
+the guarded condition harmless. Removing the check without replacing it would have let a
+payload-only manifest that spells every event like Claude's load happily and be inert — the same
+disease relocated, which is what "a guard that stays green when you delete it is not protecting
+anything" cuts both ways about.
+
+### The condition did not fire; it was manufactured, and that is recorded rather than glossed
+
+D114 set the condition as *"the first manifest written for a CLI that exports no session
+variable"*, and no stranger has written one. The manifest that exposed this was a probe written to
+test the guard — two documents differing only in `session_env`, of which the control loaded and
+the treatment was refused with the false reason.
+
+Settling anyway, and the distinction matters because Q10's lesson cuts the other way on the surface
+of it. D114's recorded reason for deferring was that *relaxing a required field is a
+manifest-format change, and D111's ordering is that the format follows a real second vendor rather
+than anticipating one*. That ordering exists to stop **speculative fields** shipping — a field
+nothing reads, which `find_unread_fields.py` is in the gate to catch. This change adds no field and
+anticipates no vendor. It removes a constraint that is already wrong, on a capability D111 phase 3
+already advertises: *a vendor is added by dropping in a JSON file, with no rebuild*. That sentence
+was false for the majority of agent CLIs on the day it was written, and waiting for a stranger to
+discover it is not evidence-gathering — the evidence is the sentence.
+
+**What would have changed the answer:** if a payload-only vendor's hooks had turned out not to
+work, the refusal would have been right for the wrong reason and the fix would have been its
+message. `a_manifest_vendor_that_exports_no_variable_still_records_a_claim` is what settles that,
+and it asserts against the shipped binary rather than the library (M20) because the four seams the
+chain crosses — loader, `vendor_for_event`, `resolve_from`, `edited_path` — include three no
+library test can see.
+
+---
+
+## D116 · `dist` generates the release pipeline, `publish = false` stays, and the pins live in the config that regenerates the workflow
+
+**Decided 2026-09-05**, settling Q14. `dist` (formerly `cargo-dist`) 0.32.0 owns
+`.github/workflows/release.yml`; `dist-workspace.toml` owns the configuration. Two targets, a
+shell installer, every action pinned to a commit.
+
+### Q14's two named objections, both answered by running the tool rather than by reading about it
+
+**`publish = false` is not reopened, and the trap is that `dist` tells you to reopen it.** With
+`publish = false` — D56, a guard against an accidental `cargo publish` — `dist init` reports *"This
+workspace doesn't have anything for dist to Release!"* and its own help text suggests that
+`publish = false` could be hiding the binary. A reader who takes that at face value flips the flag
+and silently makes the crate publishable to satisfy a *distribution* tool. The actual mechanism is
+`[package.metadata.dist] dist = true`, which tells `dist` to look past the flag. Publication and
+distribution are separate axes; one line keeps them separate, and D56 is untouched.
+
+**The stale-hook hazard cannot arise from this installer, by construction.** D94's condition —
+recurring five times — is that the upgrade writes a *different path* from the one
+`~/.claude/settings.json` invokes, so manual commands work while every hook fails in silence. Q14
+raised it about `brew upgrade`, which fires without anyone thinking about `amb` at all. `dist`'s
+default `install-path` is `CARGO_HOME`, and that is **not** what ships here: `install-path` is
+`$HOME/.local/bin`, the path `tools/install.sh` already writes and the one the hooks on this
+machine invoke. Install and upgrade therefore land on the same file. It also does not assume the
+person has Rust, which `~/.cargo/bin` quietly does — an agent-CLI user need never have seen cargo.
+(`dist` refuses `CARGO_HOME` combined with any other strategy, so this is one path and not a
+fallback list.) M44 remains the answer for the packaged case, where the paths genuinely do differ.
+
+### The pin is in the config because the workflow is generated
+
+`release.yml` opens with *"This file was autogenerated by dist"*, and `dist`'s default output
+references actions by floating tag — `actions/checkout@v6` and two more, 21 references across the
+repository's workflows. A mutable tag on the one workflow that builds and publishes artifacts to
+strangers is the highest-value thing here to compromise, and `ci.yml` and `audit.yml` were pinned
+by hand earlier the same week.
+
+**A SHA edited into `release.yml` reverts on the next `dist generate`, in silence.** So the pins
+are `[dist.github-action-commits]` in `dist-workspace.toml`, which is the only place that survives
+regeneration — and `tools/check_action_pins.py` is in the gate and in CI, because the pin now
+depends on a config key whose *removal* would unpin every action with nothing failing. That check
+was written against its own truth table, including the two rows that pass, and it refuses rather
+than reports success when it finds no workflows at all.
+
+**`dist` silently ignores unknown configuration keys.** Verified: a `zzz-not-a-real-key` added to
+`dist-workspace.toml` produced a clean `dist plan`. So a typo in that file is a no-op rather than
+an error, and the pin key in particular cannot be trusted to announce its own absence. This is
+what makes the gate check load-bearing rather than belt-and-braces.
+
+### Two targets, and the excluded ones are excluded on evidence
+
+`aarch64-apple-darwin` and `x86_64-unknown-linux-gnu` — exactly the two CI compiles on every
+commit. `dist init` proposes five, and the other three are dropped rather than shipped untested:
+`x86_64-apple-darwin` and `aarch64-unknown-linux-gnu` are plausible but have never been built
+anywhere, and `x86_64-pc-windows-msvc` is a genuine risk, because the `#[cfg(not(unix))]` twin of
+`identity::real_pid` has **never been compiled on any machine or in any CI leg**. Publishing a
+Windows binary would be a claim with no evidence behind it, on the exact code path that has none.
+Adding a target is a one-line change once a CI leg proves it, which is the right order.
+
+**Rejected: a Homebrew tap as the first channel.** Q14's survey named it, and `hcom` leads with
+it. But a tap's upgrade path is exactly D94's condition with the worse trigger Q14 itself
+identified — `brew upgrade` fires without anyone thinking about `amb`, and installs under a prefix
+that is not where `amb install` wrote the hook entries. The shell installer does not have that
+property. A tap can follow once there is a release to tap.
+
+**Rejected: hand-writing the workflow.** 296 lines of matrix, artifact upload and release
+assembly, which would then be a file that has to be kept true — the artifact class this repository
+keeps getting burned by, and the reason `bench.sh`'s commented-out rows and `mutants.sh`'s stale
+classification are both recorded as measurements.
+
+### What is *not* verified, stated plainly because the temptation is to imply otherwise
+
+**The workflow has never run.** It fires on a version tag, and creating one is the user's action.
+What has been exercised locally is the configuration that produces it: `dist plan` resolves the
+full artifact set, and `dist generate` is reproducible against the real `Cargo.toml`. That is
+strictly less than a green run, and Q14's whole complaint about this project's artifacts is that
+an unexercised one reads as working. So: **the first tag is the test**, and until it is pushed
+this decision has a pipeline rather than a release.
+
+**The README says nothing about installing from a release, on purpose.** Documenting a
+`curl … | sh` line against a URL that 404s until the first tag would be a false artifact in the
+one file strangers read first — the same failure as `bench.sh` publishing a harness it had
+disabled. The README changes when a release exists, not before.
+
+---
+
+## D117 · A `--json` object says which contract it satisfies, because the fingerprint travels in a different invocation
+
+**Decided 2026-09-05.** Every object `amb` prints under `--json` carries `"v": 1`, on the success
+path and the error path alike. The integer is the `--json` contract's own, independent of the
+package version.
+
+### D56 named the surface and nothing could report it
+
+D56's table lists four surfaces the version covers, and the second is **“CLI + `--json` shapes”**,
+bound by *“agents parsing output”*, where a breaking change is removing a command, flag or field.
+That is the one surface on this list whose consumer is explicitly a machine.
+
+`amb --version` has printed a full fingerprint since D56 — `amb 0.2.0 (532d23f 2026-09-05, schema
+13, sqlite 3.53.2)` — and it is *a different invocation from the data*. A program that parses
+`amb inbox --json` and caches a strategy had no way to observe the shape moving under it. It found
+out by failing, and on the hook path D9 makes failing silent. This is D95's shape once more: a
+standard stated in prose, with nothing able to say whether it is being met.
+
+**Cheap only because of an accident of structure.** All 31 `--json` sites in `main.rs` already
+funnel through one `print_json`, so the version is set in one function rather than at 31 call
+sites. Had that not been true, this decision would have had a different cost and might have gone
+the other way.
+
+### What it is not
+
+**Not the package version.** `0.2.1` may ship for reasons no parser can observe. This integer
+moves when a field a reader might rely on changes meaning or leaves — the same separation D56
+makes for `PRAGMA user_version`, and for the same reason: two things with different compatibility
+rules need two numbers.
+
+**Not on the hook envelope.** `delivery::envelope` emits the *host CLI's* hook schema, and adding
+a field to a format someone else owns is the mistake D111 was written about — values there are
+read out of the vendor's shipped binary, never invented.
+
+**Rejected: an envelope.** `{"amb": {...}, "agents": [...]}` is tidier and breaks every existing
+reader, which would make a change whose entire purpose is compatibility a MAJOR one. A single
+added key is MINOR under D56's own rule, so nothing that parses `amb` today notices.
+
+**Rejected: stamping non-objects.** No command emits a bare array or scalar today. Wrapping one to
+find somewhere to put the version would change a shape nobody asked about, so those pass through
+unstamped and the branch says so.
+
+---
+
+## D118 · Query statistics are kept current on the interactive path, and deliberately not on the hook path
+
+**Decided 2026-09-05.** `db::open_at` runs `PRAGMA optimize=0x10002` and discards the result.
+`open_at_for_hook` does not.
+
+### `ANALYZE` had never run, on any board
+
+The live board carried **no `sqlite_stat1` table at all**, and no `ANALYZE` or `optimize` appears
+anywhere in the source. Every query plan since the project began was chosen from SQLite's default
+estimates. SQLite's own documentation names this architecture exactly — *“applications with
+short-lived database connections should run `PRAGMA optimize` once, just prior to closing each
+database connection”* — and every `amb` invocation is a short-lived connection.
+
+### Two deviations from that advice, each with its own reason
+
+**`0x10002`, not plain `optimize`, because of where it runs.** Plain `PRAGMA optimize` only
+considers tables *the connection has already used*, so at open it is a guaranteed no-op. `0x10002`
+is the documented mask that makes it examine every table instead. Running it before close would be
+the faithful form and requires a structural change — the connection is dropped implicitly at the
+end of a 1,300-line match with many early returns — which is not worth it for a gain nothing has
+measured.
+
+**The hook path is excluded, and this is the load-bearing half.** `optimize` *writes*: when
+statistics are stale it runs `ANALYZE`, which takes the write lock. D30 measured twelve concurrent
+processes contending on a single first open; a hook has a 2 s budget against the platform's 5 s
+kill (`HOOK_BUSY_TIMEOUT_MS`), and D9 forbids the one ending where the platform kills us mid-wait.
+Interactive commands — `inbox`, `claims`, `send` — run often enough to keep statistics fresh
+without putting a write on the lane that must not stall.
+
+**Best effort in the strongest sense.** The result is discarded. A board that cannot be analysed is
+a board that still works, and this must never be the thing that fails an open.
+
+### What is not claimed
+
+**No performance number, because none was measured.** The observed plans are currently reasonable
+— `MULTI-INDEX OR` over `ix_inbox_agent`, index searches into `reads` — so this is insurance
+against plan degradation as the board grows, not a fix for an observed regression. It belongs in
+`MEASUREMENTS.md` only after `bench.sh` has something to say, and the M-rule applies: repeat any
+measurement before quoting it.

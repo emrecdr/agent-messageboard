@@ -726,3 +726,82 @@ fn a_claim_is_recorded_under_the_vendors_own_event_spelling_not_only_claudes() {
         "both sessions edited the same file and both must hold a claim on it: {both}"
     );
 }
+
+/// **The whole D111 phase-3 promise, end to end, for the vendors that need it** (D115).
+///
+/// D113 gave payload-only CLIs an identity and D114 gave them a vendor — but `parse_manifest`
+/// still refused any manifest without `session_env`, so the one route a stranger has to add their
+/// CLI was closed to the majority of the field. The refusal's stated reason ("no session of this
+/// vendor can ever be identified") had been false since D113 and nothing went red, because the
+/// test beside it asserted the refusal rather than the rule.
+///
+/// **This asserts at the outermost layer on purpose** (M20). The unit test in `vendors.rs` proves
+/// `parse_manifest` accepts the document; only this one proves that accepting it makes a claim
+/// appear, through the real binary, across the four seams the chain actually crosses: the loader
+/// reads the file, `vendor_for_event` routes `NomadAfterTool`, `resolve_from` takes the id from
+/// the payload, and `edited_path` gates on *this vendor's* tool names rather than Claude's. A
+/// library test cannot see any of the last three.
+///
+/// The control arm is Claude's vocabulary, for the reason its sibling above gives: a run where
+/// neither arm records proves nothing about the treatment.
+#[test]
+fn a_manifest_vendor_that_exports_no_variable_still_records_a_claim() {
+    let b = Board::new();
+    b.run("uuid-seed", &["register", "--name", "seed"]);
+    let file = b.cwd.join("nomad.rs");
+    std::fs::write(&file, "// edited\n").expect("write");
+    let path = file.to_string_lossy().to_string();
+
+    // No `session_env` at all — the field whose absence was refused. Its event spellings are its
+    // own, which is what `parse_manifest` now requires of a vendor with no variable: something
+    // has to be able to route a hook to it.
+    let vendors = b.cwd.join("vendors");
+    std::fs::create_dir_all(&vendors).expect("mkdir");
+    std::fs::write(
+        vendors.join("nomad.json"),
+        r#"{
+          "id": "nomad-cli",
+          "label": "Nomad CLI",
+          "config_dir": ".nomad",
+          "settings_file": "settings.json",
+          "events": {
+            "session_start": "NomadBegin", "turn_end": "NomadDone",
+            "tool_post": "NomadAfterTool", "session_end": "NomadFinish",
+            "tool_pre": "NomadBeforeTool"
+          },
+          "edit_tools": ["put_file", "patch"]
+        }"#,
+    )
+    .expect("write manifest");
+
+    let fire = |event: &str, tool: &str, session: &str| {
+        let mut cmd = b.cmd_unscoped("");
+        cmd.args(["hook", "turn"])
+            .env("AMB_PROJECT", "nest")
+            .env("AMB_VENDORS", &vendors)
+            .env_remove("GEMINI_SESSION_ID");
+        let payload = format!(
+            r#"{{"hook_event_name":"{event}","session_id":"{session}","tool_name":"{tool}","tool_input":{{"file_path":"{path}"}}}}"#
+        );
+        let (code, _) = common::with_stdin(cmd, &payload);
+        assert_eq!(code, 0, "{event}: the hook always exits 0 (D9)");
+    };
+
+    // Control: Claude's vocabulary, which is unaffected by any of this and must stay unaffected.
+    fire("PostToolUse", "Edit", "sess-claude");
+    let claims = b.run("uuid-seed", &["claims", "--all"]);
+    assert!(
+        claims.contains("nomad.rs"),
+        "the control must record, or this test compares two failures: {claims}"
+    );
+
+    // Treatment: a vendor amb learned about from a file, whose session exports nothing and whose
+    // tool is named in no shipped descriptor.
+    fire("NomadAfterTool", "put_file", "sess-nomad");
+    let both = b.run("uuid-seed", &["claims", "--all"]);
+    let holders = both.lines().filter(|l| l.contains("nomad.rs")).count();
+    assert_eq!(
+        holders, 2,
+        "a payload-only manifest vendor must hold a claim beside the control: {both}"
+    );
+}

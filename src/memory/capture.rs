@@ -33,9 +33,9 @@ const STALE_MARKER_SECS: u64 = 30 * 86_400;
 /// session's count, indefinitely. A file per session also gives the read-modify-write below a
 /// single writer — the residual race is one session's own parallel tool calls, where a lost
 /// increment delays the notice by one failure instead of resetting it.
-fn failure_marker() -> Option<PathBuf> {
+fn failure_marker(payload: Option<&str>) -> Option<PathBuf> {
     let path = crate::db::db_path().ok()?;
-    Some(path.with_file_name(marker_name(session_key().as_deref())))
+    Some(path.with_file_name(marker_name(session_key(payload).as_deref())))
 }
 
 /// The marker filename for one session — or the shared pre-D108 name when no session is known.
@@ -46,13 +46,36 @@ fn marker_name(session: Option<&str>) -> String {
     }
 }
 
-/// This session's key, made filesystem-safe. The same precedence as `identity::resolve`:
-/// `AMB_AGENT` overrides, and otherwise the host CLI's own session variable — the list is
-/// `Vendor::session_env`'s, so a second CLI is recognised without touching this function.
-fn session_key() -> Option<String> {
-    let raw = std::env::var("AMB_AGENT")
-        .ok()
-        .or_else(|| crate::vendors::detect().session_id_from_env())?;
+/// This session's key, made filesystem-safe. The same precedence as [`crate::identity::resolve_from`]:
+/// `AMB_AGENT` overrides, then the host CLI's own session variable from `Vendor::session_env`,
+/// then — on the hook path, where one is in hand — the id the payload carries.
+///
+/// **That third arm is D113's, and this function did not have it for two days** (M68). The
+/// sentence above used to end at the environment and claim parity with `identity::resolve`; D113
+/// added the payload fallback there and nothing brought it here, so the comment asserted a parity
+/// that had stopped holding. The consequence is D108 reversed: with no environment variable
+/// `session_key` returns `None`, every session on the machine shares the one `.memory-failures`
+/// file, and any healthy session's success clears a broken session's count indefinitely — which
+/// is the precise defect D108 exists to have fixed.
+///
+/// Latent until D115, and that is the part worth keeping. No shipped vendor reaches it — Claude
+/// Code and Gemini CLI both export a variable — so it was unreachable on 2026-09-04 and became
+/// reachable on 2026-09-05, when `parse_manifest` started accepting vendors that export nothing.
+/// **A fix can widen the door to a bug it has nothing to do with**, and neither change is wrong.
+fn session_key(payload: Option<&str>) -> Option<String> {
+    session_key_with(|k| std::env::var(k).ok(), payload)
+}
+
+/// [`session_key`] with the environment injected, so the precedence is testable.
+///
+/// The same seam `vendors::detect_with` has and for the same recorded reason: M51 found every
+/// mutant of this module's env shell alive, because a test cannot set process environment without
+/// racing the parallel runner. Adding the arm without adding the seam would have left the new
+/// precedence in exactly the state M51 was written about.
+fn session_key_with(env: impl Fn(&str) -> Option<String>, payload: Option<&str>) -> Option<String> {
+    let raw = env("AMB_AGENT")
+        .or_else(|| crate::vendors::detect_with(&env).session_id(&env))
+        .or_else(|| payload.map(str::to_string))?;
     sanitise_key(&raw)
 }
 
@@ -81,8 +104,8 @@ fn sanitise_key(raw: &str) -> Option<String> {
 ///
 /// **Never fails the caller.** A capture layer that could not write its own failure counter must
 /// still not break a session (D9).
-pub fn note_failure() -> i64 {
-    let Some(path) = failure_marker() else {
+pub fn note_failure(payload: Option<&str>) -> i64 {
+    let Some(path) = failure_marker(payload) else {
         return 0;
     };
     bump_marker(&path)
@@ -104,8 +127,8 @@ fn bump_marker(path: &std::path::Path) -> i64 {
 
 /// Record that this session's memory hook succeeded. Clears its own count — and only its own,
 /// which is the point of D108 — so the threshold means *consecutive*.
-pub fn note_success() {
-    if let Some(path) = failure_marker() {
+pub fn note_success(payload: Option<&str>) {
+    if let Some(path) = failure_marker(payload) {
         clear_marker(&path);
     }
 }
@@ -125,7 +148,9 @@ fn clear_marker(path: &std::path::Path) {
 /// route the warning has (D108) — the pre-D108 global file did this by accident, and keeping it
 /// on purpose is what this comment records.
 pub fn failure_count() -> i64 {
-    let Some(marker) = failure_marker() else {
+    // `None`, and it changes nothing: only the *directory* is read below, and every session's
+    // marker shares it. Passing this session's id would name a file that is never opened.
+    let Some(marker) = failure_marker(None) else {
         return 0;
     };
     let Some(dir) = marker.parent() else {
@@ -628,6 +653,55 @@ mod tests {
         assert_eq!(f.failures.len(), 1);
         assert!(f.failures[0].len() <= 120, "got {}", f.failures[0].len());
     }
+    /// **The precedence D113 added to identity and this module did not get** (M68). Four rows,
+    /// and the third is the one that was missing: a vendor exporting no session variable is
+    /// identified by the id its hook payload carries, exactly as `identity::resolve_from` does.
+    ///
+    /// The last two assertions are the *consequence* rather than the mechanism, and they are why
+    /// this is a defect rather than an inconsistency. With no key at all every session on the
+    /// machine writes one shared marker file, so any healthy session's success clears a broken
+    /// session's count — the state D108 exists to have fixed, reachable again through a door
+    /// D115 opened on the same day this was found.
+    #[test]
+    fn the_marker_key_falls_back_to_the_payload_before_it_falls_back_to_sharing() {
+        let none = |_: &str| -> Option<String> { None };
+        let vendor_env = |k: &str| (k == "CLAUDE_CODE_SESSION_ID").then(|| "from-env".to_string());
+        let flag = |k: &str| (k == "AMB_AGENT").then(|| "from-flag".to_string());
+
+        assert_eq!(
+            session_key_with(flag, Some("from-payload")).as_deref(),
+            Some("from-flag"),
+            "AMB_AGENT outranks everything, as it does in identity::resolve_from"
+        );
+        assert_eq!(
+            session_key_with(vendor_env, Some("from-payload")).as_deref(),
+            Some("from-env"),
+            "the vendor's own variable outranks the payload — D113 put the payload last so that \
+             adding it changes nothing for a vendor that already worked"
+        );
+        assert_eq!(
+            session_key_with(none, Some("from-payload")).as_deref(),
+            Some("from-payload"),
+            "and with no variable anywhere, the payload names the session"
+        );
+        assert_eq!(
+            session_key_with(none, None),
+            None,
+            "nothing at all still degrades rather than panicking"
+        );
+
+        assert_eq!(
+            marker_name(session_key_with(none, Some("s1")).as_deref()),
+            ".memory-failures-s1",
+            "a payload-only session gets its own marker file"
+        );
+        assert_eq!(
+            marker_name(session_key_with(none, None).as_deref()),
+            ".memory-failures",
+            "and only a session nothing can name at all falls back to the shared one"
+        );
+    }
+
     /// D108's two rules in one table: the reader takes the machine's worst *fresh* marker (a
     /// healthy session must carry a broken sibling's count, or the notice can never travel),
     /// and a marker a month silent is a crashed session's residue, not a live outage.

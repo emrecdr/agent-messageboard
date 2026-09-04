@@ -43,7 +43,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 643 tests (645 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 646 tests (648 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -887,7 +887,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 643 tests (645 on Linux)
+cargo test                       # all 646 tests (648 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -899,6 +899,8 @@ python3 tools/cfg_phantoms.py    # mutants.sh runs this itself; --self-test chec
 python3 tools/check_secret_literals.py   # refuse a credential-shaped literal in tracked source
 python3 tools/check_mutation_coverage.py # which modules have never had a mutation round
 python3 tools/check_docs.py              # the mechanical half of doc currency (D110)
+python3 tools/check_action_pins.py       # every workflow `uses:` is a commit SHA, never a tag
+python3 tools/check_unused_deps.py       # a declared dependency that no code imports
 ```
 
 `cfg_phantoms.py` exists because a `cargo mutants` MISSED row can mean *"this code is not compiled
@@ -1032,7 +1034,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D114, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D118, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

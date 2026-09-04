@@ -141,6 +141,54 @@ fn a_failure_under_json_is_reported_as_json() {
     );
 }
 
+/// **Every `--json` object says which contract it satisfies, success or failure** (D117).
+///
+/// D56's table names `CLI + --json shapes` a versioned surface, *bound by agents parsing output*,
+/// and defines a breaking change as removing a command, flag or field. The payload could not say
+/// which version it was: `amb --version` carries the full fingerprint, in a different invocation
+/// from the data. A parser that cached a strategy found out the shape had moved by failing — on
+/// the hook path, silently, because D9 requires exit 0.
+///
+/// **Enumerated over commands rather than asserted once**, for the reason `delivery::UNTRUSTED`
+/// exists: one assertion against `inbox` proves `inbox`, and the next command added is the one
+/// that quietly ships unstamped. The error row matters most — a reader that cannot parse the
+/// success shape is exactly the reader who needs to know what it is looking at.
+#[test]
+fn every_json_object_carries_the_contract_version() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run(
+        "uuid-alice",
+        &["send", "@", "--subject", "s", "--body", "hello"],
+    );
+    b.run("uuid-alice", &["claim", "src/lib.rs", "--intent", "work"]);
+
+    for args in [
+        vec!["inbox"],
+        vec!["inbox", "--unread"],
+        vec!["agents"],
+        vec!["claims"],
+        vec!["claims", "--all"],
+        vec!["doctor"],
+    ] {
+        let v = b.json("uuid-alice", &args);
+        assert_eq!(
+            v["v"], 1,
+            "{args:?} must name the contract it satisfies: {v}"
+        );
+    }
+
+    // The failure shape too, and it is the one that cannot be skipped: a parser reaching the
+    // error branch is already unable to read the success branch.
+    let out = b.try_run(
+        "uuid-alice",
+        &["send", "ghost", "--subject", "s", "--body", "b", "--json"],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
+    assert_eq!(v["v"], 1, "the error object is versioned too: {v}");
+    assert_eq!(v["error"]["kind"], "no_such_agent", "and still an error");
+}
+
 #[test]
 fn broadcasting_to_a_mistyped_project_warns_without_failing() {
     // D26. `@project` addresses a place, so this is not an error — the message waits for

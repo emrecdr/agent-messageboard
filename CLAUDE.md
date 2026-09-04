@@ -25,7 +25,7 @@ install.
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite compiles; ~15s cold
-cargo test                       # all 643 tests (645 on Linux)
+cargo test                       # all 646 tests (648 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # run before finishing; the gate runs `cargo fmt --check`
 ./tools/verify.sh                # every gate check in one command, ~30s after a change (D70)
@@ -38,6 +38,8 @@ python3 tools/check_secret_literals.py   # in the gate; see its header for why f
 python3 tools/check_orphaned_docs.py     # in the gate; items that LOST a doc, not ones that never had one
 python3 tools/check_mutation_coverage.py # in the gate; which modules have never had a round
 python3 tools/check_docs.py              # in the gate; the mechanical half of doc currency (D110)
+python3 tools/check_action_pins.py       # in the gate; every workflow `uses:` is a commit, never a tag
+python3 tools/check_unused_deps.py       # in the gate; cargo cannot see a dependency nothing imports
 ```
 
 **`bench.sh`, `mutants.sh` and `eyeball.sh` are separate from the gate on purpose and each says
@@ -95,7 +97,7 @@ AMB_VAULT=/tmp/v cargo run -- memory observe --title t --learned l   # memory is
 
 ## `docs/DECISIONS.md` is the specification
 
-D1–D114 are **settled**, and each records *what was rejected and why*. Read it before proposing a
+D1–D118 are **settled**, and each records *what was rejected and why*. Read it before proposing a
 design change — the argument has probably already been had. `docs/OPEN-QUESTIONS.md` holds what is
 genuinely undecided; when one is settled, delete it there and record it as a new decision.
 

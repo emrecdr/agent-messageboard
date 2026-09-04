@@ -258,8 +258,35 @@ Created by `amb`. Remove its hooks with `amb uninstall`.
 
 /// Open a specific path. Separate from [`open`] so tests can point at a temporary file without
 /// reaching through the environment.
+///
+/// **Keeps the query planner's statistics current, and only this path does** (D118). Before it,
+/// `ANALYZE` had never run on any board: the live one carried no `sqlite_stat1` table at all, so
+/// every plan since the project began was chosen from defaults. SQLite's own guidance names this
+/// architecture — *"applications with short-lived database connections should run `PRAGMA
+/// optimize` once, just prior to closing each database connection"* — and every `amb` invocation
+/// is a short-lived connection.
+///
+/// **Not before closing, and not on the hook path, for two separate reasons.**
+///
+/// Plain `PRAGMA optimize` only considers tables *this connection has already used*, so at open
+/// it is a guaranteed no-op; `0x10002` is the documented mask that makes it examine every table
+/// instead. Running it at close would be the faithful form and costs a structural change — the
+/// connection is dropped implicitly at the end of a 1,300-line match with many early returns —
+/// which is not worth it for a gain nothing has measured.
+///
+/// The hook path is excluded because `optimize` *writes*: when statistics are stale it runs
+/// `ANALYZE`, which takes the write lock. D30 measured twelve concurrent processes contending on
+/// a single first open, hooks get a 2 s budget against the platform's 5 s kill (see
+/// [`HOOK_BUSY_TIMEOUT_MS`]), and D9 forbids the one ending where the platform kills us mid-wait.
+/// Interactive commands run often enough — `inbox`, `claims`, `send` — to keep statistics fresh
+/// without ever putting a write on the lane that must not stall.
+///
+/// Best effort in the strongest sense: the result is discarded. A board that cannot be analysed
+/// is a board that still works, and this must never be the thing that fails an open.
 pub fn open_at(path: &Path) -> Result<Connection> {
-    open_at_with(path, INTERACTIVE_BUSY_TIMEOUT_MS)
+    let conn = open_at_with(path, INTERACTIVE_BUSY_TIMEOUT_MS)?;
+    let _ = conn.execute_batch("PRAGMA optimize=0x10002;");
+    Ok(conn)
 }
 
 /// How long an *interactive* open may wait on a busy board, in milliseconds.

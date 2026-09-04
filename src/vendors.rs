@@ -108,6 +108,15 @@ pub struct Vendor {
     pub edit_tools: &'static [&'static str],
     /// Session-id environment variables, most specific first. `AMB_AGENT` overrides all of them
     /// and is not listed here, because it belongs to `amb` rather than to any vendor.
+    ///
+    /// **Empty is legal, and it describes most of the field** (D115). Until D113 an empty list
+    /// meant a vendor no session of which could ever be identified, and `parse_manifest` refused
+    /// a manifest on exactly that ground. The payload fallback in
+    /// [`crate::identity::resolve_from`] made that sentence false, and nothing went red — a
+    /// refusal that encodes a world is not a comment about one, so when the world changed the
+    /// guard went on rejecting configurations that had started working. A vendor with no variable
+    /// is identified on every hook, and on no command typed at a terminal; there
+    /// `Error::NoIdentity` names `AMB_AGENT` first, which is the remedy.
     pub session_env: &'static [&'static str],
 }
 
@@ -336,9 +345,23 @@ pub struct Problem {
 /// whose mail never arrives, and inventing a spelling would install an entry the runtime ignores
 /// in silence — the exact failure that reading Gemini's binary caught.
 ///
-/// **A manifest may not take a shipped vendor's id.** Silent shadowing would let a file on disk
+/// **A manifest may not take a known vendor's id.** Silent shadowing would let a file on disk
 /// move where `amb install` writes with nothing saying so; the refusal names the collision.
-pub fn parse_manifest(doc: &Value, shipped: &[&str]) -> Result<Vendor, String> {
+///
+/// **`known` carries whole descriptors rather than ids, because reachability is the other
+/// collision** (D115). A vendor is routed to by its environment variable or by an event spelling
+/// only it uses ([`detect_for_hook`]), so one that declares neither is not a vendor with a
+/// missing field — it is a descriptor no hook can ever arrive at. Its sessions would register,
+/// appear alive to a peer running `amb agents`, and record nothing, which is the condition D114
+/// exists for arriving through the door D111 built for strangers.
+///
+/// **The residual hole is the partial collision, and it is deliberate.** A payload-only vendor
+/// that owns *some* spellings loads, and the lanes whose events it shares with another vendor are
+/// silently dead — `vendor_for_event` declines, `detect` answers Claude Code. Refusing that case
+/// would reject every CLI that spells one event like Claude's while owning the rest, which is most
+/// of them; `Result<Vendor, String>` has no channel for a warning, and inventing one is a larger
+/// change than this decision earns. Named here rather than left to be rediscovered.
+pub fn parse_manifest(doc: &Value, known: &[&'static Vendor]) -> Result<Vendor, String> {
     let req = |k: &str| -> Result<&'static str, String> {
         match doc.get(k).and_then(Value::as_str).map(str::trim) {
             Some(v) if !v.is_empty() => Ok(leak(v)),
@@ -358,7 +381,7 @@ pub fn parse_manifest(doc: &Value, shipped: &[&str]) -> Result<Vendor, String> {
     };
 
     let id = req("id")?;
-    if shipped.contains(&id) {
+    if known.iter().any(|v| v.id == id) {
         return Err(format!(
             "id {id:?} already belongs to another vendor; a manifest may not shadow one"
         ));
@@ -394,41 +417,62 @@ pub fn parse_manifest(doc: &Value, shipped: &[&str]) -> Result<Vendor, String> {
                 .into(),
         );
     }
+    // **Read before `events`, so which gate a fixture reaches does not change.** A manifest is
+    // refused on the *first* thing wrong with it, so moving a gate earlier silently rewrites the
+    // reason every incomplete fixture reports. `doctor_names_a_manifest_it_refused_and_still_
+    // loads_the_good_one` asserts that a manifest with no `config_dir` says so; building `events`
+    // first makes it say `events.session_start` instead, and the test's own comment predicted
+    // exactly that the last time a required key was added. Keeping the order is cheaper than
+    // re-arguing which reason is the right one to show.
+    let config_dir = req("config_dir")?;
+    let settings_file = req("settings_file")?;
+
+    let events = Events {
+        session_start: ev("session_start")?,
+        turn_end: ev("turn_end")?,
+        tool_post: ev("tool_post")?,
+        session_end: ev("session_end")?,
+        tool_pre: ev("tool_pre")?,
+        // Absent means the vendor has no such event — Gemini's case, and why the field is
+        // optional at all. It is the one event whose absence is a fact rather than a mistake,
+        // which is exactly why reading it from the wrong level was invisible: the first
+        // version looked it up at the document root instead of under `events`, so every
+        // manifest silently lost its capture lane and the dry-run printed two lanes where
+        // three were declared. Nothing failed. The truth table below is what noticed.
+        tool_failed: doc
+            .get("events")
+            .and_then(|e| e.get("tool_failed"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(leak),
+    };
+
+    // **A manifest has to offer one of the two ways to reach a vendor.** Not "must export a
+    // variable" — D113 gave the payload-only CLIs an identity, so the environment is one route
+    // and an event spelling no other vendor uses is the other. A descriptor offering neither is
+    // refused here rather than at the first hook that quietly resolves to Claude Code.
     if session_env.is_empty() {
-        return Err(
-            "session_env must name at least one environment variable, or no session of this \
-             vendor can ever be identified"
-                .into(),
-        );
+        let taken: Vec<&str> = known.iter().flat_map(|k| k.events.all()).collect();
+        if events.all().iter().all(|e| taken.contains(e)) {
+            return Err(format!(
+                "vendor {id:?} names no session_env, so only an event spelling can route a hook \
+                 to it — and every event it declares is already spelled by another vendor, which \
+                 makes `vendor_for_event` decline to answer and identity fall back to Claude \
+                 Code. Such a session registers, appears alive on the board, and records nothing. \
+                 Add \"session_env\", or declare the spellings this CLI actually uses."
+            ));
+        }
     }
 
     Ok(Vendor {
         id,
         label: opt(doc, "label").unwrap_or(id),
-        config_dir: req("config_dir")?,
-        settings_file: req("settings_file")?,
+        config_dir,
+        settings_file,
         local_settings_file: opt(doc, "local_settings_file"),
         managed_settings: opt(doc, "managed_settings"),
-        events: Events {
-            session_start: ev("session_start")?,
-            turn_end: ev("turn_end")?,
-            tool_post: ev("tool_post")?,
-            session_end: ev("session_end")?,
-            tool_pre: ev("tool_pre")?,
-            // Absent means the vendor has no such event — Gemini's case, and why the field is
-            // optional at all. It is the one event whose absence is a fact rather than a mistake,
-            // which is exactly why reading it from the wrong level was invisible: the first
-            // version looked it up at the document root instead of under `events`, so every
-            // manifest silently lost its capture lane and the dry-run printed two lanes where
-            // three were declared. Nothing failed. The truth table below is what noticed.
-            tool_failed: doc
-                .get("events")
-                .and_then(|e| e.get("tool_failed"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(leak),
-        },
+        events,
         tool_matcher: opt(doc, "tool_matcher"),
         edit_tools: Box::leak(edit_tools.into_boxed_slice()),
         session_env: Box::leak(session_env.into_boxed_slice()),
@@ -525,8 +569,11 @@ fn loaded() -> &'static (Vec<&'static Vendor>, Vec<Problem>) {
                     continue;
                 }
             };
-            let taken: Vec<&str> = vendors.iter().map(|v| v.id).collect();
-            match parse_manifest(&doc, &taken) {
+            // Bound before the match so the borrow of `vendors` ends before the `Ok` arm pushes
+            // into it. Every vendor already accepted is the context: an id may not be reused, and
+            // a payload-only vendor needs an event spelling none of them has taken.
+            let parsed = parse_manifest(&doc, &vendors);
+            match parsed {
                 Ok(v) => vendors.push(Box::leak(Box::new(v))),
                 Err(detail) => problems.push(Problem { file: name, detail }),
             }
@@ -681,7 +728,7 @@ mod tests {
             "edit_tools": ["put_file", "patch"],
             "session_env": ["ACME_SESSION"]
         });
-        let v = parse_manifest(&full, &["claude-code"]).expect("a complete manifest loads");
+        let v = parse_manifest(&full, &[&CLAUDE_CODE]).expect("a complete manifest loads");
         assert_eq!(v.id, "acme-cli");
         assert_eq!(v.label, "ACME CLI");
         assert_eq!(v.events.turn_end, "Done");
@@ -721,13 +768,52 @@ mod tests {
         let v = parse_manifest(&no_fail, &[]).expect("a vendor may simply lack a failure event");
         assert_eq!(v.events.tool_failed, None);
 
-        // A vendor nothing can identify is refused: it would silently never be detected.
+        // **A payload-only vendor loads, and the reversal here is the whole of D115.** What stood
+        // in these six lines was `assert!(parse_manifest(&no_env, &[]).is_err(), "no session_env,
+        // no vendor")`, and the refusal it pinned gave its reason as "no session of this vendor
+        // can ever be identified". D113 made that false — `resolve_from` falls back to the
+        // payload — and nothing went red, because a refusal encoding a world is not a comment
+        // about one: when the world changed, the guard went on rejecting configurations that had
+        // started working, and the test went on agreeing with it.
         let mut no_env = full.clone();
         no_env["session_env"] = serde_json::json!([]);
+        let v = parse_manifest(&no_env, &[]).expect("a payload-only vendor owns its spellings");
         assert!(
-            parse_manifest(&no_env, &[]).is_err(),
-            "no session_env, no vendor"
+            v.session_env.is_empty(),
+            "no variable, and that is now legal"
         );
+
+        // Refused exactly when nothing can route to it: no variable of its own, and every event
+        // spelling already belonging to a vendor that has one. The same document is accepted
+        // above and refused here, so this is a property of the *set* rather than of the file —
+        // which is why `known` carries descriptors and not ids.
+        let twin = serde_json::json!({
+            "id": "twin-cli",
+            "config_dir": ".twin",
+            "settings_file": "settings.json",
+            "events": {
+                "session_start": "Start", "turn_end": "Done", "tool_post": "AfterTool",
+                "session_end": "End", "tool_pre": "BeforeTool", "tool_failed": "Failed"
+            },
+            "edit_tools": ["put_file"],
+            "session_env": ["TWIN_SESSION"]
+        });
+        let twin: &'static Vendor = Box::leak(Box::new(
+            parse_manifest(&twin, &[]).expect("the twin is reachable by its own variable"),
+        ));
+        let err = parse_manifest(&no_env, &[twin])
+            .expect_err("no variable and no spelling of its own reaches nothing");
+        assert!(
+            err.contains("session_env"),
+            "the refusal names the remedy: {err}"
+        );
+
+        // The presence row that proves the premise: the *same* total collision loads once a
+        // variable is present. Without it, dropping the `session_env.is_empty()` guard and
+        // checking the collision unconditionally would survive every assertion above — the
+        // refusal would simply fire more often, and only a manifest that should have loaded
+        // would notice.
+        parse_manifest(&full, &[twin]).expect("a variable reaches a vendor whose spellings clash");
 
         // **Present-but-empty is the row the first version of this test never reached** (M62).
         // Removing a key and setting it to `""` take different branches, and only the removal
@@ -757,7 +843,7 @@ mod tests {
         // And a manifest may not quietly take a shipped vendor's id.
         let mut shadow = full.clone();
         shadow["id"] = serde_json::json!("claude-code");
-        let err = parse_manifest(&shadow, &["claude-code"]).expect_err("shadowing is refused");
+        let err = parse_manifest(&shadow, &[&CLAUDE_CODE]).expect_err("shadowing is refused");
         assert!(err.contains("shadow"), "{err}");
 
         // The label is the one field with a default, because an id is already a name.

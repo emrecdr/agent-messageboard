@@ -1,0 +1,37 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell"]
+# Where the shell installer puts the binary.
+#
+# **Not `CARGO_HOME`, which is dist's default**, for two reasons. A person installing an agent-CLI
+# tool need not have Rust at all, and `~/.cargo/bin` would then be a directory the installer
+# creates and nothing has on `PATH`. And it is the path `tools/install.sh` already writes, which
+# is the one the hooks on a developed-on machine invoke (D94) — so install and upgrade land on
+# the same file, and the stale-hook condition Q14 raised about packaged upgrades cannot arise
+# from this installer. `dist` refuses `CARGO_HOME` combined with any other strategy, so this is
+# one path rather than a fallback list.
+install-path = "$HOME/.local/bin"
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
+
+# Every action in the generated workflow, pinned to a commit.
+#
+# A floating tag is mutable, and this is the workflow that builds and publishes artifacts to
+# strangers — the highest-value one on this repository to compromise. `ci.yml` and `audit.yml`
+# are pinned the same way.
+#
+# **Kept here rather than edited into `release.yml`, because that file is generated.** A pin
+# applied by hand reverts on the next `dist generate` with nothing saying so — the artifact class
+# this project keeps getting burned by. Config is the only place a pin survives regeneration.
+[dist.github-action-commits]
+"actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803"
+"actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+"actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"

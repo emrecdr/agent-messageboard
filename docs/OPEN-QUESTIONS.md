@@ -38,7 +38,16 @@ data).
 argument it framed itself as. It is now D101: the one cross-vendor mechanism that would have made
 breadth cheap cannot push into a running session, and the request to make it was closed
 `NOT_PLANNED` twice. What Q8 called "the choice" was already foreclosed. The distribution half of
-its market argument is split off as Q14 rather than settled with it.
+its market argument was split off as Q14 rather than settled with it.
+
+**Q14 was settled on 2026-09-05** and deleted per that convention. It is now D116: `dist` generates
+the release workflow, `publish = false` stays exactly as D56 left it — `[package.metadata.dist]
+dist = true` is what makes the binary visible, and `dist`'s own error text recommending the
+opposite is the trap — and the shell installer writes `$HOME/.local/bin`, the path the hooks
+already invoke, so D94's stale-hook condition cannot arise from it. Q14 asked its question around
+one hazard and had already had it measured (M44); what it had never had was anyone running the
+tool. **It is settled with the pipeline unfired**, which D116 says in its own last section rather
+than leaving to be discovered: the first tag is the test, and nobody has pushed one.
 
 ---
 
@@ -266,53 +275,3 @@ question closes with D27 and the messaging half of the project with it. If the m
 to be laptops that sleep with no always-on host among them, the hub degrades into a merge problem
 and the replication argument deserves re-opening on its merits rather than being inherited from
 here.
-
----
-
-## Q14 · How does anyone who is not us install `amb`?
-
-**Raised 2026-08-31, split off from Q8 rather than settled with it.** They are different questions
-and pairing them hides the cheaper one: vendor breadth costs a delivery contract per vendor and buys
-vendors on which D9's guarantee is weaker (D101), while distribution costs a release pipeline and
-touches no invariant.
-
-**The gap, measured against the field the same day.** `hcom` installs with
-`brew install aannoo/hcom/hcom`, and also offers `uv tool install hcom`, a shell installer and a
-PowerShell one. `amb` installs by cloning the repository and running `cargo install --path .` — or,
-since that does not update the binary the hooks actually invoke, `./tools/install.sh`. The
-repository was published on 2026-08-31 and CI ran for the first time the same day. Nothing has ever
-been released from it.
-
-**What the field does.** `dist` — formerly `cargo-dist`, 2.1k★, used by Zed, rustfmt and starship —
-generates the GitHub Actions workflow: macOS x86_64 and aarch64, Linux glibc and musl, Windows, then
-a Release with signed artifacts, a Homebrew tap and a shell installer. `cargo-binstall` consumes
-those releases. crates.io is a separate axis and orthogonal to all of it.
-
-**Two things here are not generic packaging questions, and they are why this is filed rather than
-just done.**
-
-- **`publish = false` is a decision, not a default** (D56). The version covers four contract
-  surfaces and the Rust API is deliberately not one of them, because nothing links against `amb`.
-  Publishing does not overturn that reasoning, but it makes the manifest's claim visible to
-  strangers, so D56 is what to read before the flag is flipped.
-- **A package manager upgrading the binary is the stale-hook hazard with a new cause.** The
-  condition D94 records has recurred five times: `~/.claude/settings.json` invokes a binary at a
-  fixed path and `cargo install` writes a different one, so manual commands work perfectly while
-  every hook on the machine fails silently. `brew upgrade` has the same shape and a worse trigger,
-  because it fires without anyone thinking about `amb` at all. Whatever ships has to answer what
-  `amb doctor` reports the morning after an unattended upgrade — and D73 built `doctor`'s
-  fingerprint comparison for exactly this question, so the detector already exists.
-
-  **Simulated and answered, 2026-08-31** (M44): under a sandboxed `$HOME` whose hooks invoke a
-  binary at another fingerprint, `doctor` prints `BAD`, names the hook, shows both fingerprints,
-  states the condition in one sentence — *"Manual commands work and every hook is stale"* — and
-  gives the literal `cp` that fixes it. The main objection to distributing is therefore detected,
-  named and remediable the morning after. Two caveats are the residue: detection requires a person
-  to *run* `doctor` (it exits 0 by D73, so anything unattended must read `--json`'s `worst`, not
-  `$?`), and the comparison keys on the executable being *named* `amb` — true for Homebrew and
-  every packager in Q14's survey, but a rename makes the hooks invisible rather than stale.
-
-**Not urgent and deliberately undecided.** Nobody has tried to install it. This is filed because
-publication made the gap real and because the answer is cheap, not because there is evidence of
-demand — and Q10's lesson is that shipping a mechanism before anything can evaluate it is how this
-project wastes work.

@@ -4422,6 +4422,13 @@ a manifest carrying only an `id` is refused for its missing `session_env` and ne
 fixture has to clear the earlier gates to exercise a later one — M17's rule, broken minutes after
 re-reading it in the paragraph above.
 
+> **The gate named here no longer exists (D115, 2026-09-05).** `session_env` is optional now, so
+> the same one-key fixture is refused for `edit_tools` instead. The record stands as written
+> because it describes what happened; only the mechanism sentence has aged, and the lesson it
+> carries did not — reordering the gates in `parse_manifest` for D115 would have moved this test's
+> reported reason from `config_dir` to `events.session_start`, which is this paragraph coming true
+> a second time. The gates were kept in order for exactly that reason.
+
 ## M63 · five doc comments describing the wrong function, and two detectors each blind to what the other saw
 
 **Modules:** `src/claims.rs`, `src/doctor.rs`, `src/hooks.rs`, `src/identity.rs`, `src/main.rs`
@@ -4703,3 +4710,83 @@ Its stated scope is the omission worth knowing: it reports only items that **los
 `messages::unknown_project` shipped bare and this check would not have caught it. That is the
 `missing_docs` backlog — 33 public items, 242 counting struct fields — and it remains a separate
 decision, deliberately not smuggled in behind a check that can be adopted at zero cost today.
+
+## M68 · two audit findings a compiler cannot reach: an arm D113 did not carry over, and a dependency nothing imports
+
+**Modules:** `src/memory/capture.rs`, `src/error.rs`, `Cargo.toml`, `tools/check_unused_deps.py`
+
+**2026-09-05.** A read-only audit of the whole tree produced thirteen findings; these two were the
+ones that were unambiguous defects rather than judgement calls, and neither is visible to
+`cargo`.
+
+### `session_key` reads the environment alone, and its comment claimed otherwise
+
+`memory::capture::session_key` chooses the filename of a session's failure marker. It read
+`AMB_AGENT`, then `Vendor::session_env`, and stopped — while its own doc comment said *“the same
+precedence as `identity::resolve`”*. D113 added a third arm to `identity::resolve_from`, the
+session id the hook payload carries, and nothing brought it here. From that commit the comment
+asserted a parity that had stopped holding.
+
+**The consequence is D108 exactly reversed.** With no environment variable, `session_key` returns
+`None`, `marker_name` falls back to the shared pre-D108 `.memory-failures`, and every session on
+the machine writes one file — so any healthy session's success clears a broken session's count,
+indefinitely. That sentence is D108's own statement of the bug it was written to fix.
+
+**Latent, and the interesting part is what made it reachable.** No shipped vendor exports nothing:
+Claude Code and Gemini CLI both set a variable, so this arm could not be entered on 2026-09-04. It
+became reachable on 2026-09-05, when D115 made `parse_manifest` accept a manifest with no
+`session_env`. **A fix widened the door to a bug it had nothing to do with**, and neither change
+is wrong — which is the reusable shape. When a change makes a previously-impossible input
+possible, the question is not whether *that* change is correct but what else has been assuming the
+input could not occur.
+
+**Found by grep, not by a test, and the arithmetic is the method.** CLAUDE.md's rule is to count
+the layers a rule passes through and the layers that assert it. `session_id_from_env` and
+`detect()` have four call sites in the tree; two are the manual-command path, where no payload
+exists and reading the environment alone is correct; one is `identity::resolve_from`, which D113
+fixed; the fourth was this. One rule, two places that need it, one that had it.
+
+The fix adds the arm and a `session_key_with` seam, because M51 had already recorded that this
+module's env shell is untestable without one — adding the precedence without the seam would have
+left the new arm in the state M51 was written about. The test is a truth table with two rows
+asserting the *consequence* (which marker filename results) rather than only the mechanism.
+
+### `anyhow` was compiled into every build and imported by nothing
+
+`Cargo.toml` declared `anyhow = "1.0.104"`. No file in `src/` or `tests/` ever referenced it. The
+only mentions in the tree were in `src/error.rs`'s module documentation, which stated where it was
+used: *“`anyhow` lives at the binary boundary in `main.rs`, where the only remaining job is to
+print and pick an exit code.”* `main.rs` matches on `Error` directly and maps it through
+`Error::exit_code` — the stronger design, and the one D97 depends on.
+
+**The comment is why it survived.** An unused dependency looks like an oversight; a documented one
+looks deliberate. This is the false-comment failure `sync_dir` and `recall` are recorded for, with
+the direction inverted: rather than making wrong work look sound, it made a redundant thing look
+load-bearing.
+
+**No lint can reach it, and that is structural.** An unused dependency is not dead code — nothing
+is compiled from it, so there is no item for `rustc` to warn about. `cargo-udeps` needs nightly;
+`cargo-machete` is another binary to install and keep current. `tools/check_unused_deps.py` is in
+the gate instead, and the difficulty is the same one `find_unread_fields.py` was repaired for
+(M39): a name mentioned in prose reads as a use. `src/error.rs` now discusses `anyhow` by name in
+the paragraph explaining its removal, so the check strips comments before searching — **verified
+by re-adding the dependency and watching it fail while that paragraph stood**.
+
+### What the audit did not act on, and why it is recorded here
+
+Eleven further findings were validated and deferred, each for a stated reason. Two are worth
+naming because the reason is the interesting part:
+
+- **`messages::select` makes three correlated subqueries into `reads` per row**, all keyed on the
+  identical `(m.id, agent)` pair, plus a temp B-tree for the `ORDER BY` — confirmed by
+  `EXPLAIN QUERY PLAN` against a copy of the live board. One `LEFT JOIN` collapses them, and
+  `reads`'s `PRIMARY KEY (msg_id, agent)` guarantees it cannot fan out. **Deferred because the
+  naive rewrite is silently wrong**: `NOT EXISTS(… attempts >= ?)` becomes
+  `(r.attempts IS NULL OR r.attempts < ?)`, and the obvious `NOT (r.attempts >= ?)` yields NULL
+  for a message with no `reads` row — excluding never-offered mail from delivery, which is the
+  D23/D33 failure class in the query D17 calls the project's central design claim.
+- **`thread_id` is written, settable through `send --thread`, threaded automatically by `reply`,
+  and rendered nowhere.** `find_unread_fields.py` reports it as read, correctly: `row_to_message`
+  reads it, the insert path writes it. What is missing is a reader *of consequence* — the
+  distinction that made `Redacted.removed` load-bearing at its printer rather than its increment
+  (M27). Surfacing it or deleting it are both honest; the current state is not.

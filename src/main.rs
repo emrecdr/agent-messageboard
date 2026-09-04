@@ -988,12 +988,16 @@ fn hook_main(mode: &str) -> ExitCode {
     // D9's guarantee is structural, not a discipline (D41).
     let result = if mode == hooks::MEMORY_ARG {
         let r = hook_memory(&input);
+        // The payload's id, for the same reason `hook_deliver` takes it (D113): a vendor that
+        // exports no session variable would otherwise key every session's marker to the shared
+        // pre-D108 name, and one healthy session's success would clear a broken one's count.
+        let payload = hooks::payload_session_id(&input);
         // Consecutive, so one blip does not accumulate toward the threshold and a real outage
         // does.
         match &r {
-            Ok(()) => amb::memory::note_success(),
+            Ok(()) => amb::memory::note_success(payload),
             Err(_) => {
-                amb::memory::note_failure();
+                amb::memory::note_failure(payload);
             }
         }
         r
@@ -1371,11 +1375,44 @@ fn read_body(body: Option<&str>, body_file: Option<&str>) -> Result<String, Erro
     }
 }
 
+/// The `--json` contract version, carried on every object this command prints.
+///
+/// **D56 names `--json` a versioned surface “bound by agents parsing output”, and until D117 the
+/// output could not say which version it satisfied.** `amb --version` has carried a full
+/// fingerprint since D56 — `amb 0.2.0 (532d23f 2026-09-05, schema 13, sqlite 3.53.2)` — and it
+/// travels in a *different invocation* from the data. A program that parses `amb inbox --json`
+/// and caches a strategy therefore had no way to notice the shape moving under it; it found out
+/// by failing, which on the hook path D9 makes silent.
+///
+/// **Independent of the package version, deliberately, and it is the schema's rule not SemVer's**
+/// (D56's own reasoning for keeping `PRAGMA user_version` off the version's list). `0.2.1` may
+/// ship for a reason no parser can observe; this integer moves only when a field a reader could
+/// be relying on changes meaning or leaves. Adding a field does not move it — that is what makes
+/// it safe to add one.
+const JSON_CONTRACT: u64 = 1;
+
 /// Print a JSON value, falling back to a valid JSON error object rather than panicking.
 ///
 /// A hook feeds this straight into a model's context, so emitting malformed JSON is worse than
 /// emitting an error — the reader cannot tell the difference between a bug and an empty inbox.
+///
+/// **The version goes on here rather than at 31 call sites**, which is the only reason it is
+/// cheap: every `--json` path in this file already funnels through this function. The hook
+/// envelope deliberately does *not* get one — `delivery::envelope` emits the host CLI's own hook
+/// schema, and adding a field to somebody else's format is the mistake D111 was written about.
 fn print_json(v: &serde_json::Value) {
+    let stamped;
+    let v = match v {
+        serde_json::Value::Object(map) => {
+            let mut m = map.clone();
+            m.insert("v".into(), JSON_CONTRACT.into());
+            stamped = serde_json::Value::Object(m);
+            &stamped
+        }
+        // Not an object, so there is nowhere to put it. No command emits this today; printing it
+        // unstamped is better than wrapping and changing the shape of output nobody asked about.
+        other => other,
+    };
     match serde_json::to_string(v) {
         Ok(s) => println!("{s}"),
         Err(e) => println!(r#"{{"error":"could not serialise output: {e}"}}"#),

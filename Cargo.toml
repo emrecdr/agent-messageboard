@@ -9,6 +9,16 @@ rust-version = "1.98.0"
 # Private tool — guard against accidental `cargo publish` to crates.io.
 publish = false
 description = "Message bus for concurrent coding-agent sessions on one machine"
+# Required by `dist` to generate the release workflow, and by nothing else. Adding it does not
+# reopen D56: `publish = false` above still stands, and `dist` is told to look past it below.
+repository = "https://github.com/emrecdr/agent-messageboard"
+
+# **`publish = false` hides the binary from `dist`, and this is the flag that unhides it** (D116).
+# Without it `dist` reports "this workspace doesn't have anything to Release" — a stranger reading
+# that would reasonably conclude the fix is to flip `publish`, which is the one thing D56 refuses.
+# Distribution and publication are separate axes; this line is what keeps them separate.
+[package.metadata.dist]
+dist = true
 
 [[bin]]
 name = "amb"
@@ -29,7 +39,8 @@ dbg_macro = "deny"
 unwrap_used = "deny"
 
 [dependencies]
-anyhow = "1.0.104"
+# `anyhow` was here and no line of code ever imported it (M68). `tools/check_unused_deps.py`
+# is in the gate so the next one is caught by arithmetic rather than by an audit.
 clap = { version = "4.6.6", features = ["derive"] }
 libc = "0.2.189"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
@@ -49,3 +60,10 @@ tempfile = "3.27.0"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# What `dist` builds release artifacts with. Written by `dist init`; kept because the released
+# binary should be the one the startup figures describe. It inherits `release` above, so the
+# three settings there apply and only `lto` is restated.
+[profile.dist]
+inherits = "release"
+lto = "thin"

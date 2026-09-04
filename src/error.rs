@@ -2,8 +2,18 @@
 //!
 //! `thiserror` here rather than `anyhow`, because these are the failures a *caller* may want to
 //! match on — a hook deciding whether a non-zero exit means "misconfigured" or "try again".
-//! `anyhow` lives at the binary boundary in `main.rs`, where the only remaining job is to print
-//! and pick an exit code.
+//!
+//! **`main.rs` does not use `anyhow` either, and this paragraph said it did** (M68). The claim
+//! was that `anyhow` lived at the binary boundary "where the only remaining job is to print and
+//! pick an exit code". Nothing there ever imported it: `main` matches on this enum directly and
+//! maps it through `Error::exit_code`, which is the stronger design and the one D97 depends on.
+//! The dependency was declared, compiled into every build, and read by no line of code.
+//!
+//! Kept as a note rather than deleted because of what it cost to find. A false comment about a
+//! mechanism sends the next reader looking for a crate that is not there — the failure `sync_dir`
+//! and `recall` are both recorded for — and here it was **load-bearing in the wrong direction**:
+//! it made an unused dependency look deliberate. `cargo` cannot warn about this, and
+//! `find_unread_fields.py` looks at fields; `tools/check_unused_deps.py` now does the arithmetic.
 
 /// Everything this library can fail with.
 #[derive(Debug, thiserror::Error)]
