@@ -577,9 +577,11 @@ fn run(cli: Cli) -> Result<(), Error> {
             // addresses a *place*, and a place may be occupied tomorrow (D17). But that argument
             // covers a project that does not exist *yet*, not a transposed letter in one that
             // does, so say so rather than swallowing it (D26).
-            let warning = match rcpt.agent_id {
+            // Both arms warn now. The `Some` arm used to be `None` — a direct message to a
+            // session that had exited days ago printed exactly what one to a live session prints.
+            let warning = match &rcpt.agent_id {
                 None => messages::unknown_project(&conn, rcpt.project.as_deref())?,
-                Some(_) => None,
+                Some(id) => messages::departed_recipient(&conn, id, db::now()?)?,
             };
 
             let id = messages::send(

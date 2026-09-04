@@ -507,6 +507,72 @@ pub fn nearest<'a>(typed: &str, known: &[&'a str]) -> Option<&'a str> {
 /// occupied tomorrow — so the message is kept and will reach whoever works there next. But that
 /// argument protects a project that does not exist *yet*; it does nothing for a transposed
 /// letter in one that already does, which used to be accepted in total silence (D26).
+/// The sentence a sender sees when the session they addressed is no longer running.
+///
+/// Pure, so the wording is testable without a roster: the database half is
+/// [`departed_recipient`], and every judgement lives here.
+///
+/// **Silence on the happy path is the whole design.** A note on every send is a note nobody reads
+/// by the third one (D24's rule for injected context, which this is a cousin of), so `None` is the
+/// answer whenever the recipient is alive or the answer is unknown. "Unknown" resolving to silence
+/// rather than to a warning is deliberate and matches `is_alive`: a session with no pid we can ask
+/// about degrades to recency, and warning on a maybe would train the reader to ignore the sentence
+/// that matters.
+pub fn departed_note(name: &str, alive: bool, quiet_secs: f64) -> Option<String> {
+    if alive {
+        return None;
+    }
+    let hours = quiet_secs / 3600.0;
+    let ago = if hours < 1.0 {
+        format!("{:.0} minute(s)", quiet_secs / 60.0)
+    } else if hours < 48.0 {
+        format!("{hours:.0} hour(s)")
+    } else {
+        format!("{:.0} day(s)", hours / 24.0)
+    };
+    // Says what is still true as well as what is wrong. The message is not lost — it is a log
+    // (D17), and `amb inbox` returns it whenever that agent runs again. What it will *not* do is
+    // arrive in a running session, which is the expectation `sent #N` sets on its own.
+    Some(format!(
+        "{name} last showed up {ago} ago and its session appears to be over, so nothing will \
+         deliver this until they return. It is kept: the board is a log, and `amb inbox` will \
+         still show it."
+    ))
+}
+
+/// Warn when a direct message is addressed to a session that has stopped running.
+///
+/// **The sibling of [`unknown_project`], and the arm that was missing.** That function warns when
+/// a *broadcast* names a place nobody has registered in (D26); the direct-message arm beside it
+/// produced no warning at all, so `sent #383` read identically whether the recipient was mid-turn
+/// or had exited days earlier. Measured on the real board before this was written: of 286 direct
+/// messages, 282 were acknowledged and the 4 that were not were all addressed to sessions that had
+/// already ended — the oldest waiting a week. The sender was told the same thing every time.
+///
+/// Advisory, never blocking, in keeping with the rest of the tool (D5): the message is written
+/// either way and this only decides whether a sentence follows it.
+pub fn departed_recipient(conn: &Connection, agent_id: &str, at: f64) -> Result<Option<String>> {
+    let row: Option<(String, Option<i64>, f64)> = conn
+        .query_row(
+            "SELECT name, pid, last_seen FROM agents WHERE id = ?1",
+            params![agent_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(sql("reading the recipient's roster row"))?;
+    // No row is not a warning: `resolve_recipient` already refused an unknown name, so this can
+    // only be a race with a roster that is being written, and inventing a death from it would be
+    // a warning about nothing.
+    let Some((name, pid, last_seen)) = row else {
+        return Ok(None);
+    };
+    Ok(departed_note(
+        &name,
+        crate::identity::is_alive(pid, last_seen, at),
+        (at - last_seen).max(0.0),
+    ))
+}
+
 pub fn unknown_project(conn: &Connection, project: Option<&str>) -> Result<Option<String>> {
     // `@@` names no project and reaches everyone, so there is nothing to be wrong about.
     let Some(project) = project else {
@@ -819,6 +885,35 @@ pub fn watch(
 
 #[cfg(test)]
 mod tests {
+
+    /// A truth table, and the `alive` row is what proves the others' premise: assert only that a
+    /// live recipient produces no sentence and a renderer that had stopped producing sentences
+    /// entirely would still pass. That is the absence-only trap this project keeps finding, so the
+    /// dead rows assert the text as well as its presence.
+    #[test]
+    fn only_a_departed_recipient_earns_a_sentence_and_it_says_the_message_is_kept() {
+        use super::departed_note;
+        assert_eq!(
+            departed_note("bob", true, 999_999.0),
+            None,
+            "a live session earns no note however long it has been quiet"
+        );
+        let note = departed_note("bob", false, 3600.0 * 50.0).expect("a departed session warns");
+        assert!(note.contains("bob"), "it names the recipient: {note}");
+        assert!(note.contains("2 day(s)"), "and how long ago: {note}");
+        assert!(
+            note.contains("kept") && note.contains("amb inbox"),
+            "and that the message survives — it is a log, not a dropped write: {note}"
+        );
+        let fresh = departed_note("bob", false, 120.0).expect("still a warning");
+        assert!(
+            fresh.contains("2 minute(s)"),
+            "minutes below the hour: {fresh}"
+        );
+        let hours = departed_note("bob", false, 3600.0 * 5.0).expect("still a warning");
+        assert!(hours.contains("5 hour(s)"), "hours below two days: {hours}");
+    }
+
     use super::*;
 
     /// **`broadcast_horizon` had one caller and no test of any kind** (M60, the seam audit).

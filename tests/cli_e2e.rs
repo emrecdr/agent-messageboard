@@ -746,3 +746,60 @@ fn doctor_reports_whether_the_delivery_lane_has_actually_fired() {
         "and the age must be fresh, not a stale unit: {row}"
     );
 }
+
+/// **The sender was never told a message would reach nobody.** `unknown_project` warns when a
+/// broadcast names a place no one has registered in (D26); the direct-message arm beside it
+/// produced no warning at all, so `sent #N` printed identically whether the recipient was mid-turn
+/// or had exited days before. Measured on the real board before this was written: of 286 direct
+/// messages, 282 were acknowledged and every one of the 4 that were not was addressed to a session
+/// that had already ended.
+///
+/// Driven through the shipped binary because the rule passes three layers — the pure sentence, the
+/// roster query, and the send arm that decides whether to print it — and the outermost is the one a
+/// library test cannot reach (M20). The live-recipient case comes first and is what proves the
+/// premise of the departed one: without it, a send path that had stopped printing warnings
+/// altogether would still satisfy an assertion that a live send is quiet.
+#[test]
+fn sending_to_a_session_that_has_ended_says_so_and_sending_to_a_live_one_stays_quiet() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run("uuid-bob", &["register", "--name", "bob"]);
+
+    let live = b.run(
+        "uuid-alice",
+        &["send", "bob", "--subject", "s", "--body", "b"],
+    );
+    assert!(live.contains("sent #"), "the send itself reports: {live}");
+    assert!(
+        !live.contains("session appears to be over"),
+        "a live recipient must earn no note, or the note becomes noise: {live}"
+    );
+
+    b.sqlite()
+        .execute(
+            "UPDATE agents SET pid = NULL, last_seen = last_seen - 3600 * 50 WHERE id = 'uuid-bob'",
+            [],
+        )
+        .expect("age bob out");
+
+    let departed = b.run(
+        "uuid-alice",
+        &["send", "bob", "--subject", "s", "--body", "b"],
+    );
+    assert!(
+        departed.contains("sent #"),
+        "the message is still written — this is advisory, it never blocks (D5): {departed}"
+    );
+    assert!(
+        departed.contains("bob") && departed.contains("session appears to be over"),
+        "and the sender is told, by name: {departed}"
+    );
+    assert!(
+        departed.contains("2 day(s)"),
+        "with how stale the recipient is: {departed}"
+    );
+    assert!(
+        departed.contains("amb inbox"),
+        "and that the message survives — it is a log, not a dropped write: {departed}"
+    );
+}
