@@ -4665,3 +4665,26 @@ this project recorded in `find_unread_fields.py` two days earlier, rebuilt from 
 who had just written that entry. Shipping it into the gate in that state would put a known
 false-positive mode in front of every commit. **The check is worth building and is not yet built;
 what it needs first is to key on something that identifies an item, not something that names it.**
+
+**Built, same day, and the key is what changed.** `tools/check_orphaned_docs.py` keys on
+`file::Impl::name`, tracked by brace depth, so `Events::all` and `vendors::all` are different
+items rather than one ambiguous name. It is in `verify.sh` (working tree vs `HEAD`, the range a
+pre-commit hook has) and in `ci.yml` (`HEAD~1`, the matching comparison once the commit exists),
+because the two gates had already diverged once over `check_secret_literals.py` (D70).
+
+Verified by breaking it three ways rather than by passing on a clean tree, since a check that has
+never gone red has proven nothing:
+
+1. **The real historical instance.** `src/vendors.rs` restored byte-for-byte as it stood at
+   `422c506`, compared against `b4d713c`: reports `detect` and `detect_with`, the two genuine
+   orphans, and nothing else.
+2. **The v1 false positive, reproduced deliberately.** A new bare `Events::known_ids` added beside
+   the documented module-level `known_ids`: **0 findings**. That is the case that made version one
+   unshippable.
+3. **A fresh theft.** A `pub const` inserted between a `///` block and `known_ids`: caught, named
+   correctly.
+
+Its stated scope is the omission worth knowing: it reports only items that **lost** a doc.
+`messages::unknown_project` shipped bare and this check would not have caught it. That is the
+`missing_docs` backlog — 33 public items, 242 counting struct fields — and it remains a separate
+decision, deliberately not smuggled in behind a check that can be adopted at zero cost today.

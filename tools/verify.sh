@@ -102,6 +102,9 @@ run "tools/check_docs.py"        python3 tools/check_docs.py
 run "tools/find_unread_fields.py" python3 tools/find_unread_fields.py
 run "tools/check_mutation_coverage.py" python3 tools/check_mutation_coverage.py
 run "tools/check_secret_literals.py" python3 tools/check_secret_literals.py
+# Compares the working tree against HEAD, which is the range a pre-commit hook has and M63
+# wrongly said it did not. Reports only items that *lost* a doc, never ones that shipped bare.
+run "tools/check_orphaned_docs.py" python3 tools/check_orphaned_docs.py
 
 if [ ${#failed[@]} -ne 0 ]; then
   printf '\n\033[31m✗ %d check(s) failed:\033[0m\n' "${#failed[@]}"

@@ -96,3 +96,6 @@ jobs:
           python3 tools/find_unread_fields.py
           python3 tools/check_mutation_coverage.py
           python3 tools/check_secret_literals.py
+          # HEAD~1 rather than HEAD: this runs after the commit exists, so the comparison
+          # that matches the local gate's (working tree vs HEAD) is this commit vs its parent.
+          python3 tools/check_orphaned_docs.py HEAD~1

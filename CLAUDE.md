@@ -35,6 +35,7 @@ cargo fmt                        # run before finishing; the gate runs `cargo fm
 ./tools/eyeball.sh               # what a session actually sees, against a COPY of the real board
 python3 tools/cfg_phantoms.py    # mutants.sh runs this itself; separates "not compiled here" from "untested"
 python3 tools/check_secret_literals.py   # in the gate; see its header for why fixtures use concat!
+python3 tools/check_orphaned_docs.py     # in the gate; items that LOST a doc, not ones that never had one
 python3 tools/check_mutation_coverage.py # in the gate; which modules have never had a round
 python3 tools/check_docs.py              # in the gate; the mechanical half of doc currency (D110)
 ```
