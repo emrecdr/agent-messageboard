@@ -150,10 +150,24 @@ impl Receipt {
         if self.path_sessions >= self.recency_sessions {
             return None;
         }
+        // **Said without naming one vendor's events, and that is the cheap half of a real
+        // finding.** This sentence used to read "`PreToolUse` fires only on a Read/Edit/Write tool
+        // call ... through Bash": Claude's event and Claude's tool names, in the one sentence that
+        // stops D74's two ratios being read as a comparison. Under Gemini the lane is `BeforeTool`
+        // and the tools are `read_file`/`write_file`/`replace`, so the explanation named nothing
+        // the reader had, on the instrument D59 retires a feature on.
+        //
+        // Parameterising it on `&Vendor` was the obvious fix and is the wrong size: `lane_caveat`
+        // feeds `Receipt::to_json` and `render_status`, so a vendor would have to be threaded
+        // through both and through ten mutation-pinned tests, to name a spelling the reader
+        // already knows. The concept is what carries the sentence — a lane that fires only on
+        // file tools cannot have the same exposure as one that fires every session — and the
+        // concept is true of every vendor, including ones no descriptor has yet been written for.
         Some(format!(
             "the lanes are not directly comparable — recency fired in {} session(s), path in {}. \
-             `PreToolUse` fires only on a Read/Edit/Write tool call, so a session that reads files \
-             through Bash raises the first denominator and not the second (D74)",
+             The path lane fires only on a file-tool call while the recency lane fires once per \
+             session, so a session that reads its files through a shell raises the first \
+             denominator and not the second (D74)",
             self.recency_sessions, self.path_sessions
         ))
     }
