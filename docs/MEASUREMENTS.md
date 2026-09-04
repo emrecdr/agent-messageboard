@@ -4545,3 +4545,65 @@ which is what the field was for. The script's name-collision blind spot is **rec
 fixed**: making it type-aware is a rewrite of a deliberate heuristic, and the honest interim is
 that a field whose every mention is in `mod tests` currently passes. That is the next thing to
 build here, and the count in its summary line is what should stop reading as a guarantee.
+
+## M66 · claims.rs and vendors.rs re-mutated in the form they are actually in — and the fixture that shows why a feature exists could not test whether it works
+
+**Modules:** `src/claims.rs`, `src/vendors.rs`
+
+**2026-09-04.** M62's warning, discharged. Both modules changed shape on 2026-09-02 — `vendors.rs`
+gained `edit_tools` as a required field and a new gate, `claims.rs` lost `EDITING_TOOLS` and gained
+`summarise_by_project` and a second optional axis in `list_sql` — and
+`tools/check_mutation_coverage.py` went on printing *the inventory IS closed* for both, because it
+answers *has this module ever had a round* and cannot answer *was it mutated in the form it is in
+now*.
+
+| module | mutants | caught | unviable | missed |
+|---|---|---|---|---|
+| `src/vendors.rs` | 42 | 33 | 9 | **0** |
+| `src/claims.rs` (first pass) | 94 | 84 | 8 | **2** |
+| `src/claims.rs` (after the fixes) | 90 | 82 | 8 | **0** |
+
+`vendors.rs` was clean at 42, up from M61/M62's 39; the three new mutants are `edit_tools`'s. The
+cfg self-test passed on both runs, so each zero is a real zero rather than *not compiled on this
+host* (M46). `claims.rs` fell from 94 mutants to 90 because the second survivor's fix was a
+deletion, which removed its own operator's mutants along with it.
+
+**Survivor 1 — `summarise_by_project`, and the general lesson is about fixture choice.**
+`claims.iter().filter(|c| c.project == p)` mutated to `!=` survived the whole suite. Under it every
+heading lists the *other* project's claims — grouped exactly backwards — and
+`a_whole_machine_survey_groups_under_a_heading_per_project` passed anyway.
+
+The reason is that its fixture was one `README.md` in `nest` and one in `other`: the same relative
+path in two projects, which is precisely the collision the function exists for and precisely what
+this file's U11 note is about. That choice is what blinded it. Invert the filter and you still get
+two headings, still alphabetical, still two lines naming `README.md`. Nothing was in the wrong
+place — **the rows were indistinguishable**, so no assertion over them could separate the rule from
+its inverse.
+
+This is not M17 (a fixture that never reaches the branch); the branch runs on every row. It is not
+M23 (an absence with no presence row); the assertions are all positive. It is a third thing: **the
+example that best illustrates *why* a feature exists is often the one that cannot test *whether* it
+works**, because the ambiguity being demonstrated is the same ambiguity the test needs resolved.
+The illustrative example and the discriminating example are different examples, and the pull is to
+write only the first — it is the one you have in mind while writing the function. The fixture now
+gives each project a holder the other lacks, and keeps the shared `README.md` so the original point
+still stands.
+
+**Survivor 2 — `covers`, equivalent, and deleted rather than documented.** `child.len() >
+parent.len()` -> `>=` survived provably rather than for want of a test: `parent` is non-empty by
+the guard above it, and at equal lengths `starts_with` implies the two strings are identical, so
+`get(parent.len())` indexes one past the end, returns `None`, and the expression is false either
+way. No test can kill an equivalent mutant.
+
+**An equivalent mutant is a redundant condition seen from the other side.** `starts_with` already
+guarantees `child.len() >= parent.len()`, so the leading comparison decided nothing; the byte check
+was carrying the rule alone. Deleting it is strictly better than recording it as known-equivalent,
+because the note would have to be re-read and re-proved by every later reader, and this project has
+four entries on what happens to prose that outlives its subject. The prior art here is
+`ff11efb` — *the survivor was equivalent until pinned* — and the difference is that that one had a
+rule worth pinning; this one had a condition worth removing.
+
+**Method note.** Both runs were taken with a `cargo` hold broadcast to the board and the machine
+otherwise quiet, per this file's own standing rule that a result produced while anything else was
+building is void rather than weak. `xtask` from another repository was resident at 0.0% CPU
+throughout, checked rather than assumed.

@@ -110,9 +110,14 @@ fn covers(parent: &str, child: &str) -> bool {
         // An empty claim would cover the entire repository. Refuse to treat it as a prefix.
         return false;
     }
-    child.len() > parent.len()
-        && child.starts_with(parent)
-        && child.as_bytes().get(parent.len()) == Some(&b'/')
+    // **No length comparison here, because the byte check already is one.** `child.len() >
+    // parent.len()` used to lead this expression and `>` -> `>=` survived mutation — provably, not
+    // for want of a test: with equal lengths `starts_with` implies the two are the same string, so
+    // `get(parent.len())` indexes one past the end, yields `None`, and the whole expression is
+    // false either way. An equivalent mutant is a redundant condition seen from the other side,
+    // and deleting it is a better answer than documenting it, since `starts_with` already
+    // guarantees `child.len() >= parent.len()`.
+    child.starts_with(parent) && child.as_bytes().get(parent.len()) == Some(&b'/')
 }
 
 /// Resolve symlinks as far as the path actually exists, keeping any non-existent tail.
@@ -924,6 +929,18 @@ mod tests {
     /// **A survey across projects has to say which project**, because the same relative path is
     /// a different file in each one (U11). This board holds `README.md` in six projects; without
     /// the heading the survey reads as a six-way collision.
+    ///
+    /// **The fixture that best illustrates *why* the feature exists could not test *whether* it
+    /// works, and that is the reusable half.** The original was one `README.md` in each of two
+    /// projects — the collision this function is for. Flip the filter to `!=` and each heading
+    /// then lists the *other* project's claim: still two headings, still alphabetical, still two
+    /// lines naming `README.md`. Every assertion passed and the mutant lived. Nothing was in the
+    /// wrong place; the rows were simply indistinguishable, so no assertion over them could
+    /// separate "grouped correctly" from "grouped exactly backwards".
+    ///
+    /// The illustrative example and the discriminating example are different examples. This one
+    /// gives each project a holder the other does not have, so membership is checkable, and keeps
+    /// the shared `README.md` so the original point still stands.
     #[test]
     fn a_whole_machine_survey_groups_under_a_heading_per_project() {
         let cs = vec![
@@ -947,6 +964,29 @@ mod tests {
             lines.iter().filter(|l| l.contains("README.md")).count(),
             2,
             "both are shown — the heading disambiguates them rather than hiding one: {joined}"
+        );
+
+        // Whose claims sit under whose heading. `bob` holds only in `nest` and `carol` only in
+        // `other`, so this is the row the two-README fixture above cannot supply.
+        let section = |name: &str| -> String {
+            lines
+                .iter()
+                .skip_while(|l| *l != name)
+                .skip(1)
+                .take_while(|l| l.starts_with("  "))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let nest = section("nest:");
+        let other = section("other:");
+        assert!(
+            nest.contains("bob") && !nest.contains("carol"),
+            "a project's heading covers that project's claims and no others: {nest:?}"
+        );
+        assert!(
+            other.contains("carol") && !other.contains("bob"),
+            "and the same from the other side, or the filter could be inverted: {other:?}"
         );
     }
 
