@@ -692,3 +692,57 @@ fn reply_takes_a_body_from_a_file_and_from_stdin() {
         "and that body arrives too"
     );
 }
+
+/// **`doctor` watches whether mail is actually being delivered, not only whether hooks exist.**
+///
+/// Both memory lanes had a freshness row and the delivery lane — the thing `amb` is for — had
+/// none. `build_check` answers three of the four conditions `freshness_check`'s own docstring
+/// names (installed, right binary, right shape); the fourth, *does an event ever arrive*, was
+/// asked only of memory. This drives the real binary because the defect was never in
+/// `freshness_check`, which is pure and well tested: it was the **wiring**, and a library test
+/// cannot see a row that is never pushed (M20's rule — count the layers, suspect the outermost).
+///
+/// A truth table rather than a needle list. The `delivered` row is what proves the premise of the
+/// `never` row: if the check stopped being emitted at all, an assertion that it merely lacks a
+/// timestamp would still pass, which is the absence-only trap this project keeps finding.
+#[test]
+fn doctor_reports_whether_the_delivery_lane_has_actually_fired() {
+    let b = Board::new();
+    b.run("uuid-a", &["register", "--name", "alice"]);
+    b.run("uuid-b", &["register", "--name", "bob"]);
+
+    // Nothing delivered yet: the row must exist and must say so rather than being absent.
+    let never = b.run("uuid-b", &["doctor"]);
+    let never_row = never
+        .lines()
+        .find(|l| l.contains("deliver "))
+        .unwrap_or_else(|| panic!("no `deliver` row at all: {never}"));
+    assert!(
+        never_row.contains("no event has ever been recorded")
+            || never_row.contains("not installed"),
+        "an unfired lane must say which, not go quiet: {never_row}"
+    );
+
+    // Now actually deliver something — through the *hook*, which is the only thing that stamps
+    // `delivered_at`. That distinction is the row's whole meaning and was worth learning here:
+    // `amb inbox` at a terminal reads mail and records nothing, because the question is not "did
+    // someone look" but "was mail put in front of a session" (D9's push, D14's ledger). A test
+    // that used `inbox` passed the wrong evidence to the right assertion.
+    b.run("uuid-a", &["send", "bob", "--subject", "s", "--body", "b"]);
+    let (code, _) = b.hook("uuid-b", "turn", r#"{"hook_event_name":"SessionStart"}"#);
+    assert_eq!(code, 0, "the delivery hook always exits 0 (D9)");
+
+    let after = b.run("uuid-b", &["doctor"]);
+    let row = after
+        .lines()
+        .find(|l| l.contains("deliver "))
+        .unwrap_or_else(|| panic!("no `deliver` row after delivery: {after}"));
+    assert!(
+        row.contains("last event"),
+        "a lane that just fired must report its age: {row}"
+    );
+    assert!(
+        row.contains("minute(s) ago"),
+        "and the age must be fresh, not a stale unit: {row}"
+    );
+}

@@ -532,6 +532,10 @@ fn board_bytes(path: &std::path::Path) -> u64 {
 pub fn gather(now: f64) -> Report {
     let mut checks = Vec::new();
     let running = version::banner();
+    // Set from the delivery hooks found below, and read by the `deliver` freshness row further
+    // down — `false` means "no delivery hook is installed", which is what `freshness_check`
+    // needs to tell "not firing" apart from "nothing to fire".
+    let mut delivery_installed = false;
 
     // --- the binaries the hooks invoke -------------------------------------------------
     // **The host vendor, not Claude Code, and the constant that used to sit here made this the
@@ -571,6 +575,7 @@ pub fn gather(now: f64) -> Report {
                     HookBinary { event, exe, banner }
                 })
                 .collect();
+            delivery_installed = !entries.is_empty();
             checks.push(build_check(running, &entries));
 
             // Every scope the platform merges, not just this one: D77's duplicate spanned
@@ -637,6 +642,39 @@ pub fn gather(now: f64) -> Report {
             }
         }
     }
+    // --- and whether the delivery lane is actually firing -------------------------------
+    // **The core lane had no freshness row while both memory lanes did.** `build_check` answers
+    // "is a hook installed and is its binary current"; that is three of the four conditions the
+    // `freshness_check` docstring names, and the fourth — does an event ever *arrive* — was asked
+    // only of memory. Mail is what this tool is for, so the lane most worth watching was the one
+    // nothing watched.
+    //
+    // `reads.delivered_at` is the ledger: `mark_delivered` stamps it per recipient when mail is
+    // put in front of a session, so `max()` is the last moment delivery demonstrably worked. No
+    // schema change and no new counter — D89's lesson is that an instrument invented for a
+    // question tends to answer a different one, and this row reads the record the delivery path
+    // already keeps.
+    // The `installed` argument is `delivery_installed || last.is_some()`, and the disjunction is
+    // the point. Hooks are one way mail is delivered; `amb inbox` at a terminal is another, and it
+    // stamps the same column. Passing the hook state alone made the row answer "not installed, so
+    // nothing can arrive" over a board where delivery had demonstrably just happened — a sentence
+    // contradicted by the very timestamp the row was reading. An instrument that reports a
+    // mechanism as impossible while holding its output is this project's own catalogued failure,
+    // and this one was caught by the e2e test rather than by the argument, which is the order that
+    // keeps happening.
+    if let Some(c) = conn.as_ref() {
+        let last: Option<f64> = c
+            .query_row("SELECT max(delivered_at) FROM reads", [], |r| r.get(0))
+            .ok()
+            .flatten();
+        checks.push(freshness_check(
+            "deliver",
+            last,
+            now,
+            delivery_installed || last.is_some(),
+        ));
+    }
+
     checks.push(vendors_check(
         crate::vendors::problems(),
         crate::vendors::all().len(),
