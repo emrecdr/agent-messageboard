@@ -79,6 +79,16 @@ const SECRET_PREFIXES: &[&str] = &[
     "glrt-",
     "doo_v1_",
     "atlassian_",
+    // Added 2026-09 — provider prefixes that postdate the original list, each verified against
+    // that provider's current key format. `check_secret_literals.py` carries the same additions,
+    // and `redaction_and_the_commit_gate_agree_on_the_shapes_they_share` asserts the two lists do
+    // not drift on the shapes both claim to know.
+    "whsec_", // Stripe webhook signing secret
+    "gsk_",   // Groq
+    "xai-",   // xAI (Grok)
+    "sbp_",   // Supabase personal access token
+    "nfp_",   // Netlify personal access token
+    "pplx-",  // Perplexity
 ];
 
 /// Strip `<private>` blocks and anything secret-shaped.
@@ -336,6 +346,14 @@ mod tests {
             concat!("AKIA", "IOSFODNN7EXAMPLE"),
             concat!("glpat-", "abc123def456ghi"),
             "eyJhbGciOi.eyJzdWIiOiIx.SflKxwRJSMeKKF2QT4",
+            // The 2026-09 additions — split like the rest, and here specifically because their
+            // prefixes now live in the commit gate too, so a contiguous one would fail the push.
+            concat!("whsec_", "abc123def456ghi789"),
+            concat!("gsk_", "abc123def456ghi789jkl"),
+            concat!("xai-", "abc123def456ghi789"),
+            concat!("sbp_", "abc123def456ghi789"),
+            concat!("nfp_", "abc123def456ghi789"),
+            concat!("pplx-", "abc123def456ghi789"),
         ] {
             let r = redact(&format!("the key is {secret} ok"));
             assert!(
@@ -344,6 +362,36 @@ mod tests {
                 r.text
             );
             assert_eq!(r.removed, 1, "{secret}");
+        }
+    }
+
+    /// The commit gate (`tools/check_secret_literals.py`) and `SECRET_PREFIXES` are two lists in
+    /// two languages, hand-kept, and they have drifted before — the whole reason this project
+    /// distrusts a rule no test protects. The invariant in the direction that matters: a shape
+    /// worth blocking from a commit is worth removing from a note, so every prefix the gate knows
+    /// must be one this module redacts. The reverse is deliberately *not* required — `redact`
+    /// carries extras (bare `sk-`, `rubygems_`, …) the gate omits to avoid firing on ordinary
+    /// source, which the gate's own header explains.
+    #[test]
+    fn redaction_and_the_commit_gate_agree_on_the_shapes_they_share() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tools/check_secret_literals.py"
+        );
+        let checker = std::fs::read_to_string(path).expect("read the commit-gate checker");
+        let start = checker
+            .find("PREFIXES = [")
+            .expect("checker has a PREFIXES list");
+        let rest = &checker[start..];
+        let end = rest.find(']').expect("the PREFIXES list closes");
+        // Every quoted string inside `PREFIXES = [ … ]` — the odd-indexed pieces of a split on `"`.
+        let gate: Vec<&str> = rest[..end].split('"').skip(1).step_by(2).collect();
+        assert!(gate.len() >= 25, "parsed too few prefixes: {gate:?}");
+        for p in gate {
+            assert!(
+                SECRET_PREFIXES.contains(&p),
+                "the commit gate blocks {p:?} but SECRET_PREFIXES does not redact it — drift"
+            );
         }
     }
     #[test]

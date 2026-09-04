@@ -190,11 +190,26 @@ pub(crate) fn write_private(path: &Path, contents: &str) -> Result<()> {
     // left standing (D86/D88/D90's shape). An orphaned `.amb-tmp.<pid>` from a crash is inert:
     // the index scans only `.md` files.
     let tmp = tmp_for(path);
-    std::fs::write(&tmp, contents).map_err(io(format!("writing {}", tmp.display())))?;
-    #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        use std::io::Write;
+        let mut f =
+            std::fs::File::create(&tmp).map_err(io(format!("writing {}", tmp.display())))?;
+        // Restrict before the content is written, not after: the old order left a window in which
+        // the note sat world-readable under a name anything watching the vault could open.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        f.write_all(contents.as_bytes())
+            .map_err(io(format!("writing {}", tmp.display())))?;
+        // The vault is the durable half (D34) — `rm board.db` loses nothing, this must not. fsync
+        // makes the bytes durable before the rename can publish the name, ruling out the crash
+        // that leaves a note present but empty. That is the sibling fsync to the settings writer's,
+        // and adding only one would be exactly the sibling-left-standing shape this file's own
+        // header comment names (D86/D88/D90). Dir fsync is omitted for the reason given there.
+        f.sync_all()
+            .map_err(io(format!("flushing {}", tmp.display())))?;
     }
     std::fs::rename(&tmp, path).map_err(|e| {
         // The rename is what makes this atomic; if it fails the temporary file is the only

@@ -10,8 +10,10 @@
 # Also load-bearing for a second reason: `cargo` only resolves inside a directory carrying this
 # file if rustup has no global default.
 # `.github/workflows/ci.yml` deliberately names no toolchain, so it installs exactly what this file
-# pins. D70 records that the workflow has never run — this repository has no git remote — and that
-# `tools/verify.sh` is the gate that does.
+# pins. CI first ran on 2026-08-31 when the repository was published (Linux and macOS, both green);
+# `tools/verify.sh` is the gate that runs before a commit exists, CI the net that runs after a push
+# — the two are kept in step deliberately (D70). This comment previously said the workflow had
+# never run and the repository had no remote; both were true at scaffold and neither is now.
 #
 channel = "1.98.0"
 components = ["rustfmt", "clippy"]

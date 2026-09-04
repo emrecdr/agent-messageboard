@@ -422,6 +422,11 @@ pub const ASSUMED_ALIVE_FOR_SECS: f64 = 15.0 * 60.0;
 /// every process the caller may signal. Either would report an agent permanently alive, and
 /// `kill(-1, ...)` is an alarming syscall to reach by accident. A value past `pid_t` is rejected
 /// too, because the cast would truncate — and `4294967296` truncates to exactly `0`.
+///
+/// `#[cfg(unix)]` because it exists only to feed `libc::kill`, and its return type is a libc type.
+/// Every libc reference in this file is on the unix path so the crate can be compiled for a
+/// non-unix target (Q11) without a port — the door, not the port.
+#[cfg(unix)]
 fn real_pid(pid: i64) -> Option<libc::pid_t> {
     libc::pid_t::try_from(pid).ok().filter(|p| *p > 0)
 }
@@ -448,6 +453,7 @@ impl AgentRow {
 /// whether the holder of a conflicting claim is still around to be messaged — and a liveness rule
 /// with a sharp edge (`real_pid` below rejects values where `kill` means something other than
 /// "one process") is exactly the kind that must not be written twice.
+#[cfg(unix)]
 pub fn is_alive(pid: Option<i64>, last_seen: f64, at: f64) -> bool {
     match pid.and_then(real_pid) {
         // SAFETY: `kill` with signal 0 performs the permission and existence check without
@@ -459,6 +465,19 @@ pub fn is_alive(pid: Option<i64>, last_seen: f64, at: f64) -> bool {
         // missing one, and both degrade to recency rather than to a wrong answer.
         None => at - last_seen < ASSUMED_ALIVE_FOR_SECS,
     }
+}
+
+/// The non-unix twin, so the crate compiles for a Windows-targeting `cargo check` (Q11).
+///
+/// `kill(pid, 0)` is the unix existence probe and has no portable equivalent — Windows liveness
+/// is `OpenProcess`, deferred with the rest of the port. Until then **every** session degrades to
+/// the recency window, which is exactly the answer the unix path gives for a pid it cannot ask
+/// about (the `None` arm above): a platform that cannot probe any pid is the whole-platform case
+/// of a pid that cannot be probed. Liveness is advisory under D5, so the cost of the coarser
+/// answer is a message sent to a session that may have ended — which the log holds regardless.
+#[cfg(not(unix))]
+pub fn is_alive(_pid: Option<i64>, last_seen: f64, at: f64) -> bool {
+    at - last_seen < ASSUMED_ALIVE_FOR_SECS
 }
 
 impl AgentRow {

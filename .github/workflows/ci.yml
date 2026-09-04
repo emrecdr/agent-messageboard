@@ -44,7 +44,11 @@ jobs:
         # A single-platform matrix would leave the `cfg`-gated half unbuilt and unlinted.
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
+      # Actions are pinned to a full commit SHA, not a moving tag — the tj-actions/changed-files
+      # compromise (March 2025) moved a tag to malicious code, and a tag pin would have followed
+      # it. The `# vN` comment is the human-readable version; `.github/dependabot.yml`'s
+      # `github-actions` updater bumps both the digest and the comment, so this does not rot.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # `tools/check_docs.py` compares `[Unreleased]` against commits since the last tag, so
           # it needs history and tags, not the default shallow clone.
@@ -56,7 +60,7 @@ jobs:
       # the development machine, which has no rustup default. Naming a version here would let CI
       # and local builds drift, which is the thing the pin exists to prevent.
       # Caching (Swatinem/rust-cache) is on by default.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
 
       # `--locked` mirrors the gate (D70): a resolve that disagrees with Cargo.lock fails
       # rather than silently updating it — the lockfile is the exposure bound against a
@@ -79,7 +83,7 @@ jobs:
       # `cargo-deny` is the escalation if this is ever published to crates.io.
       - name: dependency advisories
         if: matrix.os == 'ubuntu-latest'
-        uses: rustsec/audit-check@v2
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 

@@ -39,6 +39,10 @@ PREFIXES = [
     "glpat-", "glrt-", "AKIA", "ASIA", "AIza", "ya29.",
     "hf_", "npm_", "dop_v1_", "sq0csp-", "shpat_",
     "sk-ant-", "sk-proj-", "pypi-", "SG.",
+    # 2026-09 additions, mirrored from `memory::redact::SECRET_PREFIXES`. A Rust test
+    # (`redaction_and_the_commit_gate_agree_on_the_shapes_they_share`) fails if the gate ever
+    # knows a shape the redactor does not.
+    "whsec_", "gsk_", "xai-", "sbp_", "nfp_", "pplx-",
 ]
 # A prefix immediately followed by enough body to look like a credential. Six is below every real
 # token length and above the point where a prefix appears in ordinary prose.

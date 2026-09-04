@@ -1021,7 +1021,23 @@ fn write_if_unchanged(path: &Path, value: &Value, seen: Option<&str>) -> Result<
         source,
     })?;
     let tmp = settings_tmp(path);
-    std::fs::write(&tmp, format!("{body}\n")).map_err(io(format!("writing {}", tmp.display())))?;
+    {
+        use std::io::Write;
+        let mut f =
+            std::fs::File::create(&tmp).map_err(io(format!("writing {}", tmp.display())))?;
+        f.write_all(format!("{body}\n").as_bytes())
+            .map_err(io(format!("writing {}", tmp.display())))?;
+        // settings.json is the host CLI's whole configuration — a zero-length file here breaks the
+        // user's entire tool, not just amb (the silent-loss shape this project exists to avoid).
+        // The bytes are made durable before the rename below can publish the name: fsync of the
+        // tmp file rules out the crash that leaves the file present but empty. The parent-dir fsync
+        // that would additionally harden the rename itself is omitted deliberately — a lost rename
+        // leaves the previous valid settings, which `amb install` simply rewrites, not a corrupt
+        // file. `synchronous=NORMAL` on the disposable board (D15) is the opposite call for the
+        // opposite kind of file; this one is neither amb's nor disposable.
+        f.sync_all()
+            .map_err(io(format!("flushing {}", tmp.display())))?;
+    }
 
     // **The backup is taken before the check, deliberately, and this ordering was measured.**
     // Copying it *between* the check and the rename put a whole file copy inside the window the

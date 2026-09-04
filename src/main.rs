@@ -295,11 +295,13 @@ enum MemoryCommand {
     Derive {
         /// Slug of the candidate. Reuse it to add a strike; a new one starts a candidate.
         slug: String,
+        /// The title the candidate would be promoted under. Reused across strikes.
         #[arg(long)]
         title: String,
         /// What was noticed this time. One line of it goes into the ledger.
         #[arg(long)]
         note: String,
+        /// Files this strike touches, comma-separated. Joins the candidate's file set.
         #[arg(long, value_delimiter = ',')]
         files: Vec<String>,
     },
