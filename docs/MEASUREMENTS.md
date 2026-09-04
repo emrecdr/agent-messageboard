@@ -4684,6 +4684,21 @@ never gone red has proven nothing:
 3. **A fresh theft.** A `pub const` inserted between a `///` block and `known_ids`: caught, named
    correctly.
 
+**And it failed D89's question for its first hour, which is the part worth keeping.** Given a ref
+that does not resolve, every file's base read came back empty, every file took the *a new file
+cannot have lost anything* branch, and the script printed `no item lost a doc comment` and exited
+**0** — a confident all-clear from a check that had read nothing. Each skip was correct on its own;
+the aggregate was a guard that cannot fire (D45, D51, D58), one `fetch-depth` away from real in CI
+and invisible from the passing side. It now verifies the base resolves before doing anything,
+refuses rather than reporting clean, and prints how many files it compared, because *zero findings
+over zero files* is not the same answer as *zero over thirty*.
+
+The sequence is the lesson. M67 was written about an instrument reproducing the defect it was built
+to catch; the replacement instrument then shipped with a *different* catalogued defect an hour
+later, from the same author, in the same file. **Knowing a failure class abstractly confers no
+protection against committing it** — only running the unhappy path does, and that takes one command
+against a ref that does not exist.
+
 Its stated scope is the omission worth knowing: it reports only items that **lost** a doc.
 `messages::unknown_project` shipped bare and this check would not have caught it. That is the
 `missing_docs` backlog — 33 public items, 242 counting struct fields — and it remains a separate

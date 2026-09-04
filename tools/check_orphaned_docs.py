@@ -105,20 +105,49 @@ def at_ref(ref: str, path: str) -> str:
 
 def main() -> int:
     base = sys.argv[1] if len(sys.argv) > 1 else "HEAD"
-    findings = []
+
+    # **What this prints when it cannot do its job at all**, which is the question D89 says to ask
+    # of an instrument and which this script answered wrong for its first hour. Every file whose
+    # base version is unreadable was skipped as "a new file cannot have lost anything" — correct
+    # per file, and catastrophic in aggregate: given a ref that does not resolve, *every* file took
+    # that branch and the script printed `no item lost a doc comment` and exited 0. A confident
+    # all-clear from a check that read nothing. In CI that is one `fetch-depth` away from real
+    # (`HEAD~1` needs history; the workflow sets `fetch-depth: 0`, and nothing here would have
+    # noticed if it stopped doing so), which is precisely the guard-that-cannot-fire shape D45,
+    # D51 and D58 record — committed here inside a check written to stop a defect from recurring.
+    if subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"],
+        capture_output=True,
+        cwd=ROOT,
+    ).returncode:
+        print(f"cannot compare: {base!r} does not resolve to a commit here.", file=sys.stderr)
+        print(
+            "  Refusing rather than reporting clean — with no base every file reads as new, and\n"
+            "  a check that examined nothing must not be indistinguishable from one that passed.",
+            file=sys.stderr,
+        )
+        return 1
+
+    findings, compared = [], 0
     for p in sorted(list((ROOT / "src").rglob("*.rs"))):
         rel = p.relative_to(ROOT).as_posix()
         before = at_ref(base, rel)
         if not before:
             continue  # a new file cannot have lost anything
+        compared += 1
         now = documented_items(p.read_text())
         was = documented_items(before)
         for key, had in was.items():
             if had and key in now and not now[key]:
                 findings.append((rel, key))
 
+    if not compared:
+        print(f"cannot compare: no file under src/ exists at {base}.", file=sys.stderr)
+        return 1
+
     if not findings:
-        print(f"no item lost a doc comment since {base}.")
+        # The count is the point: a zero over zero files is not the same answer as a zero over 30.
+        print(f"no item lost a doc comment since {base} ({compared} file(s) compared).")
         return 0
     print(f"{len(findings)} item(s) lost a doc comment since {base} — M63's shape:\n")
     for rel, key in findings:
