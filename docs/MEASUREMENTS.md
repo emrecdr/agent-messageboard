@@ -4607,3 +4607,61 @@ rule worth pinning; this one had a condition worth removing.
 otherwise quiet, per this file's own standing rule that a result produced while anything else was
 building is void rather than weak. `xtask` from another repository was resident at 0.0% CPU
 throughout, checked rather than assumed.
+
+## M67 · the last Claude literal on the read side, and M63's shape four more times in one day
+
+**Modules:** `src/hooks.rs`, `src/vendors.rs`, `src/main.rs`, `src/messages.rs`
+
+**2026-09-04.** `hooks::event_name` ended `.unwrap_or("SessionStart")` — the one place that must
+not assume a vendor, because the value it returns is compared against `vendor.events.session_start`
+by every consumer. For the two shipped vendors it held **by coincidence**: both spell it
+`SessionStart`. For a manifest vendor that does not — D111 phase 3's entire purpose — a payload
+with no readable event resolved to a string that vendor never uses, `is_start` went false, and the
+session-opening banner silently did not render.
+
+**The fix could not be "thread a vendor in", and the reason is worth keeping.** D114 made
+`detect_for_hook` read the payload's *event* to identify the vendor, so the vendor cannot be an
+input to the event reader — the two are mutually dependent. The seam is to split them:
+`announced_event` reports `Option<&str>` and asserts nothing; `resolve_event(announced, vendor)` is
+pure and holds the whole rule; `event_and_vendor` composes them in the only order that works, and
+replaces a two-call pairing both hook entries had been writing by hand. **A circular dependency
+between two facts is usually a sign that one of them is being reported before it is known.**
+
+The guard is `OTHER`, the test vendor, which spells session start `Awake`. A table built from
+either shipped vendor passes whether the fallback reads the descriptor or the literal — which is
+exactly how this survived the whole vendor arc — so the fixture has to be a vendor that disagrees.
+Re-applying the literal reddens it: `left: "SessionStart"  right: "Awake"`.
+
+**And M63's shape appeared four more times, all landing after M63 was written.** The running count
+is nine:
+
+| # | item that lost its doc | inherited by | when |
+|---|---|---|---|
+| 1–5 | `summarise`, `take`, `size_check`, `register`, `settings_path` | various | recorded in M63 |
+| 6 | `vendors::detect_with` | `detect_for_hook` | D114, same day |
+| 7 | `vendors::detect` | `impl Events` | D114, same day |
+| 8 | `Events::all` | `impl Events` | D114, same day |
+| 9 | `messages::unknown_project` | — (shipped bare) | b17179a, same day |
+
+Seven and eight are one site: **two doc comments stranded on the same `impl` block**, leaving both
+functions bare. M63 closed with *"the mechanism is not yet guarded, and this paragraph is the only
+thing saying so"*, and the mechanism recurred four times within hours of that sentence being
+written. **A defect that recurs while its description is still the newest text in the file is one a
+description cannot hold.**
+
+**Two corrections to M63, both about the instrument rather than the defect.**
+
+First, M63 said the history-based detector *"cannot stand as a gate check: the pre-commit hook
+examines a working tree, not a range"*. That is wrong. `.githooks/pre-commit` runs with `HEAD` and
+an index, which is precisely a range, and `git diff --cached HEAD` is exactly the comparison the
+detector needs. The reason given for not building it was false; the decision may still be right,
+but it has to be re-made on the true one.
+
+Second, and the reason this entry does not ship that check: **the detector reproduces M65's own
+defect.** It keys on a function *name* within a file, so when D114 added `Events::all` beside the
+existing `vendors::all`, it reported the module-level `all` as having lost a doc it still has. One
+false positive in four on its first real outing, from name collision — the identical blind spot
+this project recorded in `find_unread_fields.py` two days earlier, rebuilt from scratch by someone
+who had just written that entry. Shipping it into the gate in that state would put a known
+false-positive mode in front of every commit. **The check is worth building and is not yet built;
+what it needs first is to key on something that identifies an item, not something that names it.**

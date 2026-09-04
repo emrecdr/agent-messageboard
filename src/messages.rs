@@ -573,6 +573,13 @@ pub fn departed_recipient(conn: &Connection, agent_id: &str, at: f64) -> Result<
     ))
 }
 
+/// The warning a sender should see when addressing a project no agent has ever registered in, or
+/// `None` when the address is fine.
+///
+/// Told before the write rather than discovered from an answer that never comes. `None` for `@@`,
+/// which names no project and so cannot be wrong about one, and `None` when the project is known.
+/// The text carries a `nearest` suggestion when one is close enough, and says the message is kept
+/// regardless — `@project` addresses a *place* (D17), so it reaches whoever works there next.
 pub fn unknown_project(conn: &Connection, project: Option<&str>) -> Result<Option<String>> {
     // `@@` names no project and reaches everyone, so there is nothing to be wrong about.
     let Some(project) = project else {

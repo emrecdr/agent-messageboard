@@ -689,18 +689,48 @@ pub fn is_stop_refire(input: &Value) -> bool {
     input.get("stop_hook_active").and_then(Value::as_bool) == Some(true)
 }
 
-/// The event this payload announces, with `SessionStart` standing in for everything else.
+/// The event this payload announces, or `None` when it announces none.
 ///
 /// The same three-copy count that hoisted [`tool_and_file`] (D78): written out identically in
-/// `hook_main`, `hook_memory` and `hook_deliver`, on a schema this project does not own. Absent
-/// or wrongly-typed fields degrade to `"SessionStart"` — every consumer treats that as the
-/// ordinary banner case, so an unknown event renders like a session opening, never like a tool
-/// event it was not.
-pub fn event_name(input: &Value) -> &str {
-    input
-        .get("hook_event_name")
-        .and_then(Value::as_str)
-        .unwrap_or("SessionStart")
+/// `hook_main`, `hook_memory` and `hook_deliver`, on a schema this project does not own.
+///
+/// **`Option`, not a defaulted `&str`, and the difference is which layer owns the fallback.**
+/// This used to end `.unwrap_or("SessionStart")` — Claude's spelling, in the one place that must
+/// not assume a vendor, because the value it returns is compared against
+/// `vendor.events.session_start` by every consumer. For the two shipped vendors the comparison
+/// held by coincidence: both spell it `SessionStart`. For a manifest vendor that does not — the
+/// entire point of D111 phase 3 — a payload with no readable event resolved to a string that
+/// vendor never uses, `is_start` went false, and the session-opening banner silently did not
+/// render. Reporting a fact the schema did not state is exactly what this function must not do,
+/// so it now reports the absence and [`resolve_event`] decides what an absence means.
+pub fn announced_event(input: &Value) -> Option<&str> {
+    input.get("hook_event_name").and_then(Value::as_str)
+}
+
+/// What an unannounced event means, in the host vendor's own spelling.
+///
+/// Pure, so the rule is testable without a process or an environment — the fallback is the whole
+/// content of this function and a `&'static` literal here is precisely the defect being removed.
+pub fn resolve_event<'a>(announced: Option<&'a str>, v: &'a Vendor) -> &'a str {
+    // Session start, because every consumer treats it as the ordinary banner case: an unknown
+    // event renders like a session opening, never like a tool event it was not.
+    announced.unwrap_or(v.events.session_start)
+}
+
+/// The event and the vendor together, which is the only order they can be resolved in.
+///
+/// **Circular if either half is taken alone.** `vendors::detect_for_hook` reads the payload's
+/// event to identify the vendor (D114), and the fallback event is a property *of* that vendor —
+/// so a vendor cannot be threaded into the event reader, and the event cannot be finalised before
+/// the vendor exists. Announced-or-nothing goes to detection, and the vendor it returns supplies
+/// the fallback. Both hook entries paired these two calls by hand; this is the pairing, once.
+///
+/// `detect_for_hook`, never `detect`: on a vendor that exports no session variable the latter
+/// falls back to Claude Code, and every event comparison downstream then fails to match (D114).
+pub fn event_and_vendor(input: &Value) -> (&str, &'static Vendor) {
+    let announced = announced_event(input);
+    let vendor = crate::vendors::detect_for_hook(announced.unwrap_or_default());
+    (resolve_event(announced, vendor), vendor)
 }
 
 /// True when this payload comes from a subagent rather than the session itself.
@@ -1620,18 +1650,39 @@ mod tests {
         }
     }
 
-    /// The extraction degrades to `SessionStart`, never to a panic and never to a tool event.
+    /// The extraction degrades to *nothing announced*, never to a panic and never to a tool event.
+    ///
+    /// The absent rows used to expect the literal `"SessionStart"`, which is what let the vendor
+    /// assumption live in the reader instead of in the descriptor: this table would have passed
+    /// identically for a vendor that spells session start any other way.
     #[test]
-    fn an_absent_or_alien_event_reads_as_session_start() {
+    fn an_absent_or_alien_event_announces_nothing() {
         for (payload, expected) in [
-            (json!({"hook_event_name": "Stop"}), "Stop"),
-            (json!({"hook_event_name": "PostToolUse"}), "PostToolUse"),
-            (json!({"hook_event_name": 7}), "SessionStart"),
-            (json!({}), "SessionStart"),
-            (Value::Null, "SessionStart"),
+            (json!({"hook_event_name": "Stop"}), Some("Stop")),
+            (
+                json!({"hook_event_name": "PostToolUse"}),
+                Some("PostToolUse"),
+            ),
+            (json!({"hook_event_name": 7}), None),
+            (json!({}), None),
+            (Value::Null, None),
         ] {
-            assert_eq!(event_name(&payload), expected, "{payload}");
+            assert_eq!(announced_event(&payload), expected, "{payload}");
         }
+    }
+
+    /// **What an unannounced event means is the vendor's to say, and `OTHER` is what proves it.**
+    ///
+    /// Both shipped vendors spell session start `SessionStart`, so a table built from either of
+    /// them passes whether the fallback reads the descriptor or a literal — the coincidence that
+    /// hid this for the whole of D111. `OTHER` spells it `Awake`, so the absent row can only pass
+    /// if the value came from the descriptor. The present row is what proves the absent one is
+    /// not vacuous (M27): it fails if `resolve_event` ever stops returning what was announced.
+    #[test]
+    fn an_unannounced_event_falls_back_to_the_host_vendors_own_session_start() {
+        assert_eq!(resolve_event(None, &OTHER), "Awake");
+        assert_eq!(resolve_event(Some("Done"), &OTHER), "Done");
+        assert_eq!(resolve_event(None, &CLAUDE_CODE), "SessionStart");
     }
 
     /// Presence of the key is the whole test: null still counts, absence never does. Both

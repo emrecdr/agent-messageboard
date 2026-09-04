@@ -217,22 +217,11 @@ pub fn known_ids() -> String {
     all().iter().map(|v| v.id).collect::<Vec<_>>().join(", ")
 }
 
-/// The vendor whose session this process is running inside.
-///
-/// **Detected from the environment rather than passed as an argument, and that is a hook-safety
-/// decision** (D97). Every hook entry `amb` installs is `<exe> hook <mode>`; adding a
-/// `--vendor` token to it would put a new argument on the one path whose contract is that it
-/// always exits 0, where an older binary meeting a newer entry cannot parse it and clap's exit
-/// `2` reads as *blocking* to the runner. The session id already identifies the host, so nothing
-/// has to be told.
-///
-/// Falls back to Claude Code, which is what a session with no vendor variable at all has always
-/// been treated as.
-/// Every event spelling this vendor answers to.
-///
-/// `tool_failed` is `Option`, so a vendor hosting two memory lanes contributes five names rather
-/// than six — see [`Events::tool_failed`].
 impl Events {
+    /// Every event spelling this vendor answers to.
+    ///
+    /// `tool_failed` is `Option`, so a vendor hosting two memory lanes contributes five names
+    /// rather than six — see [`Events::tool_failed`].
     pub fn all(&self) -> Vec<&'static str> {
         let mut v = vec![
             self.session_start,
@@ -267,11 +256,21 @@ pub fn vendor_for_event(event: &str) -> Option<&'static Vendor> {
     found
 }
 
+/// The vendor whose session this process is running inside, from the environment alone.
+///
+/// **Not passed as an argument, and that is a hook-safety decision** (D97). Every hook entry
+/// `amb` installs is `<exe> hook <mode>`; adding a `--vendor` token would put a new argument on
+/// the one path whose contract is that it always exits 0, where an older binary meeting a newer
+/// entry cannot parse it and clap's exit `2` reads as *blocking* to the runner.
+///
+/// Falls back to Claude Code, which is what a session with no vendor variable at all has always
+/// been treated as. [`detect_for_hook`] is the one to call where a payload is in hand: a session
+/// whose environment carries nothing is the case D113 and D114 exist for, and this function
+/// cannot see it.
 pub fn detect() -> &'static Vendor {
     detect_with(|k| std::env::var(k).ok())
 }
 
-/// [`detect`] with the environment injected, so precedence is testable (M51).
 /// The vendor for a hook invocation, which may know its event even when the environment is blank.
 ///
 /// **D113 gave the payload-only CLIs an identity and not a vendor, and the result was worse than
@@ -292,6 +291,7 @@ pub fn detect_for_hook(event: &str) -> &'static Vendor {
     vendor_for_event(event).unwrap_or_else(detect)
 }
 
+/// [`detect`] with the environment injected, so precedence is testable (M51).
 pub fn detect_with(lookup: impl Fn(&str) -> Option<String>) -> &'static Vendor {
     let hit = |vs: &[&'static Vendor]| vs.iter().copied().find(|v| v.session_id(&lookup).is_some());
     // **The shipped vendors first, so the common case never reaches the disk.** `all()` forces
