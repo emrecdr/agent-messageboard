@@ -1,8 +1,10 @@
 //! Who this session is, and which project it is working in.
 //!
-//! Identity is free, and it is where a second vendor arrives first. Every agent CLI exports a
-//! session id into the environment of every command it shells out to; `resolve` reads whichever
-//! one is present, from `Vendor::session_env` (D111). Claude Code's `CLAUDE_CODE_SESSION_ID` is
+//! Identity is free, and it is where a second vendor arrives first. `resolve` reads whichever
+//! session id is present: `AMB_AGENT`, then the host CLI's own variable from `Vendor::session_env`
+//! (D111), then — on the hook path only — the id the payload carries (`resolve_from`). The third
+//! is not a refinement: most agent CLIs put the session id in the hook payload and **nothing** in
+//! the environment, and without that fallback `amb` is a silent no-op on all of them (D113). Claude Code's `CLAUDE_CODE_SESSION_ID` is
 //! inherited by subshells and fresh `exec`s and equals the name of that session's own transcript
 //! file — verified 2026-08-27, see `DECISIONS.md` D12. Gemini CLI sets `GEMINI_SESSION_ID`, whose
 //! transcript correspondence has *not* been verified and is not relied on.
@@ -60,12 +62,30 @@ pub fn repo_root(start: &std::path::Path, home: Option<&str>) -> Option<std::pat
 /// as a specific agent. `AMB_PROJECT` overrides the project, which otherwise defaults to the
 /// working directory's name.
 pub fn resolve() -> Result<Identity> {
+    resolve_from(None)
+}
+
+/// Resolve identity, with a session id the caller may already hold.
+///
+/// **The hook path has one and the command path does not, and that asymmetry is the whole point.**
+/// A hook is handed a payload by the host CLI; a command typed at a terminal is handed nothing. So
+/// `payload` is `Some` exactly on the hook path, which is where the environment-only rule was
+/// leaving `amb` a silent no-op on every vendor that exports no session variable — see
+/// [`crate::hooks::payload_session_id`] for which those are and what it cost.
+///
+/// **Order: `AMB_AGENT`, then the vendor's environment, then the payload — and the payload is last
+/// deliberately.** Putting it first would change what identity means for Claude Code and Gemini
+/// CLI, which export a variable *and* send the id, and a refactor that alters the shipped vendors'
+/// behaviour to add a new one is the trade D111 refused to make. Last means: byte-identical for
+/// every vendor that works today, and the difference between working and silent for the rest.
+pub fn resolve_from(payload: Option<&str>) -> Result<Identity> {
     // `AMB_AGENT` first, then whichever session id the host CLI exported. The list lives on the
     // vendor descriptor, so a second CLI is recognised by adding a name to data — and identity is
     // where one arrives first, since a session is simply whoever exported an id.
     let id = std::env::var("AMB_AGENT")
         .ok()
         .or_else(|| crate::vendors::detect().session_id_from_env())
+        .or_else(|| payload.map(str::to_string))
         .ok_or(Error::NoIdentity)?;
     if id.trim().is_empty() {
         return Err(Error::NoIdentity);

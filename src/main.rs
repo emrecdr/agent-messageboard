@@ -1047,7 +1047,9 @@ fn hook_memory(input: &serde_json::Value) -> Result<(), Error> {
         return Ok(());
     };
     let event = hooks::event_name(input);
-    let me = identity::resolve()?;
+    // The payload's id is the fallback for every vendor that exports no session variable —
+    // without it this hook exits 0 having delivered nothing, silently (D113).
+    let me = identity::resolve_from(hooks::payload_session_id(input))?;
     let conn = db::open_at_for_hook(&path)?;
     let at = db::now()?;
 
@@ -1217,7 +1219,9 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
     }
 
     let event = hooks::event_name(input);
-    let me = identity::resolve()?;
+    // The payload's id is the fallback for every vendor that exports no session variable —
+    // without it this hook exits 0 having delivered nothing, silently (D113).
+    let me = identity::resolve_from(hooks::payload_session_id(input))?;
     let mut conn = db::open_at_for_hook(&path)?;
     identity::touch(&conn, &me, None)?;
 

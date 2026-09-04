@@ -615,3 +615,63 @@ fn the_watch_hint_reaches_a_monitor_session_at_start_and_nobody_else() {
         );
     }
 }
+
+/// **A vendor that exports no session variable was a silent no-op, and `doctor` said it was fine**
+/// (D113).
+///
+/// Identity was environment-only. Claude Code and Gemini CLI both export a variable, so both
+/// worked — and the other agent CLIs whose hooks could host `amb` today mostly do not: their
+/// payloads carry the id and their environments carry nothing. On those, every hook fired, found
+/// no identity, exited 0 under D9's guarantee and delivered nothing at all. `amb install --vendor`
+/// would succeed over an installation that could never work, which is this project's signature
+/// failure at the largest scale it has occurred.
+///
+/// Driven through the real binary with the environment genuinely stripped, because that is the
+/// only place the defect existed: `resolve_from` and `payload_session_id` are both pure and
+/// neither was wrong. The wiring was.
+#[test]
+fn a_session_whose_vendor_exports_no_variable_is_still_reached_through_its_payload() {
+    let b = Board::new();
+    b.run("uuid-sender", &["register", "--name", "sender"]);
+    b.run(
+        "uuid-sender",
+        &[
+            "send",
+            "@",
+            "--subject",
+            "waiting",
+            "--body",
+            "for whoever arrives",
+        ],
+    );
+
+    // No AMB_AGENT and no vendor variable — the shape of a Qwen, Codex or Copilot session.
+    // `cmd_unscoped("")` already strips AMB_AGENT and Claude's variable; Gemini's is removed here
+    // so the fixture is stripped of *every* shipped vendor's, not just the one this host exports.
+    let mut cmd = b.cmd_unscoped("");
+    cmd.args(["hook", "turn"])
+        .env("AMB_PROJECT", "nest")
+        .env_remove("GEMINI_SESSION_ID");
+    let (code, out) = common::with_stdin(
+        cmd,
+        r#"{"hook_event_name":"SessionStart","session_id":"payload-only-1"}"#,
+    );
+    assert_eq!(code, 0, "the hook always exits 0 (D9)");
+    assert!(
+        out.contains("waiting"),
+        "mail must reach a session identified only by its payload: {out}"
+    );
+
+    // And the guarantee is intact where there is genuinely nothing to identify: silence, not a
+    // crash, and above all not a shared blank identity.
+    let mut bare = b.cmd_unscoped("");
+    bare.args(["hook", "turn"])
+        .env("AMB_PROJECT", "nest")
+        .env_remove("GEMINI_SESSION_ID");
+    let (code, out) = common::with_stdin(bare, r#"{"hook_event_name":"SessionStart"}"#);
+    assert_eq!(code, 0, "no identity anywhere is still exit 0");
+    assert!(
+        out.trim().is_empty(),
+        "and says nothing rather than inventing an agent: {out:?}"
+    );
+}

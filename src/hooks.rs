@@ -563,6 +563,35 @@ pub fn tool_and_file(input: &Value) -> (&str, Option<&str>) {
     (tool, file)
 }
 
+/// The session id a hook payload carries, for a vendor whose environment carries none.
+///
+/// **Without this, `amb` is a silent no-op on most of the field.** Identity was environment-only:
+/// `AMB_AGENT`, then `Vendor::session_env`. Claude Code and Gemini CLI both export a variable, so
+/// both work — and the seven other agent CLIs whose hooks could host `amb` today mostly do not.
+/// Their payloads all carry the id; their environments do not. On those, every hook fired, found
+/// no identity, exited 0 by D9's guarantee, and delivered nothing. `amb install --vendor …` would
+/// succeed and `doctor` would report hooks present over an installation that could never work —
+/// this project's signature failure at the largest scale it has occurred.
+///
+/// **Three keys, and this is a tolerant reader rather than a descriptor field.** `session_id` is
+/// what Claude Code, Gemini, Qwen, Codex, Devin, Droid and Kiro send; Copilot CLI sends
+/// `sessionId`; Auggie sends `conversation_id`. None of them means anything *other* than the
+/// session id by those names, so reading all three is unambiguous rather than a guess. It is
+/// deliberately **not** a `Vendor` field yet: D111's own ordering is that the manifest format was
+/// designed after the second vendor proved which fields are real, and `find_unread_fields.py` is
+/// in the gate precisely so a speculative field cannot ship. The moment one vendor disagrees about
+/// meaning rather than spelling, this becomes a descriptor field — that is the trigger, and it has
+/// not fired.
+///
+/// An empty or whitespace id is `None`, matching `Vendor::session_id`: a blank is not an identity,
+/// and a session named `""` would collide with every other blank on the board.
+pub fn payload_session_id(input: &Value) -> Option<&str> {
+    ["session_id", "sessionId", "conversation_id"]
+        .iter()
+        .find_map(|k| input.get(k).and_then(Value::as_str))
+        .filter(|v| !v.trim().is_empty())
+}
+
 /// Why a tool call failed, as the payload chose to say it.
 ///
 /// **A schema fallback chain, and D78's own explanation of why it was in `main.rs`**: the binary
@@ -1245,6 +1274,52 @@ mod tests {
             super::deliver_action(&GEMINI_CLI, "PostToolUse"),
             super::DeliverAction::Offer { start: false },
             "and Claude's is not Gemini's"
+        );
+    }
+
+    /// **Three spellings, because the field's name varies and its meaning does not.** A vendor
+    /// that sends `sessionId` rather than `session_id` is not describing something else, so a
+    /// reader that accepted only one spelling would leave that vendor silently identity-less —
+    /// which is the whole failure D113 exists to close, reintroduced through a string.
+    #[test]
+    fn a_payload_session_id_is_read_under_every_spelling_the_field_uses() {
+        use serde_json::json;
+        assert_eq!(
+            super::payload_session_id(&json!({"session_id": "a"})),
+            Some("a")
+        );
+        assert_eq!(
+            super::payload_session_id(&json!({"sessionId": "b"})),
+            Some("b"),
+            "Copilot CLI's spelling"
+        );
+        assert_eq!(
+            super::payload_session_id(&json!({"conversation_id": "c"})),
+            Some("c"),
+            "Auggie calls a session a conversation"
+        );
+        assert_eq!(
+            super::payload_session_id(&json!({"session_id": "a", "sessionId": "b"})),
+            Some("a"),
+            "the canonical spelling wins when a payload carries both"
+        );
+    }
+
+    /// A blank is not an identity. Every session that failed to name itself would otherwise share
+    /// one roster row and read each other's mail — the failure is a collision, not an absence.
+    #[test]
+    fn a_blank_or_missing_payload_id_is_no_identity_rather_than_an_empty_one() {
+        use serde_json::json;
+        assert_eq!(super::payload_session_id(&json!({})), None);
+        assert_eq!(super::payload_session_id(&json!({"session_id": ""})), None);
+        assert_eq!(
+            super::payload_session_id(&json!({"session_id": "   "})),
+            None
+        );
+        assert_eq!(
+            super::payload_session_id(&json!({"session_id": 7})),
+            None,
+            "a wrongly-typed id is absent, not stringified"
         );
     }
 

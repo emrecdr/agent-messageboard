@@ -5860,3 +5860,91 @@ gate that reads it; a date would be ceremony on the half that already works.
 **Filing these as open questions instead.** `OPEN-QUESTIONS.md` holds what is *undecided*. These are
 decided — the answer is "not yet, and here is what would change it" — which is a decision with a
 trigger, not a question.
+
+---
+
+## D113 · A session is whoever exported an id *or* whoever the payload names, because most vendors name it only in the payload
+
+**Decided 2026-09-04.** `identity::resolve_from` consults, in order: `AMB_AGENT`, the host CLI's
+own variable from `Vendor::session_env`, and — on the hook path only — the session id the payload
+carries. D12 said *"identity is the session UUID, read from the environment"*; that premise held
+for exactly as long as the field was Claude Code.
+
+### What was wrong, and it was the largest silence this project has had
+
+Identity was environment-only. Claude Code exports `CLAUDE_CODE_SESSION_ID` and Gemini CLI exports
+`GEMINI_SESSION_ID`, so both worked and nothing looked broken. A survey of fourteen agent CLIs on
+2026-09-04 found seven whose hooks could host `amb` today — Qwen Code, Codex CLI, Copilot CLI,
+Devin CLI, Factory Droid, Kiro, Auggie — and **their payloads carry the session id while their
+environments carry nothing**.
+
+On every one of those, the consequence was not an error. `hook_main` resolves identity, gets
+`NoIdentity`, and exits 0 because D9 requires that mail delivery never break a session. So every
+hook fired, delivered nothing, recorded no claim, and reported success — while `amb install
+--vendor …` succeeded and `doctor` reported the hooks present and the binary current. D111 phase 3
+ships the ability to add a vendor by dropping in a JSON file; for most vendors that file produced
+an installation that could never work, and said so nowhere.
+
+**Verified by running it** rather than by reading: with no session variable and `session_id` in the
+payload, `amb hook turn` emitted nothing and exited 0. With the fallback, the same invocation
+delivers.
+
+### Why the payload is consulted *last*
+
+Putting it first would change what identity means for Claude Code and Gemini CLI, which export a
+variable *and* send the id. A change that alters the shipped vendors' behaviour in order to serve
+unshipped ones is the trade D111 explicitly refused when it required the extraction to be provably
+behaviour-preserving before a second descriptor arrived. Last means byte-identical for everything
+that works today, and the difference between working and silent for everything else.
+
+### Three spellings, and why this is not a `Vendor` field yet
+
+`session_id` is what Claude Code, Gemini, Qwen, Codex, Devin, Droid and Kiro send; Copilot CLI
+sends `sessionId`; Auggie sends `conversation_id`. None of those names means anything *other* than
+the session id, so reading all three is a tolerant reader rather than a guess.
+
+It is deliberately **not** a descriptor field. D111's own ordering is that the manifest format was
+designed *after* a second vendor proved which fields were real, and `find_unread_fields.py` sits in
+the gate so a speculative field cannot ship. **The trigger is stated so it can fire**, per D112:
+the moment one vendor disagrees about *meaning* rather than spelling — a payload where
+`session_id` names something that is not the session — this becomes `Vendor::session_payload_keys`.
+Spelling differences do not reach that bar.
+
+### What this does not fix, and it is the larger half
+
+**A command still needs the environment.** `amb send` typed inside a Qwen session has no payload
+and therefore still no identity. So on those seven vendors this decision buys the *delivery* and
+*claims* lanes — everything driven by hooks — and not the ability of an agent to write to the
+board. That asymmetry is real and is not hidden: the vendor is half-supported, and a manifest for
+one should say so.
+
+Two candidate fixes were considered and both are deferred rather than rejected:
+
+- **The `SessionStart` banner teaches the session to export it.** `amb` writes that banner from
+  inside a hook that already knows the payload id, so it could emit `export AMB_AGENT=…` as
+  instruction. Costs nothing and works today; it depends on the model complying, which makes it
+  advice rather than a mechanism.
+- **A session map** written by the `SessionStart` hook — vendor, cwd, payload id, TTL'd — consulted
+  by `resolve` below the environment. A mechanism rather than advice, and the reason it is not
+  built now is that two sessions of the same vendor in one working directory are indistinguishable
+  in it, so it must degrade to *no identity* rather than guess between them. That is a design with
+  a real edge case and no user yet: **no vendor beyond Claude Code and Gemini CLI is in use on this
+  machine**, so building it now would ship a mechanism nothing can evaluate — the failure D45 and
+  D51 both record.
+
+**The condition for building it**, so this is not a promise with no date: a second vendor actually
+in use here, on the same machine, whose sessions need to *write* to the board. The delivery half
+lands first because it is the half that is silent.
+
+### Rejected
+
+**Preferring the payload over the environment.** Above: it changes the shipped vendors to serve
+unshipped ones.
+
+**Trusting a payload id on the command path.** There is no payload on the command path; inventing
+one from a transcript file or a process tree would be a guess at exactly the point where a wrong
+answer means one session reading another's mail.
+
+**Leaving it to the manifest author.** A manifest cannot express "and also export this variable" —
+the vendor's own runtime decides what it exports, so no amount of configuration on this side
+reaches it.
