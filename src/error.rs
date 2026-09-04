@@ -8,9 +8,19 @@
 /// Everything this library can fail with.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// **Named per vendor rather than per CLI, because this message reaches a person on the one
+    /// path where `amb` knows least about them** (D111). It said *"run inside a Claude Code
+    /// session where CLAUDE_CODE_SESSION_ID is set"* for as long as Claude Code was the only
+    /// vendor, and stayed that way after Gemini shipped — so a Gemini session with no id was told
+    /// to go and be a different CLI. The list is static, and
+    /// `the_identity_error_names_every_shipped_vendors_session_variable` reddens if a vendor is
+    /// added to `VENDORS` without a line here. A *manifest* vendor cannot be listed at compile
+    /// time, which is why the sentence ends at `amb doctor` — the one command that enumerates
+    /// them at runtime, and the one that now runs without an identity at all (D73).
     #[error(
-        "no agent identity: set AMB_AGENT, or run inside a Claude Code session where \
-         CLAUDE_CODE_SESSION_ID is set"
+        "no agent identity: set AMB_AGENT, or run inside an agent CLI that exports a session id \
+         \u{2014} Claude Code sets CLAUDE_CODE_SESSION_ID, Gemini CLI sets GEMINI_SESSION_ID. \
+         `amb doctor` lists every vendor this build knows, including any you added."
     )]
     NoIdentity,
 
@@ -294,6 +304,31 @@ impl Error {
 
 #[cfg(test)]
 mod tests {
+    /// The identity error names **every shipped vendor's** session variable, enumerated rather
+    /// than spot-checked: a vendor added to `VENDORS` without a line in the message goes red here.
+    ///
+    /// `AMB_AGENT` is asserted first and on purpose. Every other assertion in this test is
+    /// satisfied by a message that rendered *something*, so without one needle that must be
+    /// present the test would still pass against a message which had lost its vendor half — the
+    /// absence-only trap this project keeps finding in its own guards.
+    #[test]
+    fn the_identity_error_names_every_shipped_vendors_session_variable() {
+        let msg = crate::error::Error::NoIdentity.to_string();
+        assert!(
+            msg.contains("AMB_AGENT"),
+            "the override belongs in the message: {msg}"
+        );
+        for v in crate::vendors::VENDORS {
+            for k in v.session_env {
+                assert!(
+                    msg.contains(k),
+                    "{} exports {k} and the error does not name it: {msg}",
+                    v.label
+                );
+            }
+        }
+    }
+
     /// `causes` walks the real source chain — the constant-replacement mutants returned an
     /// empty or fabricated chain and nothing noticed, because the binary prints these lines
     /// ("  caused by: …") and no test read them (M55).

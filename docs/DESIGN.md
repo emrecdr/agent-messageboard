@@ -170,6 +170,11 @@ injections grew with the backlog (M29).
 
 ## Identity and registration
 
+> **Vendor-parameterised since D111 (2026-09-02).** The variable named below is Claude Code's;
+> identity now reads whichever session id the host CLI exported, from `Vendor::session_env`.
+> Gemini CLI sets `GEMINI_SESSION_ID`. Everything else in this section is unchanged — a session
+> is still whoever exported an id, and the roster row is still auto-created.
+
 Identity is `CLAUDE_CODE_SESSION_ID`, read from the environment on every invocation. **Verified:**
 it is inherited by subshells and fresh `exec`s and equals the session's own transcript filename.
 

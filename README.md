@@ -1,18 +1,21 @@
 # agent-messageboard (`amb`)
 
-**A message bus for concurrent Claude Code sessions on one machine** — direct messages,
-project-wide broadcasts, and advisory file claims, across more than one repository. It also
-carries an **experimental** memory vault, off until you turn it on.
+**A message bus for concurrent agent-CLI sessions on one machine** — direct messages,
+project-wide broadcasts, and advisory file claims, across more than one repository and more than
+one vendor. Claude Code and Gemini CLI ship; another is a JSON file you drop in, with no rebuild
+(D111). It also carries an **experimental** memory vault, off until you turn it on.
 
 One static Rust binary, one SQLite file, **no daemon and no polling**. Sessions don't check for
-mail; mail arrives in their context on its own, through Claude Code hooks.
+mail; mail arrives in their context on its own, through their own CLI's hooks. The board is
+shared, so a Gemini session and a Claude session reach each other — and each other's projects —
+without either knowing the other's vendor.
 
 ```bash
 amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 624 tests (626 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 626 tests (628 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -81,8 +84,10 @@ Then wire up delivery, **once per machine**:
 amb install --mode turn
 ```
 
-That edits `~/.claude/settings.json`. Preview it first with `--dry-run` — it prints the change
-and writes nothing:
+That edits `~/.claude/settings.json`. For a different agent CLI, name it — `amb install --mode
+turn --vendor gemini-cli` writes `~/.gemini/settings.json` with Gemini's own event spellings, and
+the two installations share one board (D111). Preview either first with `--dry-run` — it prints
+the change and writes nothing:
 
 ```console
 $ amb install --mode turn --dry-run
@@ -600,16 +605,16 @@ between commits, and scripts that scrape it get what they asked for.
 | `amb send <to> --subject S --body B` | Send. `--body-file`, `--kind`, `--thread`, `--id` optional. A body over 100,000 characters — or a subject over 500 — is refused at the sender (D90, D106). A kind other than `note` shows in the header: `#7 [direct·question]` (D107) |
 | `amb inbox [--unread]` | What is waiting for you. The header counts unread, `*` marks it, and `--json` rows carry `"read"` |
 | `amb read <id>` · `amb read --all` | Acknowledge one, or everything unread — the only thing that marks mail read |
-| `amb reply <id> --body B` | Answer its sender, keeping the thread |
+| `amb reply <id> --body B` [`--body-file F`] | Answer its sender, keeping the thread. `-` reads stdin |
 | `amb agents [--live] [--project P]` | Who else is on the board |
 | `amb register [--name N]` | Set a display name. Optional |
 | `amb doctor` | What is wrong with this installation, especially what fails silently |
 | `amb claim <path> [--intent I] [--ttl T]` | Advisory claim; reports conflicts, never blocks |
 | `amb release <path>` | Drop a claim you hold |
-| `amb claims [--live] [--raw] [--project P]` | Who holds what |
+| `amb claims [--all] [--live] [--raw] [--project P]` | Who holds what. **`--all` surveys every project** — the default answers only for this one |
 | `amb watch [--timeout S] [--poll MS]` | Block until mail arrives. `--poll` is floored at 50 ms — zero was a busy loop (D97) |
 | `amb snapshot <path> [--all]` | Write the board to a markdown file for a reader that cannot open it. **Marks nothing read**, and refuses a path inside a repository (D11, D61) |
-| `amb install [--mode M] [--memory] [--dry-run]` | Wire delivery into `~/.claude/settings.json` |
+| `amb install [--vendor V] [--mode M] [--memory] [--dry-run]` | Wire delivery into the host CLI's settings file. `--vendor claude-code` (default) or `gemini-cli` (D111) |
 | `amb uninstall [--dry-run]` | Remove them, leaving other tools' hooks intact |
 | `amb memory observe --title T --files F --learned L` | Record what this session learned (needs `AMB_VAULT`). `--cites`, `--supersedes`, `--force`, `--same-as`, `--project` optional |
 | `amb memory recall [query] [--file P] [--across-repos] [--project P] [--all-projects] [--limit N]` | Search **titles and note bodies** (D88), or ask what is known about one path. Every kind but `candidate`, which reaches you through `promote` instead |
@@ -684,7 +689,7 @@ working default.
 | Variable | Default | Purpose |
 |---|---|---|
 | `AMB_DB` | `~/.agent-messageboard/board.db` | Where the board lives |
-| `AMB_AGENT` | `$CLAUDE_CODE_SESSION_ID` | Who you are |
+| `AMB_AGENT` | the host CLI's session id — `$CLAUDE_CODE_SESSION_ID`, `$GEMINI_SESSION_ID`, or whatever a manifest names | Who you are |
 | `AMB_PROJECT` | the **git working-tree root**'s name | Which project you are in |
 | `AMB_VAULT` | **none — unset means memory is off** | Where your notes live (see below) |
 | `AMB_VENDORS` | `~/.config/amb/vendors/` | Where **user-added agent CLIs** live: one JSON manifest per vendor, read at startup, no rebuild (D111). `amb doctor` names any it refused |
@@ -854,7 +859,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 624 tests (626 on Linux)
+cargo test                       # all 626 tests (628 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -864,6 +869,8 @@ cargo fmt                        # `cargo fmt --check` is what the gate below ru
 ./tools/eyeball.sh               # print what a session actually sees, against a copy of the board
 python3 tools/cfg_phantoms.py    # mutants.sh runs this itself; --self-test checks the classifier
 python3 tools/check_secret_literals.py   # refuse a credential-shaped literal in tracked source
+python3 tools/check_mutation_coverage.py # which modules have never had a mutation round
+python3 tools/check_docs.py              # the mechanical half of doc currency (D110)
 ```
 
 `cfg_phantoms.py` exists because a `cargo mutants` MISSED row can mean *"this code is not compiled

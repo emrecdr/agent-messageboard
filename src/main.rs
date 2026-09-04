@@ -512,6 +512,23 @@ fn run(cli: Cli) -> Result<(), Error> {
             })?;
             return report_plan(&cli, &path, &done, dry_run, mode.as_str());
         }
+        // `doctor` runs before identity is resolved, because **a session with no identity is one
+        // of the misconfigurations it exists to report**. It reached `identity::resolve` only by
+        // falling through to the common path, so the one contract D73 states — and CLAUDE.md, the
+        // README, DESIGN.md and OPEN-QUESTIONS.md all repeat — was false in precisely the case a
+        // person runs `doctor` to diagnose. Every judgement still lives in `amb::doctor`; this
+        // prints (D70, D78).
+        Command::Doctor => {
+            let report = doctor::gather(db::now()?);
+            if cli.json {
+                print_json(&report.to_json());
+            } else {
+                for c in &report.checks {
+                    println!("{}  {:<14}  {}", c.health.glyph(), c.name, c.detail);
+                }
+            }
+            return Ok(());
+        }
         Command::Uninstall {
             ref vendor,
             dry_run,
@@ -810,7 +827,10 @@ fn run(cli: Cli) -> Result<(), Error> {
             }
         }
 
-        Command::Install { .. } | Command::Uninstall { .. } | Command::Hook { .. } => {
+        Command::Install { .. }
+        | Command::Uninstall { .. }
+        | Command::Hook { .. }
+        | Command::Doctor => {
             unreachable!("handled before the board is opened")
         }
 
@@ -844,19 +864,6 @@ fn run(cli: Cli) -> Result<(), Error> {
                 }));
             } else {
                 println!("wrote {} message(s) to {path} (render #{runs})", msgs.len());
-            }
-        }
-        Command::Doctor => {
-            // Every judgement lives in `amb::doctor`; this prints. D70's audit found four
-            // functions in this file making real decisions, which is the invariant that keeps
-            // them testable without a process.
-            let report = doctor::gather(db::now()?);
-            if cli.json {
-                print_json(&report.to_json());
-            } else {
-                for c in &report.checks {
-                    println!("{}  {:<14}  {}", c.health.glyph(), c.name, c.detail);
-                }
             }
         }
         Command::Agents { ref project, live } => {

@@ -5221,6 +5221,14 @@ what a script prints. A fixture reaching stdout is not what blocks a push.
 
 ## D101 · `amb` stays Claude-Code-only, because the cross-vendor path that would be cheap was declined twice
 
+> **REOPENED by D111 (2026-09-02).** Its second condition — *"a second agent tool is actually in
+> use on this machine"* — fired, and `src/vendors.rs` is the per-vendor table this decision said
+> would not be built. Gemini CLI ships and is installable with `amb install --vendor gemini-cli`.
+> **The argument below is not withdrawn**: it was a cost calculation against a demand that did not
+> exist yet, one of its own stated conditions changed the demand, and D111 records what the
+> arithmetic looks like now. Read D111 before citing this one — the title says *Claude-Code-only*
+> and that has not been true since 2026-09-02.
+
 **Decided 2026-08-31, closing Q8.** No per-vendor hook matrix, now or on a schedule. The ceiling is
 accepted and written down — Q8 was filed so D11's reasoning would not be mistaken for a promise,
 and leaving it open indefinitely makes the same mistake more slowly.
@@ -5613,7 +5621,7 @@ cost, not delete it.
 
 **Decided 2026-09-02.** `src/vendors.rs` holds a `Vendor` descriptor; `hooks::plan_install`,
 `settings_path`, `settings_sources`, `memory_state`, `memory_hooks` and `Mode::events` take one.
-Claude Code is the only descriptor that ships. **This is a refactor with no behaviour change** —
+Claude Code was the only descriptor that shipped **on the day this was decided**, and phases 2 and 3 below add Gemini CLI and the manifest loader — the sentence is kept in the past tense rather than corrected away, because the ordering is the argument. **Phase 1 was a refactor with no behaviour change** —
 604 tests passed before it and after it, unchanged.
 
 ### Why this reopens D101 rather than overriding it

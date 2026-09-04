@@ -945,3 +945,68 @@ fn doctor_names_a_manifest_it_refused_and_still_loads_the_good_one() {
     );
     assert_eq!(out.status.code(), Some(0), "doctor always exits 0 (D73)");
 }
+
+/// Strip every session id this build can recognise, so the child is genuinely identity-less.
+///
+/// Driven off [`amb::vendors::VENDORS`] rather than a written-out list: a vendor added later
+/// brings a new variable, and a hardcoded list would quietly stop clearing the environment while
+/// still passing. `AMB_VENDORS` is cleared too, because a manifest-supplied vendor is *not* in
+/// `VENDORS` — that is the residual hole, named here rather than left silent.
+fn without_any_identity(cmd: &mut std::process::Command) {
+    cmd.env_remove("AMB_AGENT").env_remove("AMB_VENDORS");
+    for v in amb::vendors::VENDORS {
+        for k in v.session_env {
+            cmd.env_remove(k);
+        }
+    }
+}
+
+/// **`doctor` must survive having no identity, and it did not** (D73).
+///
+/// The contract — *`amb doctor` always exits 0* — is stated in `CLAUDE.md`, the README,
+/// `DESIGN.md` and `OPEN-QUESTIONS.md`, all citing D73. It was false in precisely the case a
+/// person runs `doctor` to diagnose: with no session id exported, `run` fell through to
+/// `identity::resolve`, and the command exited **78** having printed not one check. The command
+/// whose whole job is reporting what fails silently refused to report the misconfiguration it is
+/// most likely to be run for.
+///
+/// **Nothing was red, because no fixture reached that branch.** The single assertion of the
+/// contract anywhere in the suite sits in the manifest test above; it sets `HOME`, `AMB_VENDORS`
+/// and `AMB_DB` and so *looks* like it controls the environment, while **inheriting**
+/// `CLAUDE_CODE_SESSION_ID` from the Claude Code session running `cargo test`. It proved the
+/// contract only on the one machine where it could not fail — and fails under CI, which exports
+/// no such variable. M17's shape, arriving through inherited environment rather than a filter.
+///
+/// The line-count assertion is deliberate and comes first: an exit-code assertion alone passes
+/// against a command that prints nothing at all, which is the failure this test exists to close.
+#[test]
+fn doctor_reports_rather_than_refuses_when_the_session_has_no_identity() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_amb"));
+    cmd.arg("doctor")
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("AMB_DB", dir.path().join("board.db"))
+        .env_remove("AMB_VAULT");
+    without_any_identity(&mut cmd);
+    let out = cmd.output().expect("doctor runs");
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        text.lines().count() >= 3,
+        "doctor must print its report, not refuse: stdout={text:?} stderr={err:?}"
+    );
+    assert!(
+        !err.contains("no agent identity"),
+        "the identity error must never reach a doctor run: {err}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "doctor always exits 0 (D73), and having no identity is not an exception"
+    );
+}

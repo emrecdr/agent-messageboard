@@ -1,8 +1,11 @@
 //! Who this session is, and which project it is working in.
 //!
-//! Identity is free. `CLAUDE_CODE_SESSION_ID` is present in the environment of every command a
-//! Claude Code session shells out to, is inherited by subshells and fresh `exec`s, and equals the
-//! name of that session's own transcript file. Verified 2026-08-27; see `DECISIONS.md` D12.
+//! Identity is free, and it is where a second vendor arrives first. Every agent CLI exports a
+//! session id into the environment of every command it shells out to; `resolve` reads whichever
+//! one is present, from `Vendor::session_env` (D111). Claude Code's `CLAUDE_CODE_SESSION_ID` is
+//! inherited by subshells and fresh `exec`s and equals the name of that session's own transcript
+//! file — verified 2026-08-27, see `DECISIONS.md` D12. Gemini CLI sets `GEMINI_SESSION_ID`, whose
+//! transcript correspondence has *not* been verified and is not relied on.
 
 use crate::db::now;
 use crate::error::{Error, Result, io, sql};

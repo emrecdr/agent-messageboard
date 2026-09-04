@@ -11,6 +11,71 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`amb doctor` refused to run for the session most in need of it, and the contract said
+  otherwise in four documents** (D73). With no session id exported, `run` fell through to
+  `identity::resolve` and `doctor` exited **78** having printed not one check — so the command
+  whose stated job is *reporting what fails silently* would not report a missing identity, which
+  is exactly the misconfiguration a person runs it to diagnose. `doctor::gather` never needed an
+  identity; the arm simply sat after the resolution rather than before it, alongside `install` and
+  `uninstall` which were already there.
+
+  **Nothing was red, and how it hid is the reusable part.** The single assertion of the contract
+  anywhere in the suite — `assert_eq!(out.status.code(), Some(0), "doctor always exits 0 (D73)")`
+  — sits in a test that sets `HOME`, `AMB_VENDORS` and `AMB_DB`, so it *looks* like it controls
+  its environment, while **inheriting** `CLAUDE_CODE_SESSION_ID` from the Claude Code session
+  running `cargo test`. It proved the contract only on the one machine where it could not fail.
+  Under CI, which exports no such variable, that test fails — and it has never run there, because
+  it arrived in commits that are not yet pushed. Confirmed by running the suite with the variable
+  removed: red before, 626 green after.
+
+  This is M17's shape — a fixture that never reaches the branch it names — arriving through
+  **inherited environment** rather than through a filter, which is worse in one specific way: an
+  upstream filter is visible in the test's own file, and an inherited variable is visible nowhere.
+  The new guard strips every session id by walking `VENDORS` rather than by naming them, so a
+  vendor added later cannot quietly reintroduce the hole, and it asserts the report *rendered*
+  before asserting the exit code, because an exit-code assertion alone passes against a command
+  that printed nothing at all.
+
+- **`Error::NoIdentity` told a Gemini session to go and be a different CLI** (D111). It read *"run
+  inside a Claude Code session where CLAUDE_CODE_SESSION_ID is set"*, correct for as long as
+  Claude Code was the only vendor and untouched for two days after Gemini shipped. It now names
+  every shipped vendor's variable, enumerated by a test against `VENDORS` rather than
+  spot-checked, so a vendor added without a line in the message goes red. Manifest vendors cannot
+  be listed at compile time, which is why the sentence ends by pointing at `amb doctor` — the one
+  command that enumerates them at runtime, and, as of the entry above, the one that now runs
+  without an identity at all.
+
+- **D101 was overturned three days ago and its own record never said so.** Its title reads
+  *"`amb` stays Claude-Code-only"* and its body *"No per-vendor hook matrix, now or on a
+  schedule"*, while D111 shipped exactly that table and Gemini CLI is installable today. The
+  mechanism worked — D101 named two reopening conditions, D111's title says which one fired — but
+  the write-back to the *old* record is the step with no forcing function, and `DECISIONS.md` is
+  the file `CLAUDE.md` tells every session to read *so the argument is not re-litigated*. A
+  session landing on D101 would have won that argument in the wrong direction. It now carries a
+  `> **REOPENED by D111**` banner in the form D2, D16, D40, D50 and D63 already use.
+
+  This is D95's sibling. That entry is about **a stated condition that cannot fire** — the
+  standard looks live and nothing is watching. This is the mirror: **a condition that fired, with
+  the record never updated to say so.** Both leave a reader trusting a verdict that is not
+  current, and the second hides better, because all the machinery worked.
+
+- **The vendor layer reached the README's env table and nothing else a reader starts from.**
+  `CLAUDE.md` had zero occurrences of *vendor* or *Gemini* — its only contact with D111 was the
+  `D1–D111` range bump — while stating that `amb` is a bus *for Claude Code sessions*, that
+  `install` writes `~/.claude/settings.json`, and that identity *is* `CLAUDE_CODE_SESSION_ID`.
+  That file is loaded into every session automatically, so nobody has to open it and nobody does;
+  its own catalogue predicts exactly this and was written about a different paragraph six days
+  earlier. It now carries an architecture entry for `src/vendors.rs`. Also corrected there: a
+  facade re-exporting *fourteen* modules that re-exports fifteen, and *six* load-bearing things
+  followed by seven bullets.
+
+  The README's command table had lost three shipped flags — `install --vendor`, `claims --all` and
+  `reply --body-file`. The last two are the sharp ones: both shipped *this week* as fixes for
+  discoverability failures, and leaving them undocumented reproduces the defect one level up.
+  `--all` exists because the default *"guaranteed its own answer"*; `--body-file` exists because a
+  session was refused while composing a long reply. `tools/check_mutation_coverage.py` and
+  `tools/check_docs.py` both run in the gate and were named in neither tools block.
+
 - **`amb claims --all` surveys every project, because the default answered a narrower question
   than it looked like it answered** (U11). A session ran `amb claims`, saw the single holder its
   own project had, and reported twice that nobody uses claims — a number the command *guaranteed*

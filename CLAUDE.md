@@ -4,13 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`amb` — a message bus for concurrent Claude Code sessions on one machine: direct messages,
-project-wide broadcasts, and advisory file claims, across more than one repository. A Rust CLI
-over SQLite. **One static binary, one database file, no daemon.**
+`amb` — a message bus for concurrent agent-CLI sessions on one machine: direct messages,
+project-wide broadcasts, and advisory file claims, across more than one repository and **across
+more than one vendor** (D111). A Rust CLI over SQLite. **One static binary, one database file, no
+daemon.**
 
-It is installed machine-wide: `amb install` writes hooks into `~/.claude/settings.json`, and from
-then on every session on the machine registers itself, receives mail directly in its context, and
-records claims on files it edits. Agents never poll.
+It is installed machine-wide: `amb install` writes hooks into the host CLI's own settings file —
+`~/.claude/settings.json` by default, `~/.gemini/settings.json` under
+`--vendor gemini-cli` — and from then on every session on the machine registers itself, receives
+mail directly in its context, and records claims on files it edits. Agents never poll. The board
+is shared, so a Gemini session and a Claude session reach each other without either knowing the
+other's vendor.
 
 ## Commands
 
@@ -21,7 +25,7 @@ install.
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite compiles; ~15s cold
-cargo test                       # all 624 tests (626 on Linux)
+cargo test                       # all 626 tests (628 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # run before finishing; the gate runs `cargo fmt --check`
 ./tools/verify.sh                # every gate check in one command, ~30s after a change (D70)
@@ -31,9 +35,13 @@ cargo fmt                        # run before finishing; the gate runs `cargo fm
 ./tools/eyeball.sh               # what a session actually sees, against a COPY of the real board
 python3 tools/cfg_phantoms.py    # mutants.sh runs this itself; separates "not compiled here" from "untested"
 python3 tools/check_secret_literals.py   # in the gate; see its header for why fixtures use concat!
+python3 tools/check_mutation_coverage.py # in the gate; which modules have never had a round
+python3 tools/check_docs.py              # in the gate; the mechanical half of doc currency (D110)
 ```
 
-**The last three are separate from the gate on purpose and each says why in its own first line.**
+**`bench.sh`, `mutants.sh` and `eyeball.sh` are separate from the gate on purpose and each says
+why in its own first line.** (Named rather than counted: this sentence used to say "the last
+three" and two more tools had since been appended after them.)
 `bench.sh` verifies that a harness still measures what a document says it measures and asserts
 nothing about values; `mutants.sh` forces a private `CARGO_TARGET_DIR`, because a mutation result
 produced while anything else was building is **void, not weak** — that has happened, and the
@@ -184,22 +192,52 @@ Two hard requirements on `hook_main` in `src/main.rs`:
 
 Both are mutation-tested — delete either and a test in `tests/hook_safety.rs` goes red.
 
+### A vendor is data, not a trait
+
+`src/vendors.rs` holds a `Vendor` descriptor — paths, event spellings, tool names, session
+variables — and `hooks::plan_install`, `settings_path`, `settings_sources`, `memory_state`,
+`memory_hooks` and `Mode::events` all take one (D111). Claude Code and Gemini CLI ship;
+`~/.config/amb/vendors/*.json` (or `$AMB_VENDORS`) adds more **with no rebuild**.
+
+Three things about it read as omissions:
+
+- **A table, not a `trait Vendor` with one impl per CLI.** Dynamic dispatch buys nothing when the
+  variation is six fields and every difference is a *value* rather than an algorithm. The field's
+  usual answer is the trait, and it is why competitors cannot gain a vendor without a release.
+- **The manifest format was designed *after* the second vendor**, not before. The first version
+  carried exactly the fields production code read that day, because `find_unread_fields.py` is in
+  the gate and a speculative field is a field nothing reads. That ordering is the reason there is
+  no unused config language here.
+- **A vendor's *tool* vocabulary is as much its own as its event names.** Phase 2 installed
+  Claude's `Read|Edit|Write|NotebookEdit` matcher verbatim into Gemini's `BeforeTool`, where it
+  matches nothing — Gemini calls those acts `read_file`, `write_file`, `replace`. The path-anchored
+  memory lane would have fired zero times on every Gemini session, silently, and the receipt would
+  have printed `by path 0/0` beside a working recency lane: D74's incomparable-denominator failure
+  arriving through a field nobody thought to ask about. `Vendor::tool_matcher` carries it now.
+
+**Values here are read out of the vendor's shipped binary, not its documentation.** Gemini 0.55.1
+contains no occurrence of `PreToolUse` at all; installing Claude's spellings would have written
+entries the runtime ignores in silence.
+
 ### Functional core, imperative shell
 
 The decisions are pure and exhaustively tested without a filesystem; only the shell performs I/O.
 `address::parse`, `duration::parse`, `claims::overlaps`, `claims::edited_path`,
 `delivery::render_all`, and `hooks::plan_install`/`plan_uninstall` are all pure. The last two
-matter most: they edit `~/.claude/settings.json`, which configures Claude Code for every project
-on the machine — corrupting it breaks the user's whole tool, not just this one.
+matter most: they edit the host CLI's settings file — `~/.claude/settings.json`, or whichever
+file the `Vendor` descriptor names — which configures that CLI for every project on the machine,
+so corrupting it breaks the user's whole tool, not just this one. `plan_install` takes a
+`&Vendor`; `plan_uninstall` does not, because removal matches on `amb`'s own command rather than
+on any vendor's vocabulary.
 
 ### Memory is a fifth surface, and it is off by default
 
 `src/memory/` is a vault of markdown notes plus a **derived** index (D34–D43, Phase 1 of
 `docs/AMB-MEMORY-IMPLEMENTATION-PLAN.md`). It was one 5,883-line file until D80; `src/memory.rs`
-is now a facade that re-exports fourteen modules and carries the table saying which holds what, so
+is now a facade that re-exports fifteen modules and carries the table saying which holds what, so
 start there. Callers are unchanged — everything is still `memory::observe`.
 
-Six things about it are load-bearing and read as omissions otherwise:
+Seven things about it are load-bearing and read as omissions otherwise:
 
 - **`AMB_VAULT` has no default. Unset means memory is off** (D35). Do not add one — a default
   vault path creates a directory the user never asked for and starts filling it.
@@ -252,11 +290,19 @@ under which the phase is withdrawn:
   plan's own ordering. D49 says so in its second paragraph so nobody mistakes the order for an
   accident.
 
-### Identity is free
+### Identity is free, and it is where a second vendor arrives first
 
-`CLAUDE_CODE_SESSION_ID` is present in the environment of every command a session shells out to and
-equals that session's transcript filename. Registration is optional: every command auto-creates the
+Every agent CLI exports a session id into the environment of every command it shells out to, and
+`amb` reads whichever one is present: `Vendor::session_env` lists them, most specific first, and
+`AMB_AGENT` overrides all of them. Claude Code sets `CLAUDE_CODE_SESSION_ID`, which equals that
+session's transcript filename; Gemini CLI sets `GEMINI_SESSION_ID`. **A session is simply whoever
+exported an id**, so `amb` never has to be told which CLI it is inside — which is why identity was
+the first thing D111 made vendor-driven. Registration is optional: every command auto-creates the
 roster row, so forgetting `amb register` yields a less readable name, not a failure.
+
+`Error::NoIdentity` names every shipped vendor's variable, enumerated by a test against `VENDORS`
+rather than spot-checked. It named only Claude's for two days after Gemini shipped, which told a
+Gemini session with no id to go and be a different CLI.
 
 ## Conventions that have actually bitten here
 
