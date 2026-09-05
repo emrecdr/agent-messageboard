@@ -1765,6 +1765,30 @@ mod tests {
         );
         // The presence row that proves the absence row above was not vacuous (M27).
         assert!(sorts_first.contains("codelore"), "{sorts_first}");
+
+        // **The tail clause is an omission, and a positive assertion cannot guard one** (M23).
+        // `rest > 0` -> `rest >= 0` survived the whole suite above: with two others the list is
+        // complete, `rest` is 0, and the mutant renders "codelore, nestwatch, and 0 more". The
+        // fixture already REACHED that branch — `sorts_first` has exactly two others — and every
+        // assertion on it was a presence check, so the branch ran and nothing looked at it. Found
+        // by mutation, which is the only thing that could: the output is well-formed, the count is
+        // right, and no test was asking about the words in between.
+        assert!(
+            !sorts_first.contains("more"),
+            "a complete list must not claim a remainder: {sorts_first}"
+        );
+        // Both sides of the boundary, so neither row can go vacuous: 3 others is the last complete
+        // list, 4 is the first truncated one.
+        let exactly_three = global_reach(&p(&["mine", "a", "b", "c"]), "mine").expect("a warning");
+        assert!(
+            !exactly_three.contains("more"),
+            "three others is still a complete list: {exactly_three}"
+        );
+        let four = global_reach(&p(&["mine", "a", "b", "c", "d"]), "mine").expect("a warning");
+        assert!(
+            four.contains("and 1 more"),
+            "four others is the first that truncates: {four}"
+        );
     }
 
     #[test]

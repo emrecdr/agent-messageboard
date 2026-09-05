@@ -85,6 +85,19 @@ pub struct Board {
     /// because that session never came back. Distinct from `dead`: nothing was spent here.
     pub unoffered: i64,
 
+    /// **`@@` sends, and what they cost** (D126). Global broadcasts are the one scope whose reader
+    /// may be working on something unrelated, so the interesting number is not how many were sent
+    /// but how many injections they bought across how many projects.
+    pub globals: i64,
+    /// Injections spent delivering those globals — `sum(attempts)`, the unit that rises every time
+    /// the cost is paid, never the row count.
+    pub global_cost: i64,
+    /// Projects other than the sender's that a global has actually been injected into. **The
+    /// number D126's withdrawal condition is read off**, and the reason this exists: that
+    /// condition shipped naming a query to run by hand, which is a stated condition nothing can
+    /// evaluate — D95's defect, and it was written into the decision that documents it.
+    pub global_reach: i64,
+
     /// Claims taken by `amb claim` — the proactive half of D5.
     pub declared: i64,
     /// Claims recorded by the `PostToolUse` hook as files were edited.
@@ -119,6 +132,23 @@ pub fn gather(conn: &Connection) -> Result<Board> {
         unoffered: one("SELECT count(*) FROM messages m
              WHERE m.to_agent IS NOT NULL
                AND NOT EXISTS (SELECT 1 FROM reads r WHERE r.msg_id = m.id)")?,
+        globals: one("SELECT count(*) FROM messages WHERE to_agent IS NULL AND to_proj IS NULL")?,
+        global_cost: one(
+            "SELECT sum(r.attempts) FROM reads r JOIN messages m ON m.id = r.msg_id
+              WHERE m.to_agent IS NULL AND m.to_proj IS NULL",
+        )?,
+        // **Joined to `agents` rather than counted off `messages`, because the question is where a
+        // global LANDED and not where it was aimed.** `from_proj <> a.project` compares the
+        // sender's project at send time against the reader's now; that is the honest available
+        // comparison, and it is why this counts distinct projects rather than deliveries — a
+        // reader's `agents.project` is overwritten on every registration, so per-row attribution
+        // to a project is not a thing this schema can support.
+        global_reach: one("SELECT count(DISTINCT a.project) FROM reads r
+               JOIN messages m ON m.id = r.msg_id
+               JOIN agents a ON a.id = r.agent
+              WHERE m.to_agent IS NULL AND m.to_proj IS NULL
+                AND r.delivered_at IS NOT NULL
+                AND a.project <> m.from_proj")?,
         declared: one("SELECT count(*) FROM claims WHERE source = 'declared'")?,
         observed: one("SELECT count(*) FROM claims WHERE source = 'observed'")?,
         conflicts: one("SELECT count(*) FROM claim_notices")?,
@@ -152,6 +182,24 @@ pub fn render(b: &Board) -> String {
         s,
         "  kind      {} of {} message(s) set one · {} of {} sender(s) ever have",
         b.explicit_kind, b.messages, b.kind_senders, b.senders
+    );
+
+    // **`@@`'s reach, reported as three numbers that are never divided into each other** (D126).
+    // The sends are what a person chooses; the injections are what everyone else pays; the project
+    // count is who paid it. A single ratio over these would be exactly D74's mistake — "injections
+    // per send" reads as a cost per message and is really a fact about how many sessions happened
+    // to be open.
+    //
+    // **Rendered unconditionally, and that is deliberate.** M27 measured this module at 52/92 with
+    // *thirty-seven of forty survivors* sitting on the `if` deciding whether a line renders at all,
+    // ten of them the literal `x > 0` -> `x >= 0`. A count guard has that relaxation and a
+    // rendered-always line has none, so the cheapest defence here is not to write the guard. The
+    // zero row is also the informative one: `0 global(s)` on a board that used to send them is the
+    // signal D126's withdrawal condition is looking for.
+    let _ = writeln!(
+        s,
+        "global    {} `@@` send(s) · {} injection(s) · reached {} other project(s)",
+        b.globals, b.global_cost, b.global_reach
     );
 
     // **The two units, adjacent and never divided into each other** (question 1). An offer is a
@@ -234,6 +282,9 @@ mod tests {
             acknowledged: 589,
             dead: 0,
             unoffered: 2,
+            globals: 15,
+            global_cost: 198,
+            global_reach: 12,
             declared: 25,
             observed: 442,
             conflicts: 4,
@@ -256,6 +307,53 @@ mod tests {
             "and the gap between them, stated rather than left to be noticed: {out}"
         );
         crate::assert_rendered_shape("status", &out);
+    }
+
+    /// `@@`'s three numbers reach the page, and none of them is divided into another (D126).
+    ///
+    /// **The zero row is the point of the test, not a corner case.** D126's withdrawal condition
+    /// is read off this line: if `@@` traffic does not fall after both ends are told, the
+    /// awareness route failed and the flag argument reopens. A line that rendered only when
+    /// `globals > 0` could not express "this board has stopped sending them", which is the exact
+    /// signal being watched for — and it is the `x > 0` -> `x >= 0` relaxation M27 found thirty-
+    /// seven of forty survivors sitting on, in this file.
+    #[test]
+    fn the_global_reach_line_is_printed_even_when_it_is_zero() {
+        let busy = render(&board());
+        assert!(busy.contains("15 `@@` send(s)"), "the sends: {busy}");
+        assert!(
+            busy.contains("198 injection(s)"),
+            "what everyone else paid: {busy}"
+        );
+        assert!(
+            busy.contains("reached 12 other project(s)"),
+            "and who paid it: {busy}"
+        );
+        // No ratio over these three. "injections per send" would read as a cost per message and is
+        // really a fact about how many sessions happened to be open — D74's mistake exactly.
+        assert!(
+            !busy.contains("13.2") && !busy.contains("per send"),
+            "the three numbers must not be divided into each other: {busy}"
+        );
+
+        // The row that proves the line is unconditional. A board that used to broadcast and has
+        // stopped must say so rather than fall silent.
+        let quiet = Board {
+            globals: 0,
+            global_cost: 0,
+            global_reach: 0,
+            ..board()
+        };
+        let out = render(&quiet);
+        assert!(
+            out.contains("0 `@@` send(s)"),
+            "a board that stopped broadcasting must say so, not go quiet: {out}"
+        );
+        assert!(
+            out.contains("reached 0 other project(s)"),
+            "and the reach must render at zero too: {out}"
+        );
+        crate::assert_rendered_shape("status quiet", &out);
     }
 
     /// **A truth table over the unhappy path, and the zero row is the one that matters.**
