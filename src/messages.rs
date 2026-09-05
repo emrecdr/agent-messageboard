@@ -604,7 +604,11 @@ pub fn departed_recipient(conn: &Connection, agent_id: &str, at: f64) -> Result<
 /// `--yes` for automation; **every sender here is automation**, non-interactively shelled out of an
 /// agent, so a prompt would hang or auto-decline every one. Awareness at the moment of the choice
 /// is what is left, and it is the same thing D5 settled for.
-pub fn broadcast_warning(conn: &Connection, project: Option<&str>) -> Result<Option<String>> {
+pub fn broadcast_warning(
+    conn: &Connection,
+    project: Option<&str>,
+    mine: &str,
+) -> Result<Option<String>> {
     let mut stmt = conn
         .prepare("SELECT DISTINCT project FROM agents")
         .map_err(sql("preparing the project list"))?;
@@ -616,7 +620,7 @@ pub fn broadcast_warning(conn: &Connection, project: Option<&str>) -> Result<Opt
 
     // `@@`. The reach is the thing being chosen, so the reach is what it is told.
     let Some(project) = project else {
-        return Ok(global_reach(&known));
+        return Ok(global_reach(&known, mine));
     };
 
     if known.iter().any(|k| k == project) {
@@ -647,12 +651,25 @@ pub fn broadcast_warning(conn: &Connection, project: Option<&str>) -> Result<Opt
 /// **projects other than the sender's**, which is the unit that makes the warning true: one unit
 /// of it is "a repository whose sessions will read this", which is what the sender is deciding
 /// about. Counting agents instead would rise and fall with how many windows happen to be open.
-fn global_reach(known: &[String]) -> Option<String> {
+///
+/// **`mine` is excluded by name and not by arithmetic, and the first version got exactly that
+/// wrong.** It subtracted one from the total — right count, wrong list — and then named the first
+/// three alphabetically, so a sender in `agent-messageboard` was told its broadcast reached
+/// "adk, agent-messageboard, codelore, and 2 more". Its own project, listed as somewhere else.
+/// The unit tests passed: they asserted the *count* and the tail phrasing, and never that the
+/// sender's own project was absent from the names. Found by running the command and reading the
+/// sentence — the third source of truth `CLAUDE.md` keeps, which is the only one that sees what a
+/// person actually gets.
+fn global_reach(known: &[String], mine: &str) -> Option<String> {
     // The sender's own project is not "elsewhere", and `@` would have reached it anyway.
-    let mut others: Vec<&str> = known.iter().map(String::as_str).collect();
+    let mut others: Vec<&str> = known
+        .iter()
+        .map(String::as_str)
+        .filter(|p| *p != mine)
+        .collect();
     others.sort_unstable();
     others.dedup();
-    let n = others.len().saturating_sub(1);
+    let n = others.len();
     if n == 0 {
         return None;
     }
@@ -1702,12 +1719,12 @@ mod tests {
         // One project on the board: `@@` and `@` reach the same sessions, so there is no blast
         // radius to report and a sentence here would train the reader to skip the next one.
         assert_eq!(
-            global_reach(&p(&["nest"])),
+            global_reach(&p(&["nest"]), "nest"),
             None,
             "a single-project board has no elsewhere"
         );
         assert_eq!(
-            global_reach(&p(&[])),
+            global_reach(&p(&[]), "nest"),
             None,
             "an empty board has no elsewhere"
         );
@@ -1715,11 +1732,11 @@ mod tests {
         // Duplicates are projects, not sessions: the unit is "a repository that will read this",
         // which is what the sender is choosing about. Counting agents would make the number move
         // with how many windows happen to be open.
-        let one_other = global_reach(&p(&["nest", "nest", "codelore"])).expect("a warning");
+        let one_other = global_reach(&p(&["nest", "nest", "codelore"]), "nest").expect("a warning");
         assert!(one_other.contains("about 1 besides yours"), "{one_other}");
 
         // Named up to a bound, then counted: a picture of who reads this, not just how many.
-        let many = global_reach(&p(&["a", "b", "c", "d", "e", "mine"])).expect("a warning");
+        let many = global_reach(&p(&["a", "b", "c", "d", "e", "mine"]), "mine").expect("a warning");
         assert!(many.contains("about 5 besides yours"), "{many}");
         assert!(
             many.contains("and 2 more"),
@@ -1729,6 +1746,25 @@ mod tests {
             many.contains('`'),
             "it must name the narrower address: {many}"
         );
+
+        // **The sender's own project must not be NAMED as somewhere else, and asserting the count
+        // does not assert the list.** The first version subtracted one from the total and then
+        // named the first three alphabetically, so a sender in `agent-messageboard` was told its
+        // broadcast reached "adk, agent-messageboard, codelore, and 2 more" — its own project,
+        // listed as elsewhere. Every assertion above passed on that version. It was found by
+        // running the command and reading the sentence, which is the only check that sees it.
+        let sorts_first = global_reach(&p(&["aaa-mine", "codelore", "nestwatch"]), "aaa-mine")
+            .expect("a warning");
+        assert!(
+            !sorts_first.contains("aaa-mine"),
+            "the sender's own project was named as somewhere it reaches: {sorts_first}"
+        );
+        assert!(
+            sorts_first.contains("about 2 besides yours"),
+            "and the count must still be right: {sorts_first}"
+        );
+        // The presence row that proves the absence row above was not vacuous (M27).
+        assert!(sorts_first.contains("codelore"), "{sorts_first}");
     }
 
     #[test]
