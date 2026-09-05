@@ -1342,7 +1342,9 @@ fn hook_deliver(mode: &str, input: &serde_json::Value) -> Result<(), Error> {
     // spend, so it backs off after MAX_OFFERS. An explicit `amb inbox` still shows everything.
     let unread = messages::deliverable(&conn, &me)?;
     let conflicts = claims::my_conflicts(&conn, &me)?;
-    let Some(mut rendered) = delivery::render_all(&unread, &conflicts, db::now()?, is_start) else {
+    let Some(mut rendered) =
+        delivery::render_all(&unread, &conflicts, db::now()?, is_start, &me.project)
+    else {
         return Ok(());
     };
     if is_start && mode == "monitor" {
@@ -1412,7 +1414,8 @@ fn post_tool_use(
 ) -> Result<(), Error> {
     let conflicts = observe_edit(conn, me, input, vendor)?;
     let unread = messages::undelivered(conn, me)?;
-    let Some(rendered) = delivery::render_all(&unread, &conflicts, db::now()?, false) else {
+    let Some(rendered) = delivery::render_all(&unread, &conflicts, db::now()?, false, &me.project)
+    else {
         return Ok(());
     };
     emit(conn, me, event, &rendered)
