@@ -11,6 +11,28 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **The stale-binary notice named a fix that does not fix it** (D128). When the board moves ahead of
+  an installed copy, `stale_binary_notice` is the one failure a hook may break silence for (D58).
+  It said `cargo install --path . --locked` — which writes `~/.cargo/bin/amb`, while the notice
+  prints the actually-stale path two lines above it: `~/.local/bin/amb`, the copy the hooks invoke.
+  Following the advice left the hook copy exactly as stale and the next session failed identically.
+  It now names `./tools/install.sh`, which D94 exists for.
+
+  **Not comment rot** — the sentence was wrong the day it was written, in a docstring that reasons
+  carefully about a *different* piece of misleading advice in the same function. And it *was*
+  tested: `tests/hook_safety.rs` asserted `ctx.contains("cargo install")` under the message *"a
+  report without the fix leaves the reader where they started"*. The message names the rule exactly
+  right and the assertion checks a command that is not the fix, so the test **defended** the defect
+  — correcting the notice would have turned it red, reading as a regression. D88's shape, in a test.
+
+  Two surfaces carry this remediation; D94 fixed `doctor` and left this one — D86/D88/D90's shape.
+  What is new is which sibling was left: `doctor` is run deliberately, this is injected
+  automatically into every session the moment the condition fires. **When a fix lands, count every
+  surface giving that advice and fix the automatic one first** — a person reading `doctor` can
+  notice bad advice; a session reading an injected notice will do what it says.
+
+### Fixed
+
 - **`amb status` printed a ratio above 100%, and the impossible number was luck** (D127). It read
   `read 752 of 716 offer(s) acknowledged · 105%`: the numerator counted every `reads` row with a
   `read_at`, the denominator only rows with a `delivered_at`, and `amb read --all` sets the first

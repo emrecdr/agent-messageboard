@@ -456,9 +456,20 @@ fn a_binary_older_than_the_board_says_so_instead_of_going_quiet() {
         ctx.contains(&format!("schema {ahead}")),
         "it must name the board's version: {ctx}"
     );
+    // **This assertion named the rule correctly and checked a different one** (D128). It read
+    // `ctx.contains("cargo install")` under this same message — and `cargo install` writes
+    // `~/.cargo/bin/amb`, not the `~/.local/bin/amb` the hooks invoke and that the notice prints
+    // three lines above. So the test did not merely miss the defect, it *pinned* it: correcting
+    // the message would have turned this red, and the red would have read as a regression.
+    // D88's shape, in a test rather than in production.
     assert!(
-        ctx.contains("cargo install"),
+        ctx.contains("./tools/install.sh"),
         "a report without the fix leaves the reader where they started: {ctx}"
+    );
+    assert!(
+        !ctx.contains("cargo install"),
+        "`cargo install` leaves the hook copy stale, so naming it here sends the reader round the \
+         same loop (D94): {ctx}"
     );
     // The looping advice this notice exists to avoid. `Error::SchemaVersion` says deleting the
     // board is safe; here that is wrong, because the stale copy recreates it at the old version.

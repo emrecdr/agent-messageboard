@@ -624,12 +624,33 @@ pub fn envelope(event: &str, context: &str) -> Value {
 /// safe to delete. That advice is correct for a board from the future in general and wrong here:
 /// the stale copy recreates the board at the old version, a current session migrates it back up,
 /// and the same failure returns. The fix is the binary, so the notice names the binary.
+///
+/// **And it named the wrong command for it, on the one surface that reaches every session** (D128).
+/// The remediation read `cargo install --path . --locked`, which writes `~/.cargo/bin/amb` — while
+/// the notice prints the *actual* stale path two lines above it, `~/.local/bin/amb`, because that
+/// is what the hooks invoke. Following the advice leaves the hook copy exactly as stale as it was
+/// and the session fails again identically. D94 settled this — `tools/install.sh` builds and
+/// copies to `PATH` *and* to every path an installed hook actually invokes, read out of
+/// `settings.json` rather than hardcoded — and says in as many words that `cargo install` is not
+/// the documented way to install.
+///
+/// **`doctor` was fixed and its sibling was not, which is this project's most repeated shape.**
+/// Two production surfaces carry this remediation: `doctor.rs` says `tools/install.sh`, and this
+/// said `cargo install`. D86, D88 and D90 are the same story — fixing one instance trains attention
+/// on the thing fixed rather than on its siblings — and the sibling left standing here is the one
+/// with the *wider* reach. `doctor` is a command someone runs on purpose; this is injected
+/// automatically into every session on the machine the moment the condition fires.
+///
+/// **The evidence and the wrong remedy were in the same message**, which is what makes it worth
+/// recording rather than just correcting: this docstring already reasoned carefully about one piece
+/// of misleading advice and shipped another in the same sentence. Nothing was stale and no comment
+/// had rotted — it was wrong on the day it was written, and there was no test on the text.
 pub fn stale_binary_notice(db: &str, exe: &str, build: &str, found: i64, expected: i64) -> String {
     format!(
         "**This session is not receiving mail from `amb`.**\n\n         The board is at schema {found} and this binary expects {expected}, so the binary is older \
          than the board and refuses to open it rather than misread it.\n\n         \x20 board   {db}\n         \x20 binary  {exe}\n         \x20 build   {build}\n\n         A hook runs a *copy* of `amb`, and that copy has fallen behind the source it was built \
-         from. Reinstall it — `cargo install --path . --locked` from the repository — and the next \
-         session recovers.\n\n         Nothing has been lost. Delivery is a log rather than a queue, so unread messages are \
+         from. Reinstall it — run `./tools/install.sh` from the repository, which updates every \
+         copy a hook invokes and not only the one on your `PATH` — and the next session recovers.\n\n         Nothing has been lost. Delivery is a log rather than a queue, so unread messages are \
          re-offered once a current binary can open the board again."
     )
 }
@@ -739,6 +760,46 @@ mod tests {
             text.contains("SYSTEM DIRECTIVE"),
             "content must not be dropped: {text}"
         );
+    }
+
+    /// **The one notice a broken session reads had no test, and shipped a remedy that does not
+    /// remedy it** (D128).
+    ///
+    /// The advice was `cargo install --path . --locked`, which writes `~/.cargo/bin/amb`, while the
+    /// notice prints the actually-stale path two lines above — `~/.local/bin/amb`, the copy the
+    /// hooks invoke. Following it changes nothing and the session fails again identically. D94
+    /// settled that `tools/install.sh` is the fix and `cargo install` is not.
+    ///
+    /// **Asserted as a property over the whole notice, not as a needle for one string.** The rule
+    /// is "do not name a command that leaves the stale copy stale", so the test forbids
+    /// `cargo install` anywhere in the text and requires the remedy D94 names. A needle checking
+    /// for `install.sh` alone would pass on a notice that recommended both.
+    #[test]
+    fn the_stale_binary_notice_names_the_fix_that_actually_updates_the_hook_copy() {
+        let out = stale_binary_notice(
+            "/Users/x/.agent-messageboard/board.db",
+            "/Users/x/.local/bin/amb",
+            "amb 0.2.0 (abc1234 2026-09-05, schema 13, sqlite 3.53.2)",
+            14,
+            13,
+        );
+        assert!(
+            out.contains("./tools/install.sh"),
+            "the notice must name the command that updates every hook copy (D94): {out}"
+        );
+        assert!(
+            !out.contains("cargo install"),
+            "`cargo install` writes ~/.cargo/bin and leaves the hook copy stale — naming it here \
+             sends a broken session round the same loop: {out}"
+        );
+        // It must still show the evidence: which copy is stale, and both versions.
+        for needle in ["/Users/x/.local/bin/amb", "schema 14", "expects 13"] {
+            assert!(
+                out.contains(needle),
+                "the notice lost its evidence ({needle}): {out}"
+            );
+        }
+        crate::assert_rendered_shape("stale_binary_notice", &out);
     }
 
     /// D60's attack, carried by a character `char::is_control()` does not recognise (D125).

@@ -6879,3 +6879,94 @@ the same rows. It was found while checking that a *different* line rendered corr
 third source of truth doing the one thing the other two structurally cannot, for the second time in
 one session (D126's blast-radius note named the sender's own project as somewhere else, and was
 found the same way, in the same hour).
+
+---
+
+## D128 · The notice that breaks a hook's silence named a fix that does not fix it
+
+**Decided 2026-09-05.** A peer migrated the board to schema 14; every session whose installed copy
+was still 13 got `stale_binary_notice`, which is the one failure D58 lets a hook speak about. It
+said:
+
+```text
+  board   /Users/emrec/.agent-messageboard/board.db
+  binary  /Users/emrec/.local/bin/amb
+  build   0.2.0 (9204cf4 2026-09-05, schema 13, sqlite 3.53.2)
+
+A hook runs a *copy* of `amb`, and that copy has fallen behind the source it was built
+from. Reinstall it — `cargo install --path . --locked` from the repository — and the next
+session recovers.
+```
+
+`cargo install --path .` writes `~/.cargo/bin/amb`. The notice prints the stale path **two lines
+above**: `~/.local/bin/amb`, because that is what the hooks invoke. Doing what it says leaves the
+hook copy exactly as stale as it was, and the next session fails identically.
+
+D94 settled this and is unambiguous: `tools/install.sh` builds and copies to `PATH` *and* to every
+path an installed hook actually invokes, read out of `settings.json` rather than hardcoded — and
+"it is the documented way to install; `cargo install` is not."
+
+### Why it survived, and it is not comment rot
+
+Nothing here had drifted. The sentence was wrong the day it was written, and the docstring above it
+shows the author reasoning *carefully about a different piece of misleading advice in the same
+function* — it explains at length why the notice deliberately omits `Error::SchemaVersion`'s
+"the board is safe to delete", because that advice is right in general and wrong for this case.
+Then it shipped a wrong remedy in the sentence underneath.
+
+**And it was tested. The test pinned the defect**, which is worse than the absence I first wrote
+here — I grepped for `stale_binary_notice`, found only `main.rs`, and concluded the text was
+unasserted. It was asserted, in `tests/hook_safety.rs`, against the *rendered output of the shipped
+binary* rather than against the function, which is why a search on the function name missed it. The
+same "count the callers, not the name you happen to be holding" error this file catalogues.
+
+What it said:
+
+```rust
+assert!(
+    ctx.contains("cargo install"),
+    "a report without the fix leaves the reader where they started: {ctx}"
+);
+```
+
+The message names the rule exactly right. The assertion checks a command that is not the fix. That
+is **D88's shape — a comment stating the correct rule above code implementing a different one** —
+and here it is load-bearing in the worst direction: the test did not merely fail to catch the
+defect, it *defended* it. Anyone correcting the notice would have been met with a red integration
+test, and the red would have read as a regression they had caused.
+
+So the surface was not unguarded. It was guarded backwards, by an assertion whose failure message
+would have argued against the fix.
+
+### The shape, which is the reusable part
+
+Two production surfaces carry this remediation. `doctor.rs` says `tools/install.sh`; this said
+`cargo install`. D94 fixed the detector and left its sibling, and D86, D88 and D90 are three prior
+instances of exactly that — *fixing one instance trains attention on the thing fixed rather than on
+its siblings*.
+
+What is new here is **which** sibling was left. `doctor` is a command a person runs deliberately,
+when they already suspect something. `stale_binary_notice` is injected automatically into every
+session on the machine the moment the condition fires. The surface with the wider reach and the
+more captive audience is the one that kept the defect, and it kept it precisely *because* nobody
+runs it on purpose — the same reason `CLAUDE.md` gives for why a false sentence survived in the
+file that is always already open.
+
+So the arithmetic generalises past renderers: **when a fix lands, count every surface that gives
+that same advice, and fix the automatic one first.** A person reading `doctor` can notice bad
+advice and go looking. A session reading an injected notice will simply do what it says.
+
+### The guard
+
+Both layers now assert the same rule, and it is a **property** rather than a needle: the text must
+name `./tools/install.sh` and must not contain `cargo install` anywhere. Checking only for the right
+command would pass on a notice offering both, which is the likeliest way this regresses. The unit
+test is new; the integration assertion was inverted in place, with its old form quoted in a comment
+beside it so the next reader sees what it used to defend.
+
+Verified by restoring the shipped sentence — both go red on it.
+
+**Not extended to `README.md`'s install snippet.** That one is a fresh-clone flow with no hooks yet
+installed, where `cargo install` is exactly right; the README already names `tools/install.sh` as
+the command to use instead once hooks exist. The defect is remediation advice for a machine that
+*has* hooks, not installation advice for one that does not.
