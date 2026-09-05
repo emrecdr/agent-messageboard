@@ -542,7 +542,7 @@ pub fn departed_note(name: &str, alive: bool, quiet_secs: f64) -> Option<String>
 
 /// Warn when a direct message is addressed to a session that has stopped running.
 ///
-/// **The sibling of [`unknown_project`], and the arm that was missing.** That function warns when
+/// **The sibling of [`broadcast_warning`], and the arm that was missing.** That function warns when
 /// a *broadcast* names a place nobody has registered in (D26); the direct-message arm beside it
 /// produced no warning at all, so `sent #383` read identically whether the recipient was mid-turn
 /// or had exited days earlier. Measured on the real board before this was written: of 286 direct
@@ -573,18 +573,38 @@ pub fn departed_recipient(conn: &Connection, agent_id: &str, at: f64) -> Result<
     ))
 }
 
-/// The warning a sender should see when addressing a project no agent has ever registered in, or
-/// `None` when the address is fine.
+/// The warning a sender should see about where a broadcast is going, or `None` when there is
+/// nothing worth saying.
 ///
-/// Told before the write rather than discovered from an answer that never comes. `None` for `@@`,
-/// which names no project and so cannot be wrong about one, and `None` when the project is known.
-/// The text carries a `nearest` suggestion when one is close enough, and says the message is kept
-/// regardless — `@project` addresses a *place* (D17), so it reaches whoever works there next.
-pub fn unknown_project(conn: &Connection, project: Option<&str>) -> Result<Option<String>> {
-    // `@@` names no project and reaches everyone, so there is nothing to be wrong about.
-    let Some(project) = project else {
-        return Ok(None);
-    };
+/// Told before the write rather than discovered from an answer that never comes. `None` when the
+/// project is known. For an unknown one the text carries a `nearest` suggestion when one is close
+/// enough, and says the message is kept regardless — `@project` addresses a *place* (D17), so it
+/// reaches whoever works there next.
+///
+/// **`@@` used to return `None` here, and the comment saying why argued the wrong question**
+/// (D126). It read: *"`@@` names no project and reaches everyone, so there is nothing to be wrong
+/// about."* That is true of the **name** — `@@` cannot misspell a project — and false of the
+/// **reach**, which is the thing a sender is actually choosing. So the one address with unbounded
+/// blast radius was the only one that got no word about it, and the silence was documented as a
+/// decision. A past session on this board had already generalised the shape: *a match arm
+/// returning `None` beside one that warns is usually an omission, not a decision.*
+///
+/// **Measured, which is why this is a warning and not a style preference.** 15 `@@` sends out of
+/// one repository produced **198 injections into 12 other projects** — `SUM(attempts)`, not a row
+/// count, because `reads` is `PRIMARY KEY (msg_id, agent)` and counting rows answers *how many
+/// messages were offered* rather than *how often*, which is `CLAUDE.md`'s question 2 exactly. Nine
+/// of those twelve projects were not even Rust, while the traffic was `cargo` hold/release notices
+/// for a target directory only Rust projects share.
+///
+/// **It warns and does not refuse, and that is D5's principle rather than timidity.** Claims are
+/// advisory because the achievable goal is awareness; the same argument holds here, and the
+/// alternative — requiring a flag for `@@` — would make the commonest usage error exit 64 for
+/// every session running a binary older than this one, which is the stale-binary condition D69 and
+/// D94 record five times. The current-practice answer for a wide action is a `[y/N]` prompt with
+/// `--yes` for automation; **every sender here is automation**, non-interactively shelled out of an
+/// agent, so a prompt would hang or auto-decline every one. Awareness at the moment of the choice
+/// is what is left, and it is the same thing D5 settled for.
+pub fn broadcast_warning(conn: &Connection, project: Option<&str>) -> Result<Option<String>> {
     let mut stmt = conn
         .prepare("SELECT DISTINCT project FROM agents")
         .map_err(sql("preparing the project list"))?;
@@ -593,6 +613,11 @@ pub fn unknown_project(conn: &Connection, project: Option<&str>) -> Result<Optio
         .map_err(sql("listing projects"))?
         .collect::<std::result::Result<_, _>>()
         .map_err(sql("reading a project row"))?;
+
+    // `@@`. The reach is the thing being chosen, so the reach is what it is told.
+    let Some(project) = project else {
+        return Ok(global_reach(&known));
+    };
 
     if known.iter().any(|k| k == project) {
         return Ok(None);
@@ -609,6 +634,43 @@ pub fn unknown_project(conn: &Connection, project: Option<&str>) -> Result<Optio
         "no agent has ever registered in {project:?}.{hint} The message is kept, and \
          `@project` addresses a place, so it will reach whoever works there next."
     )))
+}
+
+/// How many projects `@@` is about to reach, as a sentence, or `None` when it reaches nobody else.
+///
+/// Pure, and separate from [`broadcast_warning`] so the wording is testable without a database —
+/// the functional core this crate keeps its decisions in.
+///
+/// **`None` on a board with no other project is the deliberate half.** On a single-project machine
+/// `@@` and `@` reach the same sessions, so there is no blast radius to report and a warning would
+/// be noise that trains the reader to skip the sentence when it *does* fire. The count is of
+/// **projects other than the sender's**, which is the unit that makes the warning true: one unit
+/// of it is "a repository whose sessions will read this", which is what the sender is deciding
+/// about. Counting agents instead would rise and fall with how many windows happen to be open.
+fn global_reach(known: &[String]) -> Option<String> {
+    // The sender's own project is not "elsewhere", and `@` would have reached it anyway.
+    let mut others: Vec<&str> = known.iter().map(String::as_str).collect();
+    others.sort_unstable();
+    others.dedup();
+    let n = others.len().saturating_sub(1);
+    if n == 0 {
+        return None;
+    }
+    // Named rather than only counted, up to a bound: "12 projects" is a number, and
+    // "codelore, nestwatch, proef and 9 more" is a picture of who is about to read this.
+    let shown: Vec<&str> = others.iter().take(3).copied().collect();
+    let rest = n.saturating_sub(shown.len());
+    let who = if rest > 0 {
+        format!("{}, and {rest} more", shown.join(", "))
+    } else {
+        shown.join(", ")
+    };
+    Some(format!(
+        "`@@` reaches every project on this board — about {n} besides yours ({who}). It is \
+         delivered into every session on the machine whatever that session is working on, so it \
+         is for something that belongs to no one repository. If this concerns one project, `@` is \
+         the narrower address."
+    ))
 }
 
 /// Mark a message read by this agent.
@@ -1626,6 +1688,46 @@ mod tests {
             nearest("api-v1x", &["api-v1", "spi-v1"]),
             Some("api-v1"),
             "two candidates within budget and one strictly better: the better one wins"
+        );
+    }
+
+    /// `@@` says how far it reaches, and says nothing when it reaches no further than `@` (D126).
+    ///
+    /// A truth table rather than a needle list: the `Some` rows prove the `None` row is a real
+    /// decision and not a function that returns nothing (M27).
+    #[test]
+    fn a_global_is_told_how_far_it_reaches() {
+        let p = |v: &[&str]| -> Vec<String> { v.iter().map(|s| (*s).to_string()).collect() };
+
+        // One project on the board: `@@` and `@` reach the same sessions, so there is no blast
+        // radius to report and a sentence here would train the reader to skip the next one.
+        assert_eq!(
+            global_reach(&p(&["nest"])),
+            None,
+            "a single-project board has no elsewhere"
+        );
+        assert_eq!(
+            global_reach(&p(&[])),
+            None,
+            "an empty board has no elsewhere"
+        );
+
+        // Duplicates are projects, not sessions: the unit is "a repository that will read this",
+        // which is what the sender is choosing about. Counting agents would make the number move
+        // with how many windows happen to be open.
+        let one_other = global_reach(&p(&["nest", "nest", "codelore"])).expect("a warning");
+        assert!(one_other.contains("about 1 besides yours"), "{one_other}");
+
+        // Named up to a bound, then counted: a picture of who reads this, not just how many.
+        let many = global_reach(&p(&["a", "b", "c", "d", "e", "mine"])).expect("a warning");
+        assert!(many.contains("about 5 besides yours"), "{many}");
+        assert!(
+            many.contains("and 2 more"),
+            "the tail must be counted, not listed: {many}"
+        );
+        assert!(
+            many.contains('`'),
+            "it must name the narrower address: {many}"
         );
     }
 

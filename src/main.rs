@@ -600,7 +600,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             // Both arms warn now. The `Some` arm used to be `None` — a direct message to a
             // session that had exited days ago printed exactly what one to a live session prints.
             let warning = match &rcpt.agent_id {
-                None => messages::unknown_project(&conn, rcpt.project.as_deref())?,
+                None => messages::broadcast_warning(&conn, rcpt.project.as_deref())?,
                 Some(id) => messages::departed_recipient(&conn, id, db::now()?)?,
             };
 

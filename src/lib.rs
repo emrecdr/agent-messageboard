@@ -98,5 +98,22 @@ pub(crate) fn assert_rendered_shape(label: &str, rendered: &str) {
             line,
             "{where_}: trailing whitespace, invisible in review and visible in a diff"
         );
+        // **`str::lines` splits on `\n` and `\r\n`, so this loop cannot see a line it does not
+        // already believe in** — which is exactly how the hole D125 fixes stayed open. The guard
+        // gated on `char::is_control()` and the test iterated `.lines()`: both carried the same
+        // `Cc`-shaped definition of "a line", so a U+2028 was invisible to the assertion for the
+        // same reason it was invisible to the containment. A test that shares its subject's blind
+        // spot passes for the wrong reason, and this is the check that does not.
+        //
+        // Asserted here rather than in `delivery`'s own tests because 26 call sites across 11
+        // modules already reach this function; keying on the property rather than enumerating the
+        // renderers is what stops the next one being added without it (M23).
+        if let Some(c) = line.chars().find(|c| crate::delivery::breaks_grammar(*c)) {
+            panic!(
+                "{where_}: U+{:04X} survived into rendered output, and `str::lines` cannot see \
+                 the break it makes: {line:?}",
+                c as u32
+            );
+        }
     }
 }

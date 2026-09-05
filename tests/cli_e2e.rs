@@ -864,7 +864,7 @@ fn doctor_reports_whether_the_delivery_lane_has_actually_fired() {
     );
 }
 
-/// **The sender was never told a message would reach nobody.** `unknown_project` warns when a
+/// **The sender was never told a message would reach nobody.** `broadcast_warning` warns when a
 /// broadcast names a place no one has registered in (D26); the direct-message arm beside it
 /// produced no warning at all, so `sent #N` printed identically whether the recipient was mid-turn
 /// or had exited days before. Measured on the real board before this was written: of 286 direct
