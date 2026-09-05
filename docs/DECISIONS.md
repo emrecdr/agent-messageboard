@@ -7194,3 +7194,50 @@ the machine, from a change still in the working tree. There is no safe local reh
 change while the default board is shared. `./tools/install.sh` is the recovery and D94 already says
 so; what is new is that the window opens at *first execution*, not at commit.
 
+
+## D132 · The second renderer of a struct is where a receipt goes stale, and a struct pattern is what stops it
+
+**Decided.** `status::render_json` is the `--json` half of `amb status`, in the library beside
+`status::render`. `main.rs` calls it and names no keys. Four keys were added; no existing key was
+renamed, so `JSON_CONTRACT` does not move (D117).
+
+**`amb status --json` was four fields behind `amb status`.** The text render printed
+`acknowledged_unoffered` (D127) and the three `global_*` counts (D126's withdrawal condition); the
+JSON emitted thirteen keys and none of those. So a person reading the receipt and a program parsing
+it disagreed about what the board was doing, and the program's version was the one missing the
+numbers a *decision* is read off.
+
+**No author was wrong, which is the part worth recording.** `Board` grew `globals`, `global_cost`
+and `global_reach` in one commit and `acknowledged_unoffered` in another — two sessions, two days
+apart, each correctly updating the renderer they were working in. Neither had reason to look at the
+other. This is CLAUDE.md's *count the renderers, count the assertions* arithmetic and it fails the
+same way at every scale: two renderers, one asserted.
+
+**The guard is a compile error rather than a test, and that is the decision.** `render_json`
+destructures `Board` with a struct pattern carrying no `..`, so a new field stops the build until
+somebody decides whether a program should see it. The alternatives were both worse:
+
+- **A test asserting the key set.** It only fails once somebody runs it, and it has to be
+  maintained in step with the struct. This codebase's standing complaint is that its defects are
+  silences; a guard that waits for a test run is a slower silence, not an end to one.
+- **`#[derive(Serialize)]` with `#[serde(rename)]`.** Structurally ideal and rejected on cost:
+  `serde_json` is the only serde crate here, so this needs `serde` + a proc-macro chain (`syn`,
+  `quote`) added to a five-dependency project — and `check_unused_deps.py` exists because a
+  dependency nothing imports already shipped once (M68). A struct pattern buys the same
+  exhaustiveness for nothing.
+
+A field deliberately excluded is spelled `field: _`: visible in review, greppable, and a decision
+somebody made rather than one nobody noticed. `rustc` suggests exactly that spelling in the E0027
+it raises, which was verified by deleting `global_reach` from the pattern and reading the error.
+
+**Why it is additive and not a contract bump.** D117 already states the rule — the integer moves
+when a field a reader relies on *changes meaning or leaves*, never when one arrives. That matches
+current practice rather than merely being internally consistent: Tailscale's CLI draws the same
+line for its `--json` output, and consumers are expected to tolerate keys they do not recognise.
+The thirteen public keys are reproduced byte for byte.
+
+**Three layers, three guards, each watched to fail.** The compiler catches a field that never
+reaches a binding; the library test catches one that reaches a binding and never reaches a key; the
+e2e catches one that reaches a key and never reaches the shipped binary. M20's rule is that the
+outermost layer is the one to suspect, because the library test is the cheap one to write — and
+here it was the outermost that carried the defect for two days.

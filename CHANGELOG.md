@@ -11,6 +11,29 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **`amb status --json` was four fields behind `amb status`** (D132). The text receipt printed
+  `acknowledged_unoffered` and the three `global_*` counts; the JSON emitted thirteen keys and none
+  of them, so a person and a program disagreed about what the board was doing. Added as
+  `acknowledged_unoffered`, `global_sends`, `global_injections_total` and `global_projects_reached`.
+  Strictly additive — no existing key changed, so the `--json` contract version does not move
+  (D117), which is both this project's stated rule and the field's.
+
+  **It mattered most for the numbers a decision is read off.** `global_projects_reached` is what
+  D126's withdrawal condition is evaluated against; it shipped one day earlier precisely so the
+  condition would be a command rather than a query someone runs by hand, and the agent it governs
+  could not read it. D58's shape, on a receipt a day old.
+
+  **Neither author erred.** `Board` grew three fields in one commit and a fourth in another, two
+  sessions and two days apart, each updating the renderer they were working in. The JSON renderer
+  lived in `main.rs` — away from the struct, and in the one file the architecture rule says holds no
+  logic (D78). It now lives in `status.rs` as `render_json`, beside the text render.
+
+  **The guard is a compile error, not a test.** `render_json` destructures `Board` with a struct
+  pattern carrying no `..`, so the next field added stops the build until somebody decides whether a
+  program should see it; an intentional exclusion is spelled `field: _`. Verified by deleting a
+  field from the pattern and reading E0027. Three layers now each have one guard — compiler, library
+  test, and an e2e through the shipped binary, which is the layer that actually carried the defect.
+
 - **The over-cap count could have double-reported withheld mail, and a clean `--diff` mutation run
   could not see it.** D130 made `ordered` a filtered subset of `msgs`, so `hidden =
   ordered.len() - shown` is now the only correct spelling — but mutating it to `msgs.len() - shown`

@@ -296,6 +296,85 @@ pub fn render(b: &Board) -> String {
     s
 }
 
+/// The receipt, as a program reads it — the second renderer of [`Board`], and the one that drifted.
+///
+/// **It lives here rather than in `main.rs` because that is where it went wrong** (D78). The JSON
+/// arm was written inline in the binary, next to the argument that produced it, which is exactly
+/// the pull D78 describes: logic arrives in `main.rs` because the value it needs is already there.
+/// Naming the keys *is* logic — it decides what a parsing agent can see — and it sat in the one
+/// file the architecture rule says holds none.
+///
+/// **What it cost, stated so the guard below is not mistaken for tidiness.** [`render`] and this
+/// function are two renderers of one struct, and by the time anyone counted them the JSON was four
+/// fields behind: `acknowledged_unoffered` (D127) and the three `global_*` counts (D126's
+/// withdrawal condition) were printed for a human and invisible to a program. Neither author erred
+/// — the two fields arrived in separate commits by separate sessions, and each updated the renderer
+/// they were looking at. The seam simply had nothing holding it.
+///
+/// **The `let Board { … }` below is that something, and it is a compile error rather than a test.**
+/// A struct pattern with no `..` must name every field, so adding one to [`Board`] stops the build
+/// here until somebody decides whether a program should see it. That is strictly stronger than the
+/// assertion this function would otherwise need: a test can only fail after someone runs it, and
+/// CLAUDE.md's standing complaint about this codebase is defects that are silences. A field
+/// deliberately kept out of the contract is spelled `field: _` — visible, greppable, and a decision
+/// somebody made rather than one nobody noticed.
+///
+/// **Adding a key does not move `JSON_CONTRACT`; renaming or removing one does** (D117, and the
+/// constant lives in `main.rs` because that is where the envelope is stamped). That is the
+/// project's own rule and it matches the field's — Tailscale's CLI draws the same line, and
+/// consumers are expected to tolerate keys they do not know. So the four keys added here are safe
+/// to add, and the thirteen that were already public are reproduced byte for byte.
+pub fn render_json(b: &Board) -> serde_json::Value {
+    // Every field is `i64`, so this binds by copy and the bindings are plain numbers.
+    let Board {
+        messages,
+        senders,
+        explicit_kind,
+        kind_senders,
+        offers,
+        deliveries,
+        acknowledged,
+        acknowledged_unoffered,
+        dead,
+        unoffered,
+        globals,
+        global_cost,
+        global_reach,
+        declared,
+        observed,
+        conflicts,
+        conflict_tells,
+    } = *b;
+
+    serde_json::json!({
+        "messages": messages,
+        "senders": senders,
+        "explicit_kind": explicit_kind,
+        "kind_senders": kind_senders,
+        // Two units, named as such in the key rather than only in the prose, so a consumer cannot
+        // mistake one for the other (question 1).
+        "offers_distinct": offers,
+        "deliveries_total": deliveries,
+        "acknowledged": acknowledged,
+        // Its own key rather than folded into `acknowledged`, for the reason D127 gives: these rows
+        // are the difference between two populations, and a reader seeing only the corrected ratio
+        // has no way to tell they exist.
+        "acknowledged_unoffered": acknowledged_unoffered,
+        "dead": dead,
+        "unoffered": unoffered,
+        // **The three numbers D126's withdrawal condition is read off.** They were the reason that
+        // condition stopped being a query to run by hand, and until now a program could not read
+        // them — the condition was reachable by a person and not by the agent it governs.
+        "global_sends": globals,
+        "global_injections_total": global_cost,
+        "global_projects_reached": global_reach,
+        "claims_declared": declared,
+        "claims_observed": observed,
+        "conflicts_distinct": conflicts,
+        "conflict_tells_total": conflict_tells,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,6 +628,69 @@ mod tests {
         assert!(
             !render(&quiet).contains("real zero"),
             "an untouched board is not evidence about the declare surface"
+        );
+    }
+
+    /// The whole JSON object at once, because the defect this closes lived *between* the needles.
+    ///
+    /// **A key list would not have caught what happened, and neither did the test that existed.**
+    /// `cli_e2e` asserted `offers_distinct` and `deliveries_total` by name — two true statements
+    /// about two keys, with four missing keys sitting beside them unmentioned. That is M24's shape:
+    /// `contains` describes points, and the hole was in the space they skip. One equality over the
+    /// entire value is the whole-shape assertion, and it fails on every way this can go wrong —
+    /// a field omitted, a key renamed (which D117 makes a *breaking* change, unlike an addition),
+    /// or two values transposed.
+    ///
+    /// **The transposition arm is why the fixture matters.** All seventeen counts in `board()` are
+    /// distinct, so mapping `global_cost` to `global_projects_reached` reddens this. Had two
+    /// fixture values matched, the swap would pass and the assertion would look just as thorough —
+    /// the same reason M17's tie fixture proved nothing while reading as proof.
+    #[test]
+    fn every_board_field_reaches_the_json_contract_under_the_name_a_parser_sees() {
+        assert_eq!(
+            render_json(&board()),
+            serde_json::json!({
+                "messages": 425,
+                "senders": 13,
+                "explicit_kind": 16,
+                "kind_senders": 5,
+                "offers_distinct": 599,
+                "deliveries_total": 1025,
+                "acknowledged": 589,
+                "acknowledged_unoffered": 104,
+                "dead": 0,
+                "unoffered": 2,
+                "global_sends": 15,
+                "global_injections_total": 198,
+                "global_projects_reached": 12,
+                "claims_declared": 25,
+                "claims_observed": 442,
+                "conflicts_distinct": 4,
+                "conflict_tells_total": 9,
+            }),
+            "the --json contract is the agent-facing half of this receipt"
+        );
+    }
+
+    /// The count is asserted separately from the names, so a *silent addition* cannot pass.
+    ///
+    /// The equality above pins seventeen names. This pins that seventeen is all there are — which
+    /// the equality already implies, and which is stated anyway because the two fail with different
+    /// messages: a reader who adds an eighteenth field sees "18 keys, expected 17" and knows
+    /// immediately that the fix is a deliberate contract decision, not a typo in a long literal.
+    ///
+    /// **Neither of these is the real guard.** `render_json` destructures `Board` with no `..`, so
+    /// a new field fails to *compile* — verified by deleting `global_reach` from the pattern and
+    /// reading E0027 before this test was written. These two assertions catch what the compiler
+    /// cannot: a field that reaches a binding and then never reaches a key.
+    #[test]
+    fn the_json_contract_has_exactly_one_key_per_board_field() {
+        let rendered = render_json(&board());
+        let keys = rendered.as_object().expect("a JSON object").len();
+        assert_eq!(
+            keys, 17,
+            "one key per Board field; a new field is a contract decision, not an oversight: \
+             {rendered}"
         );
     }
 }

@@ -949,23 +949,14 @@ fn run(cli: Cli) -> Result<(), Error> {
         Command::Status => {
             let b = status::gather(&conn)?;
             if cli.json {
-                print_json(&serde_json::json!({
-                    "messages": b.messages,
-                    "senders": b.senders,
-                    "explicit_kind": b.explicit_kind,
-                    "kind_senders": b.kind_senders,
-                    // Two units, named as such in the key rather than only in the prose, so a
-                    // consumer cannot mistake one for the other (question 1).
-                    "offers_distinct": b.offers,
-                    "deliveries_total": b.deliveries,
-                    "acknowledged": b.acknowledged,
-                    "dead": b.dead,
-                    "unoffered": b.unoffered,
-                    "claims_declared": b.declared,
-                    "claims_observed": b.observed,
-                    "conflicts_distinct": b.conflicts,
-                    "conflict_tells_total": b.conflict_tells,
-                }));
+                // **Moved into `status.rs`, and the move is the fix** (D78). Choosing what a key is
+                // called decides what a parsing agent can see, which is logic, and it sat in the
+                // one file the architecture rule says holds none. While it was split from
+                // [`status::render`] it fell four fields behind — `acknowledged_unoffered` and the
+                // three `global_*` counts — because two sessions each updated the renderer they
+                // were looking at. `render_json` destructures `Board` exhaustively, so the next
+                // field is a compile error rather than a key nobody notices is missing.
+                print_json(&status::render_json(&b));
             } else {
                 print!("{}", status::render(&b));
             }

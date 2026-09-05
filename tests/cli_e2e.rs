@@ -202,6 +202,67 @@ fn a_second_offer_of_one_message_costs_twice_and_is_still_one_offer() {
     );
 }
 
+/// **Every key of the `--json` contract, through the shipped binary — the layer that had the hole.**
+///
+/// `status::render_json` is asserted in the library, and that is the cheap test to write, which is
+/// exactly why M20 says to suspect the outermost layer instead. The defect this guards lived
+/// between the two: `Board` grew four fields, `status::render` printed them, and the binary's own
+/// JSON arm did not — so `amb status` and `amb status --json` disagreed about what the board was
+/// doing, and only the command a person or an agent actually runs could show it.
+///
+/// **Asserted as a set difference rather than as needles**, because a needle list is what let the
+/// original drift through: `a_second_offer_of_one_message_costs_twice_and_is_still_one_offer`
+/// checks two keys by name, both true, with four missing ones beside them. Naming what must be
+/// present catches nothing about what is absent unless the naming is exhaustive.
+#[test]
+fn the_shipped_binary_emits_every_key_of_the_json_contract() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+
+    let got = b.json("uuid-alice", &["status"]);
+    let obj = got.as_object().expect("a JSON object");
+
+    // The envelope's own field (D117) plus one key per `Board` field.
+    let expected = [
+        "v",
+        "messages",
+        "senders",
+        "explicit_kind",
+        "kind_senders",
+        "offers_distinct",
+        "deliveries_total",
+        "acknowledged",
+        "acknowledged_unoffered",
+        "dead",
+        "unoffered",
+        "global_sends",
+        "global_injections_total",
+        "global_projects_reached",
+        "claims_declared",
+        "claims_observed",
+        "conflicts_distinct",
+        "conflict_tells_total",
+    ];
+
+    let missing: Vec<_> = expected.iter().filter(|k| !obj.contains_key(**k)).collect();
+    assert!(
+        missing.is_empty(),
+        "the text render shows these and a parsing agent cannot: {missing:?} — {got}"
+    );
+
+    // And the other direction, so an addition is a deliberate contract decision rather than a
+    // key that appears because somebody was passing through. D117 makes adding one safe for
+    // consumers; it does not make it safe to add one nobody chose.
+    let extra: Vec<_> = obj
+        .keys()
+        .filter(|k| !expected.contains(&k.as_str()))
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "an unannounced key reached the contract: {extra:?} — {got}"
+    );
+}
+
 /// **`amb thread` returns the message that started the conversation, through the shipped binary.**
 ///
 /// The library test asserts the same id list, and this one exists because the defect it guards is a
