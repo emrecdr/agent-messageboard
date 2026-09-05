@@ -9,6 +9,37 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`amb status` printed a ratio above 100%, and the impossible number was luck** (D127). It read
+  `read 752 of 716 offer(s) acknowledged · 105%`: the numerator counted every `reads` row with a
+  `read_at`, the denominator only rows with a `delivered_at`, and `amb read --all` sets the first
+  without the second — 104 rows in one population and not the other. Question 1 of the ratio rule,
+  on the module whose header opens by naming that question.
+
+  **105% is the good outcome.** The overlap happened to be large enough to push the quotient past a
+  number every reader knows is impossible; a third as much `read --all` and the same broken query
+  prints `81%` and is believed. So the guard is an invariant over *every* percentage the page
+  prints, not an assertion about this line — a needle list would have passed on the next mismatched
+  pair.
+
+  The excluded rows are now reported rather than dropped (`self-read 104 acknowledged by
+  \`amb read\` before the hook ever offered them`), because correcting a ratio by narrowing its
+  numerator otherwise deletes a population from the page — trading a visible defect for an
+  invisible one.
+
+- **Two containment tests were blind twice over, and the assertion *shape* was the worse half.**
+  `an_inert_pattern_cannot_forge_ambs_own_voice` (D119) and its sibling on
+  `Refusal::phrase` (D124) each asserted a literal `\n` and nothing else, so both passed while
+  U+2028, U+2029 and the bidi overrides went through `quoted()` untouched — the gap D125 closed.
+  Widening the fixture alone would not have been enough: both tests iterated `str::lines()`, which
+  splits on `\n` and `\r\n` *only*, so a `Zl`/`Zp`/`Cf` vector never creates a line for a per-line
+  assertion to inspect. **The guard was reading the one axis its own fixture could reach.** Both
+  now run a table of five vectors and assert the codepoint does not survive the renderer at all,
+  with a `contains` row for the presence premise M27 requires — an absence-only table passes just
+  as well against a renderer that emitted nothing. The vectors live in one test-only constant so
+  two renderers in two modules cannot test different halves of the threat model.
+
 ### Security
 
 - **A sender-controlled name could forge `amb`'s own attribution, and `quoted()`'s containment was
@@ -51,8 +82,6 @@ and why the on-disk schema is deliberately not one of them.
   `--yes`, and **every sender here is automation**, so a prompt would hang or auto-decline every
   one; a required flag would make the commonest usage error exit 64 on every stale binary (D69,
   D94) and would be the first blocking mechanism in a tool whose principle is D5.
-
-### Added
 
 - **`amb memory promote <id> --reject --phrases a,b` — a candidate can now be refused
   permanently, and the refusal reaches ideas nobody has written yet** (D124). `--decline` silences

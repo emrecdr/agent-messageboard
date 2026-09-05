@@ -6794,8 +6794,15 @@ not before.
 **What would change the answer.** If `@@` traffic stays flat after both ends are told, the
 awareness route has failed and the flag argument reopens on evidence rather than on taste.
 
-**And the condition is written with its query, because the first draft of this paragraph said
-"`amb status` reports the per-scope split" and `amb status` does no such thing.** That was D95's
+**Superseded by `3987359`, and the intermediate state is kept because it is the point.** `amb
+status` now prints the line, so the condition is a command:
+
+```text
+global    15 `@@` send(s) · 198 injection(s) · reached 12 other project(s)
+```
+
+The first draft of this paragraph asserted that before it was true — it said "`amb status` reports
+the per-scope split" when `amb status` did no such thing. That was D95's
 defect — a stated condition nothing can evaluate — being written into the decision that documents
 it, in the same commit, and it was caught by running the command instead of trusting the sentence.
 So, exactly:
@@ -6810,3 +6817,65 @@ GROUP BY week ORDER BY week;
 Folding that into `amb status` is the obvious next step and is deliberately not taken here:
 `status.rs` was under a mutation round while this landed, and CLAUDE.md is explicit that a result
 produced while anything else was building is void rather than weak.
+
+---
+
+## D127 · A ratio over 100% is the lucky version of a population mismatch
+
+**Decided 2026-09-05.** `amb status` printed this on the real board:
+
+```text
+  read      752 of 716 offer(s) acknowledged · 105%
+```
+
+More acknowledged than offered. The numerator counted every `reads` row with a `read_at`; the
+denominator counted only rows with a `delivered_at`. `amb read --all` sets the first without the
+second — a session acknowledging mail the hook had not yet offered it — so **104 rows were in the
+numerator's population and not in the denominator's**.
+
+This is question 1 of the ratio rule, on the module written to answer it. `status.rs`'s own header
+opens by naming that question and answering it for the offers-versus-injections pair; the pair one
+line below it was mismatched the whole time. D123 shipped it, this decision corrects it, and
+neither of those is the interesting part.
+
+**The interesting part is that 105% is the good outcome.** The defect announced itself because the
+overlap happened to be large enough to push the quotient past a number every reader knows is
+impossible. Had `amb read --all` been used a third as often, the same broken query would have
+printed something like `81%` and been believed — by the same readers, on the same page, with the
+same underlying error. So:
+
+> **A ratio being obviously wrong is a property of the data, not of the check.** The absence of an
+> impossible number is not evidence that the populations match.
+
+That is why the guard is an **invariant over every percentage the page prints** rather than an
+assertion about this line. `no_percentage_on_the_page_can_exceed_one_hundred` walks the rendered
+output, parses every `%` token, and fails on anything above 100 — so a future line whose numerator
+and denominator drift apart is caught without anyone remembering to add a case for it. A needle
+list naming the `read` line would have passed on the next mismatched pair. This is the same
+"prefer the invariant over the enumeration" move `CLAUDE.md` records for `render_status`'s `  ! `
+prefix, applied to a different marker.
+
+**The excluded rows are reported rather than dropped**, on a line that prints at zero like every
+other:
+
+```text
+  self-read 104 acknowledged by `amb read` before the hook ever offered them
+```
+
+Correcting a ratio by narrowing its numerator silently deletes a population from the page. The
+count is small and real — sessions do run `amb read --all` — and a reader who saw only the fixed
+percentage would have no way to know those rows exist. That would trade a visible defect for an
+invisible one, which is the trade this file exists to refuse.
+
+**Rejected: widening the denominator instead.** `acknowledged / all reads rows` would also be
+internally consistent and would answer a different question — *of everything we ever recorded, how
+much was read* — where the line's own words are "of N offers acknowledged". The words were right;
+the query was wrong. Fixing the query to match the words is the smaller change and leaves the page
+saying what it means.
+
+**Found by running the command.** Not by a test, not by mutation — both were green, and both stayed
+green through every version of this defect, because neither was asking whether two counts described
+the same rows. It was found while checking that a *different* line rendered correctly. That is the
+third source of truth doing the one thing the other two structurally cannot, for the second time in
+one session (D126's blast-radius note named the sender's own project as somewhere else, and was
+found the same way, in the same hour).

@@ -76,8 +76,23 @@ pub struct Board {
     /// **One injection into one session's context.** `sum(reads.attempts)`, and the number that
     /// rises every time the cost is actually paid (question 2).
     pub deliveries: i64,
-    /// Offers the recipient acknowledged with `amb read`.
+    /// **Offers the recipient acknowledged — and it must be counted over the same rows `offers`
+    /// is, or the ratio beside it exceeds 100%.**
+    ///
+    /// It did. On the real board this printed `read 752 of 716 offer(s) acknowledged · 105%`,
+    /// because the numerator was every row with a `read_at` while the denominator was only rows
+    /// with a `delivered_at`. `amb read --all` sets `read_at` on mail the hook never offered — 104
+    /// such rows here — so the numerator counted a population the denominator excluded. Question 1
+    /// of the ratio rule, on the page written to answer it (D127).
+    ///
+    /// A ratio over 100% is the lucky version of this defect: it is *visibly* wrong. The same
+    /// mismatch with a smaller overlap would have printed a plausible number and been believed.
     pub acknowledged: i64,
+    /// Rows acknowledged that were **never offered at all** — `amb read --all` reaching mail the
+    /// hook had not yet delivered. Reported rather than dropped: it is the difference between the
+    /// two populations above, and a reader who sees only the corrected ratio would have no way to
+    /// tell that these rows exist.
+    pub acknowledged_unoffered: i64,
     /// **The unhappy path.** Offered [`MAX_OFFERS`] times and never acknowledged — D6's
     /// dead-letter condition, which nothing has ever reported.
     pub dead: i64,
@@ -123,7 +138,13 @@ pub fn gather(conn: &Connection) -> Result<Board> {
         kind_senders: one("SELECT count(DISTINCT from_agent) FROM messages WHERE kind <> 'note'")?,
         offers: one("SELECT count(*) FROM reads WHERE delivered_at IS NOT NULL")?,
         deliveries: one("SELECT sum(attempts) FROM reads")?,
-        acknowledged: one("SELECT count(*) FROM reads WHERE read_at IS NOT NULL")?,
+        // **Restricted to offered rows, so it shares a population with `offers`** (D127).
+        acknowledged: one(
+            "SELECT count(*) FROM reads WHERE read_at IS NOT NULL AND delivered_at IS NOT NULL",
+        )?,
+        acknowledged_unoffered: one(
+            "SELECT count(*) FROM reads WHERE read_at IS NOT NULL AND delivered_at IS NULL",
+        )?,
         dead: one(&format!(
             "SELECT count(*) FROM reads WHERE read_at IS NULL AND attempts >= {MAX_OFFERS}"
         ))?,
@@ -223,6 +244,14 @@ pub fn render(b: &Board) -> String {
         b.offers,
         rate(b.acknowledged, b.offers)
     );
+    // **Printed unconditionally, including at zero** — same argument as every other line here, and
+    // this one carries the difference between the two populations the ratio above is taken over.
+    // Dropping it would leave a corrected ratio with no trace that the rows it excludes exist.
+    let _ = writeln!(
+        s,
+        "  self-read {} acknowledged by `amb read` before the hook ever offered them",
+        b.acknowledged_unoffered
+    );
 
     // The unhappy path, and it prints even at zero. A dead-letter count that appears only when
     // non-zero is one a reader cannot distinguish from a metric that was never wired up (D89).
@@ -280,6 +309,7 @@ mod tests {
             offers: 599,
             deliveries: 1025,
             acknowledged: 589,
+            acknowledged_unoffered: 104,
             dead: 0,
             unoffered: 2,
             globals: 15,
@@ -307,6 +337,72 @@ mod tests {
             "and the gap between them, stated rather than left to be noticed: {out}"
         );
         crate::assert_rendered_shape("status", &out);
+    }
+
+    /// **No ratio on this page can exceed 100%, and one did** (D127).
+    ///
+    /// `read 752 of 716 offer(s) acknowledged · 105%` was printed by the real board. The numerator
+    /// counted every row with a `read_at`; the denominator counted only rows with a
+    /// `delivered_at`. `amb read --all` sets the first without the second, so 104 rows were in the
+    /// numerator's population and not the denominator's — question 1, on the module written to
+    /// answer it.
+    ///
+    /// **A property, not a needle list.** Any percentage over 100 means a numerator and denominator
+    /// describing different populations, whichever line it appears on, so this asserts the
+    /// invariant over every `%` the page prints rather than over the one that was wrong. The
+    /// enumeration would have passed on any *future* mismatched pair; this does not.
+    #[test]
+    fn no_percentage_on_the_page_can_exceed_one_hundred() {
+        for (label, b) in [
+            ("the real board's shape", board()),
+            (
+                "everything acknowledged",
+                Board {
+                    acknowledged: 599,
+                    offers: 599,
+                    ..board()
+                },
+            ),
+            (
+                "nothing offered at all",
+                Board {
+                    acknowledged: 0,
+                    offers: 0,
+                    ..board()
+                },
+            ),
+        ] {
+            let out = render(&b);
+            for line in out.lines() {
+                for tok in line.split_whitespace() {
+                    if let Some(n) = tok.strip_suffix('%') {
+                        let pct: f64 = n.parse().unwrap_or(0.0);
+                        assert!(
+                            pct <= 100.0,
+                            "{label}: {pct}% means the numerator counts rows the denominator does \
+                             not — {line:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The rows the corrected ratio excludes are still reported, or the correction hides them.
+    #[test]
+    fn acknowledgements_that_were_never_offered_are_reported_rather_than_dropped() {
+        let out = render(&board());
+        assert!(
+            out.contains("104 acknowledged by `amb read` before the hook ever offered them"),
+            "the excluded population must stay visible: {out}"
+        );
+        // Unconditional, like every other line here: zero is the informative reading.
+        let none = render(&Board {
+            acknowledged_unoffered: 0,
+            ..board()
+        });
+        assert!(none.contains("self-read 0 acknowledged"), "{none}");
+        crate::assert_rendered_shape("status self-read", &none);
     }
 
     /// `@@`'s three numbers reach the page, and none of them is divided into another (D126).
