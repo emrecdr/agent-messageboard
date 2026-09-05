@@ -11,6 +11,16 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **The vault's directories were world-traversable while the notes inside them were `0600`**
+  (D121). `db.rs` narrows the board — parent `0700`, database `0600`, sidecars `0600` — and
+  `write_private` has set `0600` on a note for as long. The *directory* was left at the process
+  umask by all three vault-authoring paths. Measured on the live vault: every directory `0755`,
+  117 notes `0600`, 11 notes `0644`. A `0755` directory over `0600` notes still leaks, because a
+  note's filename is its slugified title. `memory::create_dir_private` narrows only what it
+  creates — never the `AMB_VAULT` root or any ancestor that already existed, which is D31's rule —
+  and `amb doctor`'s `vault` row now counts what it found loose, says what leaks, and prints the
+  exact `chmod` rather than running it.
+
 - **`amb claims` reported one claim's liveness beside another claim's horizon, and the dangerous
   direction says a held file is free** (D120). `summarise` aggregated `Group.until` with `max`
   while taking `Group.live` from whichever claim opened the group, then rendered both from one

@@ -6405,3 +6405,94 @@ value needs the *middle* state, populated in everything except the quantity it g
 presence-only assertion cannot see it in either direction, because *"renders as live"* is true in
 one ordering and *"renders as expired"* is true in the other. **The false statement in both is that
 the two fields describe the same claims**, so the assertion has to be on the pair.
+
+---
+
+## D121 · The vault's directories are narrowed to 0700 when `amb` creates them, and reported when it did not
+
+**Decided.** `memory::create_dir_private` replaces `create_dir_all` on every path that authors into
+the vault. It narrows **only the directories that call created**, and `amb doctor`'s `vault` row
+reports what it found loose instead of repairing it.
+
+### The asymmetry: the disposable half was guarded and the irreplaceable half was not
+
+`db.rs::restrict` has narrowed the board deliberately since before publication — parent `0700`,
+database `0600`, WAL sidecars `0600`, with a test arguing about whether `0400` counts as loose.
+`write_private` has set `0600` on a note for just as long. The **directory holding the note** was
+left at the process umask by all three vault-authoring paths (`observe`, and `promote`'s two).
+
+Measured on the live vault the day this landed: every directory `0755`, 117 notes `0600`, and 11
+notes `0644` written before `write_private` tightened. The board — the half D15 calls **disposable**
+— was `drwx------`. The vault — the half D34 says `rm board.db` must not be able to lose, and which
+`doctor` itself calls "the half worth backing up" — was world-traversable.
+
+**A `0755` directory over `0600` notes still leaks, which is the part that reads as harmless.** A
+stranger on the machine cannot read a note; they can `ls` it. Note filenames are slugified note
+*titles*, so the directory mode leaks the index of what every session has learned. And `redact.rs`
+removes **named shapes** rather than measuring entropy (D46), so what survives redaction into a
+note body is exactly what no pattern anticipated.
+
+### Only what we created, and D31 is why
+
+An earlier version of `db.rs::restrict` tightened the board's parent unconditionally and quietly
+chmodded a directory belonging to someone else: `AMB_DB=~/scratch/board.db` took `~/scratch` from
+`0755` to `0700`. `AMB_VAULT` has the same shape — it may name a directory the user already keeps
+things in — so the vault **root is never narrowed**, and neither is any ancestor that already
+existed. The set to narrow is computed *before* `create_dir_all` runs, because afterwards there is
+no way to tell what was made from what was already there.
+
+### Reporting rather than repairing, and that is not timidity
+
+`create_dir_private` is forward-only: using `amb` never fixes a vault that is already loose. Shipping
+the fix alone would leave every existing vault permanently wrong and silent about it — **D94's
+shape**, where detection and repair are separate features and the one you skip is the one that
+matters. So `doctor` walks the vault, counts entries readable by group or other, names the count,
+says what leaks, and prints the exact `chmod`. It does not run it: narrowing somebody else's
+directory is what D31 forbids, and the choice is the user's.
+
+**Rejected: a `--fix` flag on `doctor`.** MCP Agent Mail ships `doctor check/repair` and it is a
+reasonable design there. Here it would have to decide on the user's behalf whether a deliberately
+shared vault is a mistake, and `doctor`'s contract is that it always exits 0 and reports a
+diagnosis rather than performing one. The repair is one `chmod` a person can read before running.
+
+---
+
+## D122 · The two addressing indexes stay, because the plan they serve is selectivity-dependent
+
+**Decided.** `ix_inbox_proj` and `ix_inbox_agent` are kept, no plan assertion is added for
+`messages::select`, and no `INDEXED BY` hint is used. This decision exists because the opposite was
+proposed with evidence, and the evidence was incomplete.
+
+### The withdrawn finding
+
+An audit on 2026-09-05 reported `messages::select` — the query CLAUDE.md calls the central design
+claim — as a permanent full table scan whose two indexes were consulted by **zero** production
+queries, and recommended dropping them or pinning the plan. It cited `claims.rs::list_sql`, where
+exactly that defect was found and fixed, and observed correctly that `assert_query_plan_uses` has
+two callers and `messages.rs` is not one of them.
+
+Every individual observation was true. The conclusion was wrong, and validating it before
+implementing is the only reason nothing was changed:
+
+| Board | Match rate | Plan |
+|---|---|---|
+| Live board, 425 rows, 11 recipients | 109/425 = **25.6%** | `SCAN` — correct at that selectivity |
+| Synthetic, same 73/21/5 addressing mix, 40 agents | ~**9%** | `MULTI-INDEX OR` using `ix_inbox_agent` |
+
+**Size is not the variable; the number of agents sharing the board is.** The first measurement used
+a synthetic board that was 100% broadcast and a *fake* recipient id, which made `to_agent IS NULL`
+select the whole table and defeated the index for reasons the real board does not share. Forcing
+either plan at 60k rows landed within a few ms of the other, and no configuration was found in
+which the choice measurably matters.
+
+### Why no plan assertion, which is the non-obvious half
+
+`claims::list_sql` has **one** correct plan, so pinning it is a real guard. `messages::select` has
+**two**, and which one is right depends on data the test fixture chooses. An assertion here would
+pin whichever regime the fixture happened to build and redden on boards where the other is correct
+— a guard that fires on healthy input, which is worse than no guard because someone will delete it.
+
+**The reusable part is about the instrument, not the query.** `EXPLAIN QUERY PLAN` answers *what
+will this do here*, and reads as though it answered *what does this do*. One plan on one fixture is
+a measurement of that fixture. This project's own rule — repeat any measurement before quoting it —
+extends to plans, and repeating means varying the *data*, not running it twice.

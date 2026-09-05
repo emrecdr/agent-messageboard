@@ -169,7 +169,19 @@ show "PreToolUse · memory  (amb hook memory)" \
      "$(hook memory '{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"src/messages.rs"}}')"
 
 show "amb inbox   (the command the banner tells every agent to run first — D90)" "$(run inbox)"
-show "amb claims" "$(run claims)"
+# **Both views, adjacent, and the pairing is the point.** `amb claims` was already here and it did
+# not help: on 2026-09-05 it printed `997530 · src/memory/ (4 files) · in 3h` when three of those
+# four had lapsed four days earlier, a peer session read it, and partitioned work around a claim
+# that did not exist. The line is not obviously wrong — nothing about it looks broken, and this
+# script's whole method is a person reading output. A person cannot see that "4 files" and "in 3h"
+# describe different claims unless the per-claim rows are in front of them.
+#
+# So the grouped view is shown beside the raw one it summarises. That is the same move the
+# cross-artefact check below makes for schema numbers: put the two things that must agree on the
+# same page, because no unit test holds both.
+show "amb claims   (grouped — what a session actually reads)" "$(run claims)"
+show "amb claims --raw --live   (one row per claim — does every group above agree with these?)" \
+     "$(run claims --raw --live)"
 [ -n "$VAULT" ] && show "amb memory status   (the receipt D59 is read off)" "$(run memory status)"
 
 rule

@@ -489,14 +489,31 @@ pub fn integrity_check(finding: Integrity) -> Check {
 /// `notes` is `None` when the path is not a directory. One parameter rather than an `is_dir`
 /// flag beside a count: the pair let a caller assert a note count for a vault that does not
 /// exist, and made the caller walk the vault even when the verdict could not use the number.
-pub fn vault_check(path: &std::path::Path, notes: Option<usize>) -> Check {
+pub fn vault_check(path: &std::path::Path, notes: Option<usize>, loose: usize) -> Check {
     if let Some(notes) = notes {
+        if loose > 0 {
+            return Check::new(
+                "vault",
+                Health::Warn,
+                format!(
+                    "{} — {} note(s), {} of them or their directories readable by other users on \
+                     this machine. A note's filename is its title, so this leaks titles even \
+                     where the note itself is 0600. Fix with `chmod -R go-rwx {}` — amb narrows \
+                     what it creates and never what it did not (D31), so an existing vault stays \
+                     as you left it",
+                    path.display(),
+                    notes,
+                    loose,
+                    path.display()
+                ),
+            );
+        }
         Check::new(
             "vault",
             Health::Ok,
             format!(
-                "{} — {} note(s), and the half worth backing up: the board is disposable (D15), \
-                 this is not (D34)",
+                "{} — {} note(s), owner-only, and the half worth backing up: the board is \
+                 disposable (D15), this is not (D34)",
                 path.display(),
                 notes
             ),
@@ -512,6 +529,61 @@ pub fn vault_check(path: &std::path::Path, notes: Option<usize>) -> Check {
             ),
         )
     }
+}
+
+/// Vault entries any other user on this machine can reach — directories and notes alike.
+///
+/// **Both halves failed, differently, and only one is fixed going forward.** `write_private` has
+/// set 0600 on a note since before the repository was published; the directory holding it was left
+/// at the process umask until `memory::create_dir_private`. So a vault that predates that fix has
+/// 0755 directories, and a 0755 directory over 0600 notes still leaks: other users cannot read a
+/// note but can list its *filename*, and filenames are slugified note titles.
+///
+/// **This reports and never repairs, which is the whole reason it exists.**
+/// `create_dir_private` narrows only what it creates (D31), so merely using `amb` never fixes a
+/// vault that was already loose — the fix is forward-only and silent about the past. That is the
+/// shape D94 records for the stale hook binary: detection and repair are different features, and
+/// shipping the repair without the detection leaves the existing case invisible forever.
+///
+/// `symlink_metadata`, not `metadata`: a symlink out of the vault is not ours to judge, and
+/// following one would let a loop hang the command. Depth is capped for the same reason.
+#[cfg(unix)]
+fn loose_in_vault(vault: &std::path::Path) -> usize {
+    use std::os::unix::fs::PermissionsExt;
+    fn walk(dir: &std::path::Path, depth: u32, n: &mut usize) {
+        if depth == 0 {
+            return;
+        }
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.permissions().mode() & 0o077 != 0 {
+                *n += 1;
+            }
+            if meta.is_dir() {
+                walk(&path, depth - 1, n);
+            }
+        }
+    }
+    let mut n = 0;
+    // The root counts too. It is the user's own directory and D31 forbids narrowing it, but a
+    // world-traversable root is exactly how the filenames below it leak, so staying silent about
+    // it would report the containers and not the container.
+    if std::fs::symlink_metadata(vault).is_ok_and(|m| m.permissions().mode() & 0o077 != 0) {
+        n += 1;
+    }
+    walk(vault, 6, &mut n);
+    n
+}
+
+#[cfg(not(unix))]
+fn loose_in_vault(_vault: &std::path::Path) -> usize {
+    0
 }
 
 /// Every byte the board occupies, including the WAL sidecars. Unreadable files count as zero,
@@ -691,6 +763,7 @@ pub fn gather(now: f64) -> Report {
             checks.push(vault_check(
                 &v,
                 v.is_dir().then(|| crate::memory::count_on_disk(&v)),
+                if v.is_dir() { loose_in_vault(&v) } else { 0 },
             ));
             let memory_on = settings
                 .as_ref()
@@ -848,15 +921,63 @@ mod tests {
     /// against the index askable at all.
     #[test]
     fn the_vault_line_is_a_verdict_rather_than_an_echo() {
-        let gone = vault_check(std::path::Path::new("/v/typo"), None);
+        let gone = vault_check(std::path::Path::new("/v/typo"), None, 0);
         assert_eq!(gone.health, Health::Bad);
         assert!(gone.detail.contains("observe will fail"), "{}", gone.detail);
 
-        let there = vault_check(std::path::Path::new("/v/real"), Some(21));
+        let there = vault_check(std::path::Path::new("/v/real"), Some(21), 0);
         assert_eq!(there.health, Health::Ok);
         assert!(there.detail.contains("21 note(s)"), "{}", there.detail);
         for c in [gone, there] {
             crate::assert_rendered_shape("vault_check", &c.detail);
+        }
+    }
+
+    /// A truth table over the count guard, because `loose > 0` is the spelling M27 measured as
+    /// this project's commonest survivor: thirty-seven of `status.rs`'s forty mutants sat on an
+    /// `if` deciding whether a line renders, ten of them the literal `x > 0` -> `x >= 0`.
+    ///
+    /// The `0` row is what kills that relaxation — under `>=` a clean vault would raise the alarm,
+    /// and a presence-only test asserting "a loose vault warns" passes either way. The `1` row is
+    /// the presence assertion that keeps the `0` row from being vacuous (M27's absence-only trap:
+    /// asserting a line is missing proves nothing unless the renderer got that far).
+    #[test]
+    fn only_a_loose_vault_raises_the_alarm_and_it_says_what_leaks() {
+        let p = std::path::Path::new("/v/real");
+        let clean = vault_check(p, Some(21), 0);
+        assert_eq!(clean.health, Health::Ok, "{}", clean.detail);
+        assert!(
+            !clean.detail.contains("readable by other users"),
+            "a private vault raises nothing: {}",
+            clean.detail
+        );
+        assert!(
+            clean.detail.contains("owner-only"),
+            "and says so positively, so the absence above has a proven premise: {}",
+            clean.detail
+        );
+
+        for n in [1usize, 11] {
+            let loose = vault_check(p, Some(21), n);
+            assert_eq!(loose.health, Health::Warn, "{}", loose.detail);
+            assert!(
+                loose.detail.contains(&format!("{n} of them")),
+                "the count reaches the page rather than a bare adjective: {}",
+                loose.detail
+            );
+            // The *consequence*, not just the fact. A 0755 directory over 0600 notes still leaks
+            // titles, and a reader who knows the notes are 0600 would otherwise dismiss this.
+            assert!(
+                loose.detail.contains("filename is its title"),
+                "it says what actually leaks: {}",
+                loose.detail
+            );
+            assert!(
+                loose.detail.contains("chmod -R go-rwx"),
+                "and the exact command, as the stale-binary row does (D73): {}",
+                loose.detail
+            );
+            crate::assert_rendered_shape("vault_check loose", &loose.detail);
         }
     }
 

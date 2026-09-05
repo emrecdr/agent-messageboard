@@ -244,7 +244,7 @@ fn derive_locked(
     }
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(io(format!("creating {}", parent.display())))?;
+        create_dir_private(parent)?;
     }
     let rendered = candidate.render();
     write_private(path, &rendered)?;
@@ -551,7 +551,7 @@ pub fn promote(
     let new_rel = vault_rel(&promoted.id.kind, &promoted.id.scope, &promoted.id.slug);
     let new_path = vault.join(&new_rel);
     if let Some(parent) = new_path.parent() {
-        std::fs::create_dir_all(parent).map_err(io(format!("creating {}", parent.display())))?;
+        create_dir_private(parent)?;
     }
     let rendered = promoted.render();
     write_private(&new_path, &rendered)?;

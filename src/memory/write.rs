@@ -98,7 +98,7 @@ pub fn observe(
     // walk is tested against. D86 needed a second directory and that divergence is what would
     // have made a capture land in `projects/` with `captures/` in its index row.
     let dir = vault.join(vault_dir(obs.kind, obs.project));
-    std::fs::create_dir_all(&dir).map_err(io(format!("creating {}", dir.display())))?;
+    create_dir_private(&dir)?;
 
     let (slug, path) = free_slug(&dir, &format_date(at), &slugify(&title.text));
     let note = Note {
@@ -165,6 +165,52 @@ fn free_slug(dir: &Path, date: &str, base: &str) -> (String, PathBuf) {
         }
         n += 1;
     }
+}
+
+/// Create `dir` and every missing ancestor, narrowing **only the ones this call created** to 0700.
+///
+/// [`write_private`] sets 0600 on the note and has since before the repository was published. The
+/// directory holding it was left at the process umask, so a vault on a default umask is
+/// `drwxr-xr-x` containing `-rw-------` files — the mode on the file and the mode on the path to
+/// it disagreeing about the same secret. Measured on the live vault before this landed: every
+/// directory 0755, 117 notes 0600, and 11 notes 0644 written before `write_private` tightened.
+///
+/// **The vault root is deliberately not narrowed**, and neither is anything else that already
+/// existed. `AMB_VAULT` may point at a directory the user keeps other things in, and D31 records
+/// what happened when `db.rs` tightened a parent it did not create: `AMB_DB=~/scratch/board.db`
+/// took `~/scratch` from 0755 to 0700. Narrowing our own directory is hardening; narrowing
+/// somebody else's is a side effect they never asked for. `amb doctor` reports what it finds
+/// instead, which is the half that reaches a vault this function never touched.
+///
+/// **Not used by `export.rs`, and that is not an oversight.** `write_export` writes into a git
+/// repository other people clone, and its own comment says 0600 would be actively wrong there.
+/// The two paths differ because their destinations do (D11, D49).
+///
+/// Failures to chmod are swallowed, matching [`write_private`] and `db::restrict`: a vault on a
+/// filesystem without Unix modes still works, and refusing to record a note because the
+/// permissions could not be narrowed would trade a privacy improvement for an outage.
+pub(crate) fn create_dir_private(dir: &Path) -> Result<()> {
+    // Which ancestors are missing *before* anything is created — the set this call may narrow.
+    // Collected first because `create_dir_all` reports only success, so afterwards there is no
+    // way to tell what it made from what was already there.
+    let mut ours: Vec<std::path::PathBuf> = Vec::new();
+    let mut cursor = Some(dir);
+    while let Some(c) = cursor {
+        // An empty component is `Path::new("a").parent()`, which is `""` and never exists —
+        // pushing it would chmod the process's working directory.
+        if c.as_os_str().is_empty() || c.exists() {
+            break;
+        }
+        ours.push(c.to_path_buf());
+        cursor = c.parent();
+    }
+    std::fs::create_dir_all(dir).map_err(io(format!("creating {}", dir.display())))?;
+    #[cfg(unix)]
+    for made in &ours {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(made, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(())
 }
 
 /// The temporary sibling one process writes before renaming over `path`.
@@ -555,6 +601,52 @@ mod tests {
             capped_path.exists(),
             "and that name does exist: the cap is the trade"
         );
+    }
+
+    /// A truth table, and the first row is what proves the other two are not vacuous.
+    ///
+    /// **The absence rows are the ones with an unproven premise.** "A pre-existing directory is
+    /// not narrowed" passes if `create_dir_private` narrows *nothing at all* — including the
+    /// directories it did create — so on its own it guards the D31 rule and not the fix. The
+    /// `made` row is the presence assertion that fails if the function stops working, which is
+    /// what makes the other two mean something (M27's absence-only trap).
+    #[cfg(unix)]
+    #[test]
+    fn a_created_vault_directory_is_private_and_an_inherited_one_is_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("tmp");
+        let mode = |p: &Path| std::fs::metadata(p).expect("stat").permissions().mode() & 0o777;
+
+        // The user's own directory, deliberately world-readable, standing in for `AMB_VAULT`
+        // pointing somewhere they already keep files.
+        let inherited = root.path().join("their-vault");
+        std::fs::create_dir(&inherited).expect("mkdir");
+        std::fs::set_permissions(&inherited, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod");
+
+        // Two levels below it, both created by us.
+        let made = inherited.join("projects").join("nest");
+        create_dir_private(&made).expect("create");
+
+        assert_eq!(
+            mode(&made),
+            0o700,
+            "the directory this call created is private — the row that proves the others"
+        );
+        assert_eq!(
+            mode(made.parent().expect("parent")),
+            0o700,
+            "and so is the intermediate it had to create to get there"
+        );
+        assert_eq!(
+            mode(&inherited),
+            0o755,
+            "but a directory that already existed is left exactly as the user set it (D31)"
+        );
+
+        // Idempotent, and re-running must not re-narrow the inherited root either.
+        create_dir_private(&made).expect("again");
+        assert_eq!(mode(&inherited), 0o755, "still theirs on a second call");
     }
 
     #[test]

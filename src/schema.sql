@@ -67,6 +67,26 @@ CREATE TABLE IF NOT EXISTS messages (
   attempts   INTEGER NOT NULL DEFAULT 0,
   failed_at  REAL
 );
+-- These two serve a plan that is SELECTIVITY-DEPENDENT, and it is worth saying so here because
+-- the obvious reading of an EXPLAIN is that they are dead.
+--
+-- An audit on 2026-09-05 reported `messages::select` as a permanent full scan with both indexes
+-- unused by every production query, and recommended dropping them. That finding was WITHDRAWN
+-- before anything was changed, and this comment is what was learned instead:
+--
+--   * On the live board (425 rows, 11 distinct recipients) one agent matches 109 of 425 rows —
+--     25.6% — and SQLite chooses SCAN. At that selectivity a scan really is cheaper than two
+--     index probes plus random row fetches, so the plan is correct rather than defective.
+--   * On a synthetic board with the same 73/21/5 direct/project/global mix but 40 agents, the
+--     match falls to ~9% and the same query plans as MULTI-INDEX OR using ix_inbox_agent. Size
+--     is not the variable; how many agents share the board is.
+--   * Forcing either plan at 60k rows lands within a few ms of the other, so no configuration was
+--     found in which the choice measurably matters.
+--
+-- The practical consequences: do NOT add an `INDEXED BY` hint, which would pin the wrong plan for
+-- half the boards that exist; do NOT assert a plan for this query the way `claims::list_sql` does,
+-- because that query has one correct plan and this one has two; and do NOT conclude from a single
+-- EXPLAIN that these are dead weight — the first measurement said exactly that and was wrong.
 CREATE INDEX IF NOT EXISTS ix_inbox_proj  ON messages(to_proj, id);
 CREATE INDEX IF NOT EXISTS ix_inbox_agent ON messages(to_agent, id);
 
