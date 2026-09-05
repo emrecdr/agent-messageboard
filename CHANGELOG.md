@@ -50,6 +50,23 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Changed
 
+- **`tools/check_mutation_coverage.py` no longer prints "the inventory IS closed"** (M70). It says
+  `coverage is closed` and carries the distinction it had always known but only ever recorded in its
+  own docstring: this answers whether a module has *ever* had a round, never whether it was mutated
+  in the form it is in now.
+
+  **The caveat was true and unread.** The gate printed an unqualified closure claim to everyone; the
+  qualification sat in a file nobody opens. That is the always-already-open failure with the roles
+  swapped, and it is why the fix is where the sentence is printed rather than what it computes.
+
+  **Measured before changing, and the measurement argued against automating it.** 20 of 29 covered
+  modules had changed since their most recent recorded round. But `delivery.rs` — eight days stale
+  by the ledger and the worst-looking row available — is in fact the *most recently mutated module
+  in the crate*, twice in two days, neither round written down. A dates column would have printed
+  its most confident false positive against the module with the freshest evidence. The docstring
+  had already refused this machinery; the numbers confirm the refusal rather than overturn it, so
+  nothing was automated and no new instrument exists to keep true.
+
 - **A session is no longer shown mail nobody sent to it** (D130). `@@` from another repository is
   counted, not spelled out. Direct messages, `@project` broadcasts for the place you work in, and
   `@@` from your own project are unchanged and render in full.

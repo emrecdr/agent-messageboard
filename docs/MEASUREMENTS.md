@@ -4846,3 +4846,59 @@ both by the session auditing everyone else's instruments. **The generalisable fo
 that describes intended work reads exactly like one that describes completed work, and the file
 name is the only thing distinguishing them.** `mutants.json` and `outcomes.json` sit in the same
 directory. So does `docs/DECISIONS.md` beside a decision's implementation.
+
+## M70 · the ledger measured against itself: 20 of 29 rounds are stale, and automating that would have lied
+
+**Modules:** none — this measures `tools/check_mutation_coverage.py`, not code.
+
+**2026-09-06, at `c77f6bd`.** The checker prints *the inventory IS closed* and its own docstring
+says that means *has this module ever had a round*, never *was it mutated in the form it is in
+now* (M62). Nobody had put a number on the gap. This does.
+
+**Method.** Split `MEASUREMENTS.md` on `## M`, take each entry's own date and the modules it names
+through all four recorded forms, keep the latest date per module, and compare against
+`git log -1 --format=%cd --date=short -- <file>`.
+
+**The probe was validated before its output was believed**, which matters because M57 records this
+script's parser being wrong on its first run and the correction being wrong too. The first cut
+handled three forms and reported `delivery.rs` as never mutated — M55's error reproduced by the
+probe written to audit M55's tool. With the score-table form added, its uncovered set is exactly
+`src/lib.rs` and `src/memory.rs`: the two `EXEMPT` entries, and therefore agreement with the
+shipped checker's covered set rather than a second opinion about it.
+
+| | modules |
+|---|---|
+| changed after their most recent recorded round | **20** |
+| unchanged since their round | 9 |
+| oldest gap | `memory/promote.rs` — round M25 on 2026-08-30, changed 2026-09-05 |
+
+`db.rs` last ran at M46 (2026-08-31); `memory/inject.rs` at M23 (2026-08-29). And the count moved
+during the session that measured it: `c77f6bd` touched `status.rs`, taking 19 to 20.
+
+### Why this did not become a column in the checker
+
+The docstring already refused this — *"a script that guessed at staleness from dates would be a new
+instrument to keep true"* — so the question was whether the numbers overturn it. **They confirm
+it**, on the single sharpest case available:
+
+`delivery.rs` dates to **M27, 2026-08-31**, which makes it eight days stale and one of the worst
+rows in the table. It is in fact the **most recently mutated module in the crate** — a 43/45 round
+on 2026-09-04 and a diff-scoped round on 2026-09-05 that found a real defect by hand-mutation
+(`753b324`). Neither was written down: `8da1b9a` and `753b324` touch no `MEASUREMENTS.md`.
+
+So a dates column would have printed its most confident false positive against the module with the
+freshest evidence, sourced from the one gap it structurally cannot see. The ledger's error runs in
+**both directions at once** — stale rounds counted as current, and real rounds not counted at all —
+and only the first is visible to arithmetic over the file.
+
+That second direction is D89's shape one level up: **the round is a shell command and the record is
+a paragraph a human must remember to write**, so nothing writes on the unhappy path of forgetting.
+It is also why the fix is social rather than mechanical, and the output now asks for it in a line.
+
+### What changed instead
+
+The limit was stated *only* in the module docstring — true, and in a file nobody opens, while the
+gate printed an unqualified `the inventory IS closed` to everyone. An honest caveat out of sight is
+not a caveat; it is CLAUDE.md's always-already-open failure with the roles swapped. The summary
+line now reads `coverage is closed` and carries the distinction, names the manual check, and asks
+for rounds to be recorded. No new instrument, so nothing new to keep true.

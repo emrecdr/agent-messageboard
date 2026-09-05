@@ -16,6 +16,19 @@ code. A set-difference over files cannot see time. Left as a stated limit rather
 because the honest fix is to re-run a module you have just rewritten, and a script that guessed
 at staleness from dates would be a new instrument to keep true.
 
+**That decision stands, and it was re-tested against real numbers rather than re-assumed** (M70).
+Dating every round and diffing it against `git log` is a dozen lines, so the question is not cost
+but truth: on the day it was measured the ledger dated `delivery.rs` to M27 while that module had
+in fact been mutated *twice in the preceding two days* — neither round recorded here. An automatic
+staleness column would therefore have printed confident false positives sourced from the one gap
+it cannot see, which is exactly the failure the paragraph above predicted.
+
+**What did change is where the limit is printed.** It was stated only here, and this file is one
+nobody opens: the gate prints `the inventory IS closed`, a reader takes coverage for currency, and
+the caveat sits in a docstring above their line of sight. That is CLAUDE.md's always-already-open
+failure with the roles swapped — an honest caveat somewhere unread is not a caveat. The summary
+line now carries the limit and names the manual check, which costs no instrument at all.
+
 **It polices the claim, not the work.** Mutation is deliberately not a commit gate — it is slow,
 and `tools/mutants.sh`'s header says why. So an uncovered module is never a failure here; it is
 printed and left. What fails is a document asserting closure while the set-difference disagrees.
@@ -114,7 +127,19 @@ def main() -> int:
         for f in uncovered:
             print(f"  {f}")
     else:
-        print("every module with mutants has a recorded round — the inventory IS closed.")
+        print("every module with mutants has a recorded round — coverage is closed.")
+
+    # **The limit travels with the claim, or it is not a limit.** This was stated in the module
+    # docstring alone, where it is true and unread; the line above said `the inventory IS closed`
+    # and a reader took coverage for currency. Printed unconditionally because it qualifies the
+    # covered set, which exists in both branches above.
+    print(
+        "  ! coverage is not currency. This cannot see time: a module rewritten since its round\n"
+        "    still reads as covered (M62, twice). Deliberately not automated — the ledger misses\n"
+        "    rounds nobody recorded, so a dates column would print false positives (M70).\n"
+        "    Re-run what you rewrote, and record the round here so the next reader can see it."
+    )
+
     if exempt:
         print("\nexempt, with the reason each was excused:")
         for f in sorted(exempt):
