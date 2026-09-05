@@ -368,6 +368,7 @@ mod tests {
             agent: None,
             files: vec!["src/retry.rs".into()],
             cites: Vec::new(),
+            rejects: Vec::new(),
             supersedes: None,
             superseded_by: None,
             promoted_from: None,

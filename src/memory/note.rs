@@ -33,6 +33,17 @@ pub struct Note {
     /// How binding this is: `advice` (the default), `decision`, or `rule`. Absent means `advice`,
     /// so every note written before the field existed keeps behaving exactly as it did.
     pub force: String,
+    /// Phrases that refuse this candidate, and anything that reads like it, permanently.
+    ///
+    /// **Author-supplied, never derived from the title, and that costs something on purpose.**
+    /// D49 requires declining to be *cheaper* than assenting, or approval becomes the path of
+    /// least resistance. Rejecting is the stronger claim, so it is deliberately *dearer* than
+    /// declining: you name what you are refusing. Deriving phrases from the title would make the
+    /// strong statement as cheap as the weak one and would over-suppress on a guess.
+    ///
+    /// Empty on every note that is not a rejection, which is all of them until someone rejects
+    /// one.
+    pub rejects: Vec<String>,
     /// When the user last declined this candidate — for the human reading the file.
     pub declined_at: Option<f64>,
     /// **How many derivations it had when it was declined**, which is what "not re-offered until
@@ -151,6 +162,7 @@ impl Note {
         }
         push_list(&mut out, "files", &self.files);
         push_list(&mut out, "cites", &self.cites);
+        push_list(&mut out, "rejects", &self.rejects);
         if let Some(s) = &self.supersedes {
             out.push_str(&format!("supersedes: {}\n", yaml_scalar(s)));
         }
@@ -324,6 +336,7 @@ pub fn parse_note(text: &str, fallback_slug: &str, fallback_mtime: f64) -> Optio
         agent: get("agent"),
         files: list("files"),
         cites: list("cites"),
+        rejects: list("rejects"),
         supersedes: get("supersedes"),
         superseded_by: get("superseded_by"),
         promoted_from: get("promoted_from"),
@@ -367,6 +380,7 @@ mod tests {
             agent: Some("amb-builder".into()),
             files: vec!["src/delivery.rs".into(), "src/messages.rs".into()],
             cites: vec!["amb/2026-08-26-earlier".into()],
+            rejects: Vec::new(),
             supersedes: Some("amb/2026-08-20-older".into()),
             superseded_by: None,
             promoted_from: None,

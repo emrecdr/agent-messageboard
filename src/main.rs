@@ -325,6 +325,19 @@ enum MemoryCommand {
         /// Record that you declined it. Not re-offered until it derives again.
         #[arg(long, conflicts_with = "yes")]
         decline: bool,
+        /// Refuse it **permanently**, and refuse anything matching `--phrases` with it.
+        ///
+        /// Stronger than `--decline`, and deliberately dearer: a decline silences this one
+        /// candidate until it derives again, while a rejection also suppresses candidates nobody
+        /// has written yet. `--phrases` is required for exactly that reason — the phrases are
+        /// what a rejection costs, and deriving them from the title would make the strong
+        /// statement as cheap as the weak one.
+        #[arg(long, conflicts_with_all = ["yes", "decline"], requires = "phrases")]
+        reject: bool,
+        /// What this rejection refuses, comma-separated. Matched case-insensitively against a
+        /// candidate's title and the notes under its derivations.
+        #[arg(long, value_delimiter = ',', requires = "reject")]
+        phrases: Vec<String>,
         /// Confirm. Without this the offer is shown and nothing is written.
         #[arg(long)]
         yes: bool,
@@ -1609,6 +1622,8 @@ fn run_memory(
         MemoryCommand::Promote {
             id,
             decline,
+            reject,
+            phrases,
             yes,
             direct,
             scope,
@@ -1624,6 +1639,28 @@ fn run_memory(
                         "declined {} — not offered again until it derives",
                         note_id.display()
                     );
+                }
+                return Ok(());
+            }
+            if *reject {
+                let removed = memory::reject(conn, &note_id, phrases, at)?;
+                if cli.json {
+                    print_json(&serde_json::json!({
+                        "rejected": note_id.display(),
+                        "phrases": phrases,
+                        "redacted": removed,
+                    }));
+                } else {
+                    println!(
+                        "rejected {} — {} phrase(s) will refuse this again",
+                        note_id.display(),
+                        phrases.len()
+                    );
+                    // Word-for-word what the other write paths print, because two spellings of
+                    // one guarantee is two guarantees to keep in step.
+                    if removed > 0 {
+                        println!("  {removed} value(s) redacted before writing");
+                    }
                 }
                 return Ok(());
             }

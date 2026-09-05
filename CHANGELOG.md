@@ -9,6 +9,38 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Added
+
+- **`amb memory promote <id> --reject --phrases a,b` — a candidate can now be refused
+  permanently, and the refusal reaches ideas nobody has written yet** (D124). `--decline` silences
+  one slug and its own rule is *"not offered again until something new derives it"*, so the same
+  idea under a new slug came straight back with nothing connecting the two. A rejection sets the
+  candidate's status and records phrases; `ready_candidates` suppresses any candidate whose title
+  or derivation notes match one.
+
+  It is **dearer than declining on purpose**, which inverts D49 rather than contradicting it: D49
+  needs declining cheaper than assenting so approval is not the path of least resistance, and
+  rejection is the stronger claim, so it costs you naming what you refuse. `--phrases` is required
+  and an all-whitespace list is refused; both exit 64.
+
+  **It is not silent**, which is where this parts company with the devt mechanism it was modelled
+  on. `derive` prints `! refused by <id> — the phrase "..." matches` *instead of* the readiness
+  line, because promising an offer that will never come is how an author learns the rule from an
+  unexplained silence days later.
+
+  Built as a status rather than a fifth note **kind**: the kind cost 130 constant-reference sites
+  across 12 files and two partition decisions, and `ready_candidates` already filtered on status,
+  so the real gap was one clause wide.
+
+### Removed
+
+- **`config::DECLINED`, which had exactly one reference in the whole crate — its own definition.**
+  Never set, never read, never compared. It was written expecting a decline to change a note's
+  status, and D49 then implemented decline correctly as non-terminal (the candidate stays `active`
+  and frontmatter holds it back). Left beside the new `REJECTED` it would have implied the two are
+  siblings when they are opposites. `find_unread_fields.py` cannot see this class — it checks
+  struct fields, not constants.
+
 ### Fixed
 
 - **The vault's directories were world-traversable while the notes inside them were `0600`**

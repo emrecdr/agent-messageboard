@@ -432,6 +432,7 @@ pub fn promote_direct(conn: &Connection, me: &Identity, id: &NoteId, at: f64) ->
         agent: Some(me.name.clone()),
         files: source.files.clone(),
         cites: Vec::new(),
+        rejects: Vec::new(),
         supersedes: None,
         superseded_by: None,
         promoted_from: Some(source.id.display()),

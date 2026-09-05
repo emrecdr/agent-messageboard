@@ -110,6 +110,7 @@ pub fn observe(
         agent: Some(me.name.clone()),
         files: obs.files.to_vec(),
         cites: cited.iter().map(NoteId::display).collect(),
+        rejects: Vec::new(),
         supersedes: superseded.as_ref().map(NoteId::display),
         superseded_by: None,
         promoted_from: None,
@@ -504,6 +505,7 @@ mod tests {
     #[test]
     fn observe_states_the_counting_rule_the_same_way_derive_does() {
         let d = Derived {
+            refused: None,
             id: NoteId::candidate("lock-order"),
             created: false,
             independent: false,

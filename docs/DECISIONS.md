@@ -6566,3 +6566,71 @@ fire does to the next reader — it makes them assume something is watching.
 Each one computes a number over a narrower population than the sentence printed beside it describes,
 which is U11's defect (a session concluded twice that nobody uses claims, from a project-scoped
 default) and D74's. The whole board is the one population every count here can honestly share.
+
+---
+
+## D124 · A rejection is a status with phrases, and it is dearer than a decline on purpose
+
+**Decided.** `amb memory promote <id> --reject --phrases a,b` sets the candidate's status to
+`rejected` and records the phrases in its frontmatter. `ready_candidates` suppresses any candidate
+whose title or derivation notes match a phrase, and `derive` says so out loud when it does.
+
+### The gap, stated precisely
+
+`--decline` silences **one slug**. Its own docstring gives the rule: *"the candidate stays alive —
+it simply is not offered again until something new derives it."* So the same idea, written under a
+new slug, comes straight back and nothing connects the two. `amb` could say *not yet* and could not
+say *never*.
+
+### Rejected: a `rejected` note **kind**, which is what this set out to be
+
+devt's REJ tombstones are documents. Copying that here meant a fifth entry in `KINDS`, two
+partition decisions (`INJECTABLE`/`NON_INJECTABLE` and `SEARCHABLE`), a vault directory, an index
+walk arm and a migration entry — **130 kind-constant references across 12 files**, counted before
+writing any of it.
+
+It was not worth it, because **the suppression machinery already existed**: `ready_candidates`
+filters `status = 'active'`, so a candidate whose status is anything else is already never offered.
+The real gap was one clause wide — a *different* slug for an already-refused idea — and a status
+plus a phrase list closes it. A rejection also keeps its own derivations, which a fresh tombstone
+document would have thrown away: *"this was noticed five times and refused anyway"* is worth more
+than the refusal alone.
+
+### The asymmetry is deliberate, and it inverts D49 rather than contradicting it
+
+D49 requires declining to be **cheaper** than assenting, or approval becomes the path of least
+resistance and the human gate stops being a gate. Rejecting is the stronger claim — it suppresses
+candidates nobody has written yet — so it is deliberately **dearer than declining**: you must name
+what you are refusing. `--phrases` is required by clap and an all-whitespace list is refused by a
+typed `EmptyRejection`, both exiting 64.
+
+**Rejected: deriving the phrases from the title.** That would make the strong statement as cheap as
+the weak one, and would over-suppress on a guess.
+
+### And it is not silent, which is where this parts company with devt
+
+devt calls its keyword suppression *"the no nag mechanism"* and suppresses silently. Here a
+suppressed offer that nobody is told about is this project's worst shape: the count would rise, the
+offer would never come, and nothing anywhere would say why. So `Derived::refused` carries the
+rejection and the phrase that fired, and `render_derived` prints it **instead of** the readiness
+line — printing *"ready to offer"* above an offer that will never come is how an author learns the
+rule from an unexplained silence three days later. Same argument as `redacted` beside it, and as
+`Written::inert_paths` (D119): the write path is the last moment the person who can act is present.
+
+`refused_by` is **one function with two callers** — the suppressor and the reporter — because if
+the author is told one thing and the offer decides another, the message is worse than no message.
+
+### `DECLINED` is deleted, and its deadness was the evidence for this shape
+
+`config.rs` held `pub const DECLINED: &str = "declined"` with a docstring and, across the whole
+crate, **exactly one reference: its own definition.** Never set, never read, never compared. It was
+written expecting decline to change a status, and D49 then implemented decline correctly as
+*non*-terminal. Leaving it beside a live `REJECTED` would imply the two are siblings when they are
+opposites, so the vocabulary now splits on terminality:
+
+| status | terminal | how it is recorded |
+|---|---|---|
+| `promoted`, `expired`, `rejected` | yes | the status changes |
+| declined | no | frontmatter, status stays `active` |
+
+`find_unread_fields.py` could not have caught this — it checks struct fields, not constants.

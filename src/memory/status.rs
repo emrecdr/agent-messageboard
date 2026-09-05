@@ -469,6 +469,7 @@ pub(crate) const KNOWN_KEYS: &[&str] = &[
     "kind",
     "promoted_from",
     "promoted_to",
+    "rejects",
     "scope",
     "session",
     "status",
@@ -1107,6 +1108,11 @@ mod tests {
             agent: Some("a".to_string()),
             files: vec!["src/x.rs".to_string()],
             cites: vec!["nest/other".to_string()],
+            // Non-empty for the same reason `force` below is `RULE`: `push_list` omits an empty
+            // list, so `Vec::new()` here would leave this note one key short of fully populated
+            // and the equality below would compare less than it claims to. The guard caught this
+            // on the first run after `rejects` existed, which is what it is for.
+            rejects: vec!["redis caching".to_string()],
             supersedes: Some("nest/old".to_string()),
             superseded_by: Some("nest/new".to_string()),
             derivations: vec![Derivation {

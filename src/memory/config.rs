@@ -124,10 +124,26 @@ pub const ACTIVE: &str = "active";
 pub const SUPERSEDED: &str = "superseded";
 /// A candidate that was promoted. Archived, never deleted — the evidence outlives the offer.
 pub const PROMOTED: &str = "promoted";
-/// A candidate the user declined. Not re-offered until it derives again.
-pub const DECLINED: &str = "declined";
 /// A candidate that went 30 days without re-derivation. Unpromoted is not permanent.
 pub const EXPIRED: &str = "expired";
+/// A candidate the user refused **permanently**, naming the phrases that refuse it again.
+///
+/// **A status because rejection is terminal, where a decline is not — and that distinction is
+/// the whole reason there is no `DECLINED` beside this one.** There was: a `pub const DECLINED`
+/// sat here with a docstring and, across the entire crate, exactly one reference — its own
+/// definition. Never set, never read, never compared. It was written expecting decline to change
+/// a note's status, and D49 then implemented decline correctly as *non*-terminal: the candidate
+/// stays `active` and `declined_after` in the frontmatter holds it back until something derives
+/// it again. The constant was the fossil of the design that was not chosen, and leaving it beside
+/// a live `REJECTED` would have implied the two are siblings when they are opposites.
+///
+/// So the vocabulary splits on terminality rather than on severity:
+///
+/// | status | terminal | how it is recorded |
+/// |---|---|---|
+/// | [`PROMOTED`], [`EXPIRED`], `REJECTED` | yes | the status changes |
+/// | declined | no | frontmatter, status stays [`ACTIVE`] |
+pub const REJECTED: &str = "rejected";
 
 /// Independent derivations before a candidate is *offered*. Never before it is promoted — the
 /// threshold produces an offer, and only a person produces a promotion (D49).

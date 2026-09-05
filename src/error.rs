@@ -168,6 +168,17 @@ pub enum Error {
     #[error("a message needs a body: pass --body, or --body-file (use - for stdin)")]
     MissingBody,
 
+    /// **A usage error rather than a silent no-op, because the alternative is a status nobody
+    /// can act on.** Rejecting is deliberately dearer than declining (D49 requires the reverse
+    /// asymmetry for assent), and naming the phrases is the whole of that cost. A rejection with
+    /// none suppresses nothing, so accepting it would leave a candidate marked refused-forever
+    /// while every re-spelling of the same idea still comes back.
+    #[error(
+        "a rejection has to name at least one phrase \u{2014} that is what makes it stronger than \
+         `--decline`, which refuses this one candidate. Pass --phrases \"...\",\"...\""
+    )]
+    EmptyRejection,
+
     #[error("{context}")]
     Io {
         context: String,
@@ -263,6 +274,7 @@ impl Error {
             Error::BadKind { .. } => "bad_kind",
             Error::CorruptBoard { .. } => "corrupt_board",
             Error::MissingBody => "missing_body",
+            Error::EmptyRejection => "empty_rejection",
             Error::Io { .. } => "io",
             Error::Sqlite { .. } => "database",
             Error::Json { .. } => "json",
@@ -294,7 +306,8 @@ impl Error {
             | Error::BodyTooLarge { .. }
             | Error::FieldTooLarge { .. }
             | Error::BadKind { .. }
-            | Error::MissingBody => exit::USAGE,
+            | Error::MissingBody
+            | Error::EmptyRejection => exit::USAGE,
             Error::NoSuchMessage(_)
             | Error::NoSuchClaim(_)
             | Error::NoSuchAgent { .. }
