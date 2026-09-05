@@ -303,6 +303,11 @@ pub fn render_status(
     // readable: reaching for a note and not finding one is not the same finding as never
     // reaching (D89).
     let _ = writeln!(out, "{}", st.searches.note(r.unprompted));
+    // Printed between the count and the cross-repo verdict, because it qualifies the count the
+    // line above just gave and the one below reads from the same denominator.
+    if let Some(l) = st.searches.origin_note() {
+        let _ = writeln!(out, "{l}");
+    }
     // The differentiator's own line, counted where it fires rather than on the flag (D91).
     let _ = writeln!(out, "{}", st.searches.crossed_note());
     // The plan's own stopping rule, stated where the number is read rather than only in a

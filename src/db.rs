@@ -419,7 +419,7 @@ pub const PRUNE_AT_BYTES: u64 = 50 * 1024 * 1024;
 ///
 /// Equal to `MIGRATIONS.len()`, asserted by a test rather than computed, so that bumping one
 /// without the other is caught rather than silently accepted.
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 
 /// Migrations, applied in order from whatever version the board is already at.
 ///
@@ -794,6 +794,29 @@ const MIGRATIONS: &[&str] = &[
     // claim about identity here would give conflicts two arbiters (D51's shape — a rule enforced
     // in two places is enforced by whichever one fires first).
     "CREATE INDEX ix_notes_vault ON notes(kind, vault_path);",
+    // 13 -> 14 · a search records who asked, because a machine sweep and a person's question were
+    // the same row.
+    //
+    // **Measured, not anticipated.** The devt integration (`bin/modules/amb.cjs`) issues one
+    // `recall` per task token, capped at six per lane call, because keyword fan-out is the right
+    // retrieval shape — the 2026 literature is blunt that exact keyword matching is the channel
+    // whose removal costs the most accuracy. Within hours of it shipping, this board's ledger read
+    // **138 searches from one session against 1 each from two others**, 77 of them returning
+    // nothing, clustered in same-second bursts. None of that traffic can ever cite anything.
+    //
+    // That is not a bug in the fan-out. It is the ledger having no way to say which caller asked,
+    // and it matters because `query.rs` names this ledger as the condition for adopting FTS5:
+    // *"when the citation ledger says lexical recall is what is missing"*. Left alone, every devt
+    // workflow inflates that denominator forever with traffic that is machine-issued by design —
+    // D74's incomparable-denominator rule arriving through a shipped integration rather than a
+    // hand-run probe, so it recurs instead of happening once.
+    //
+    // The column default is `session`, which is the *conservative* direction: an integration that
+    // forgets to label itself is counted as a person, so the miss inflates rather than hides. And
+    // the split is rendered on the receipt rather than merely stored — a source label nobody can
+    // see is the shape D91 records, where a counter measured one thing and the page claimed
+    // another.
+    "ALTER TABLE searches ADD COLUMN origin TEXT NOT NULL DEFAULT 'session';",
 ];
 
 /// Bring the board up to [`SCHEMA_VERSION`], or explain why it cannot be.

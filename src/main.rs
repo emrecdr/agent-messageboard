@@ -297,6 +297,19 @@ enum MemoryCommand {
         /// that missed — the distinction D89 exists to make.
         #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..))]
         limit: u64,
+        /// Who is asking: `session` (default) or `integration`.
+        ///
+        /// **A tool that fans a task out into one search per keyword should say so.** The devt
+        /// bridge issues up to six searches per lane call, and that traffic can never cite a
+        /// note — so counted as a person's question it makes recall look like it is missing when
+        /// it is only being swept. `query.rs` names this ledger as the condition for adopting
+        /// FTS5, which is why the distinction is data rather than inference.
+        ///
+        /// The default is `session` because that is the conservative miss: an integration that
+        /// forgets to label itself inflates the human count rather than hiding behind a machine
+        /// one, and `amb memory status` prints the split so the mistake is visible.
+        #[arg(long, default_value = "session")]
+        origin: String,
     },
     /// Record that something was noticed again — the three-strikes ledger (Phase 2, D49).
     Derive {
@@ -1529,6 +1542,7 @@ fn run_memory(
             query,
             file,
             across_repos,
+            origin,
             project,
             all_projects,
             limit,
@@ -1558,7 +1572,7 @@ fn run_memory(
             // Recorded whatever the answer was, and *before* it is rendered: a search that
             // found nothing is the reading D89 exists to make possible, so it is the one that
             // must not be skipped.
-            memory::record_search(conn, &me.id, lane, &notes, &me.project, at)?;
+            memory::record_search(conn, &me.id, lane, origin, &notes, &me.project, at)?;
             if cli.json {
                 let items: Vec<_> = notes.iter().map(|n| n.to_json(at)).collect();
                 print_json(&serde_json::json!({ "count": items.len(), "notes": items }));

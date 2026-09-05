@@ -103,7 +103,7 @@ SQLite is compiled in — there is no system dependency.
 ```bash
 git clone https://github.com/emrecdr/agent-messageboard.git && cd agent-messageboard
 cargo install --path . --locked      # builds release, installs `amb` onto your PATH
-amb --version                        # amb 0.2.0 (16d672b 2026-09-01, schema 13, sqlite 3.53.2)
+amb --version                        # amb 0.2.0 (16d672b 2026-09-01, schema 14, sqlite 3.53.2)
 ```
 
 Then wire up delivery, **once per machine**:
@@ -807,7 +807,7 @@ thing that checks the one failure this project has hit most often.
 $ amb doctor
 BAD   binary          the PostToolUse hook runs /Users/you/.local/bin/amb
          which reports  0.1.0 (f9f79f9 2026-08-31, schema 12, sqlite 3.53.2)
-         but this build is  0.2.0 (16d672b 2026-09-01, schema 13, sqlite 3.53.2)
+         but this build is  0.2.0 (16d672b 2026-09-01, schema 14, sqlite 3.53.2)
          Manual commands work and every hook is stale. Run tools/install.sh
          from the amb checkout — or by hand: rm /Users/you/.local/bin/amb && cp "$(command -v amb)" /Users/you/.local/bin/amb
          (rm first: an in-place cp onto a cached signature leaves macOS killing the copy)
@@ -960,7 +960,7 @@ stays in `main.rs` is sequencing and printing, which is what the shell is for.
 
 ```
 $ amb --version
-amb 0.2.0 (16d672b 2026-09-01, schema 13, sqlite 3.53.2)
+amb 0.2.0 (16d672b 2026-09-01, schema 14, sqlite 3.53.2)
 ```
 
 The release, the commit it was built from, and the schema it expects — so a binary can be

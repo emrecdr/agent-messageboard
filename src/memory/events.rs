@@ -258,6 +258,7 @@ pub fn record_search(
     conn: &Connection,
     session: &str,
     lane: &str,
+    origin: &str,
     found: &[IndexedNote],
     home: &str,
     at: f64,
@@ -266,9 +267,16 @@ pub fn record_search(
     // the same way and none can forget to.
     let foreign = found.iter().filter(|n| n.id.scope != home).count();
     conn.execute(
-        "INSERT INTO searches (session, ts, lane, hits, foreign_hits)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![session, at, lane, found.len() as i64, foreign as i64],
+        "INSERT INTO searches (session, ts, lane, origin, hits, foreign_hits)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            session,
+            at,
+            lane,
+            origin,
+            found.len() as i64,
+            foreign as i64
+        ],
     )
     .map_err(sql("recording a search"))?;
     Ok(())
@@ -289,6 +297,19 @@ pub struct Searches {
     /// undocumented flag while `concerning` — the documented `--file` path — returns foreign
     /// notes without touching it.
     pub crossed: usize,
+    /// `(origin, ran, answered)`, one row per origin that actually searched.
+    ///
+    /// **Stored *and rendered*, because a source label nobody can see is the shape D91 records.**
+    /// `query.rs` names this ledger as the condition for adopting FTS5 — *"when the citation
+    /// ledger says lexical recall is what is missing"* — and an integration issuing keyword
+    /// fan-out is machine traffic that can never cite. Measured within hours of the devt bridge
+    /// shipping: 138 searches from one session against 1 each from two others. Without the split,
+    /// `ran` answers "how much did the machine sweep" while the page claims "how often did anyone
+    /// reach for a note".
+    ///
+    /// Origins that never searched are dropped rather than padded with a `0/0` row, which is the
+    /// same omission `by_force` makes and the same one M23 required an *absence* assertion for.
+    pub by_origin: Vec<(String, usize, usize)>,
 }
 
 impl Searches {
@@ -316,6 +337,33 @@ impl Searches {
                 self.sessions
             ),
         }
+    }
+
+    /// The split by who asked, printed only when more than one kind of caller searched.
+    ///
+    /// **A machine sweep and a person's question are the same row without this, and `query.rs`
+    /// names this ledger as the condition for adopting FTS5.** So the line exists to stop `ran`
+    /// being read as demand when it is mostly fan-out: the devt bridge issues one search per task
+    /// token, and none of that traffic can cite anything.
+    ///
+    /// **Silent on a single-origin board, deliberately.** A constant `session 140/62 · 100%` row
+    /// on every board that has no integration is noise that trains a reader to skip the paragraph
+    /// the real split appears in — the same argument `write.rs` makes for not printing
+    /// `0 value(s) redacted`. The empty case is asserted, because a filter whose job is an
+    /// omission needs an absence test (M23).
+    pub fn origin_note(&self) -> Option<String> {
+        if self.by_origin.len() < 2 {
+            return None;
+        }
+        let parts: Vec<String> = self
+            .by_origin
+            .iter()
+            .map(|(o, ran, ans)| format!("{o} {ans}/{ran}"))
+            .collect();
+        Some(format!(
+            "  by origin: {} — machine fan-out cannot cite, so it raises `ran` and never `answered`'s meaning",
+            parts.join(" · ")
+        ))
     }
 }
 
@@ -355,6 +403,24 @@ pub fn searches(conn: &Connection, since: Option<f64>) -> Result<Searches> {
         answered: one("SELECT count(*) FROM searches WHERE hits > 0 AND ts >= ?1")?,
         sessions: one("SELECT count(DISTINCT session) FROM searches WHERE ts >= ?1")?,
         crossed: one("SELECT count(*) FROM searches WHERE foreign_hits > 0 AND ts >= ?1")?,
+        by_origin: {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT origin, count(*), sum(hits > 0) FROM searches
+                      WHERE ts >= ?1 GROUP BY origin ORDER BY count(*) DESC",
+                )
+                .map_err(sql("counting searches by origin"))?;
+            let rows = stmt
+                .query_map(params![floor], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)? as usize,
+                        r.get::<_, i64>(2)? as usize,
+                    ))
+                })
+                .map_err(sql("counting searches by origin"))?;
+            rows.flatten().collect()
+        },
     })
 }
 
@@ -898,7 +964,7 @@ mod tests {
         let mixed = [note("nest"), note("elsewhere")];
 
         let rec = |sess, lane, found: &[IndexedNote], at| {
-            super::record_search(&conn, sess, lane, found, "nest", at).expect("recorded")
+            super::record_search(&conn, sess, lane, "session", found, "nest", at).expect("recorded")
         };
         rec("sess-a", LANE_TEXT, none, 100.0);
         rec("sess-a", LANE_TEXT, none, 101.0); // the same query again
@@ -932,12 +998,14 @@ mod tests {
             answered: 0,
             sessions: 2,
             crossed: 0,
+            by_origin: Vec::new(),
         };
         let found = Searches {
             ran: 6,
             answered: 5,
             sessions: 2,
             crossed: 0,
+            by_origin: Vec::new(),
         };
         let (a, b, c) = (never.note(0), missed.note(0), found.note(0));
         assert_ne!(a, b, "never run must not read like run-and-missed");
@@ -1320,18 +1388,21 @@ mod tests {
             answered: 0,
             sessions: 0,
             crossed: 0,
+            by_origin: Vec::new(),
         };
         let missed = Searches {
             ran: 5,
             answered: 3,
             sessions: 2,
             crossed: 0,
+            by_origin: Vec::new(),
         };
         let hit = Searches {
             ran: 5,
             answered: 3,
             sessions: 2,
             crossed: 2,
+            by_origin: Vec::new(),
         };
 
         assert!(none.crossed_note().contains("no search to observe yet"));
