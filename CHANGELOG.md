@@ -9,6 +9,22 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The over-cap count could have double-reported withheld mail, and a clean `--diff` mutation run
+  could not see it.** D130 made `ordered` a filtered subset of `msgs`, so `hidden =
+  ordered.len() - shown` is now the only correct spelling — but mutating it to `msgs.len() - shown`
+  survived the entire suite. With three messages for you and four globals from elsewhere it renders
+  `…and 4 more` beside `4 broadcast(s) to every project`: the same four counted twice, on a page
+  whose whole job is saying how much you are not being shown. The defect `CLAUDE.md` already
+  records twice for this file.
+
+  **Why the mutation round missed it.** `tools/mutants.sh --diff` came back 10 mutants, 9 caught,
+  1 unviable, 0 missed — and never generated a mutant here, because `--diff` mutates changed
+  *lines* and this line did not change. Only the value flowing into it did. **A behaviour change
+  can come entirely from a changed input to untouched arithmetic**, which a diff-scoped run cannot
+  reach by construction. Found by hand-mutating the two call sites the round was run to probe.
+
 ### Changed
 
 - **A session is no longer shown mail nobody sent to it** (D130). `@@` from another repository is

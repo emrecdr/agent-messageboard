@@ -921,6 +921,51 @@ mod tests {
         }
     }
 
+    /// **The over-cap count is computed over what can be shown, not over everything selected.**
+    ///
+    /// `hidden` is `ordered.len() - shown`, and `ordered` is now the *filtered* set. Mutating it to
+    /// `msgs.len() - shown` survived the whole suite: with three messages for me and four globals
+    /// from elsewhere, `hidden` becomes 4 and the render says `…and 4 more` **beside** `4
+    /// broadcast(s) to every project` — the same four counted twice, in two different sentences,
+    /// on a page whose entire job is telling a reader how much they are not being shown.
+    ///
+    /// `CLAUDE.md` records this defect twice for this file already ("a count that feeds a cap must
+    /// be computed over exactly what can be shown", "a caller that selects with LIMIT breaks any
+    /// renderer that counts what it hid"). D130 reintroduced the conditions for it by making
+    /// `ordered` a subset of `msgs`, and no existing test could tell the two counts apart, because
+    /// every fixture had either foreign globals or over-cap mail and never both.
+    ///
+    /// Found by hand after a `--diff` mutation round came back 0 missed. Diff mode mutates changed
+    /// *lines*, and this line did not change — only the value flowing into it did. **A behaviour
+    /// change can come entirely from a changed input to untouched arithmetic**, and that is
+    /// invisible to a diff-scoped run by construction.
+    #[test]
+    fn the_over_cap_count_excludes_mail_that_was_withheld_rather_than_capped() {
+        let mut msgs: Vec<Message> = (1..=3).map(|i| msg(i, Some("uuid-bob"), None)).collect();
+        for i in 4..=7 {
+            let mut g = msg(i, None, None);
+            g.from_proj = "codelore".into();
+            msgs.push(g);
+        }
+        let out = render_all(&msgs, &[], 0.0, false, "nest")
+            .expect("renders")
+            .text;
+
+        // Three direct messages, well under MAX_RENDERED, so nothing was capped.
+        assert!(
+            !out.contains("more \u{2014} run `amb inbox`"),
+            "nothing was over the cap, so the cap line must not appear: {out}"
+        );
+        // The presence row that proves the absence above is not vacuous (M27): the four withheld
+        // globals *are* reported, once, by the line that exists for them.
+        assert!(
+            out.contains("4 broadcast(s) to every project"),
+            "the withheld mail must still be counted exactly once: {out}"
+        );
+        // And the header still tells the truth about the total.
+        assert!(out.contains("[amb] 7 unread"), "{out}");
+    }
+
     /// The withheld mail is counted and its projects named — never silently dropped (D130, D24).
     ///
     /// **Silence here would be the worse defect.** Half the globals measured on the real board were
