@@ -43,7 +43,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 694 tests (688 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 695 tests (688 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -373,7 +373,9 @@ matcher is broken picks queries it *expects* to fail, so its searches are system
 unrepresentative. The field is free text and any label is recorded; `amb memory status` prints the
 split, so a caller that forgets to label itself is visible rather than silent.
 
-`amb memory status` also splits searches by how many terms they carried. `search` builds one
+`amb memory status` also splits **a person's** searches by how many terms they carried — machine
+origins are excluded, because a caller that issues one search per task token is single-term by
+construction and would fill one side of the comparison with traffic of its own shape. `search` builds one
 needle from the whole query and asks whether a body contains it contiguously, so `recall "glob"`
 and `recall "glob anchors"` are not the same kind of question — only the second can miss on words
 the vault actually has. A one-term query fails only when the corpus lacks the word; comparing the
@@ -905,7 +907,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 694 tests (688 on Linux)
+cargo test                       # all 695 tests (688 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change

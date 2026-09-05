@@ -349,21 +349,22 @@ pub struct Searches {
     /// Origins that never searched are dropped rather than padded with a `0/0` row, which is the
     /// same omission `by_force` makes and the same one M23 required an *absence* assertion for.
     pub by_origin: Vec<(String, usize, usize)>,
-    /// Text searches carrying exactly one term: `(ran, answered)`.
+    /// **Human** text searches carrying exactly one term: `(ran, answered)`.
     ///
     /// **The baseline.** A single-term query is the only kind the contiguous-needle matcher
     /// cannot fail on for structural reasons, so its miss rate is what "the vault genuinely does
     /// not have it" looks like. Browses (0 terms) are excluded — they always answer, and folding
     /// them in would flatter exactly this number.
     pub one_term: (usize, usize),
-    /// Text searches carrying two or more terms: `(ran, answered)`.
+    /// **Human** text searches carrying two or more terms: `(ran, answered)`.
     ///
     /// **The population under test.** Every one of these is exposed to `search`'s single-needle
     /// match; none of the `one_term` ones are. If this ratio sits well below that one, the miss
     /// is the matcher rather than the corpus — which is the reading `query.rs` says must come
     /// from the ledger before FTS5 is adopted.
     pub multi_term: (usize, usize),
-    /// Text searches from before the column existed, which cannot be placed in either bucket.
+    /// Human text searches from before the column existed, which cannot be placed in either
+    /// bucket.
     ///
     /// **Reported rather than folded in.** A row predating the migration has an unknown term
     /// count, and the conservative-default trick that `origin` could use does not work here:
@@ -455,9 +456,9 @@ impl Searches {
                     n => format!(" · {n} predate(s) the column and are not counted"),
                 };
                 Some(format!(
-                    "  by terms: one {one_ans}/{one_ran} · several {many_ans}/{many_ran} — \
-                     a several-term query is matched as one contiguous string, so only it can \
-                     miss on words the vault has{unseen}"
+                    "  by terms (asked by a person): one {one_ans}/{one_ran} · several \
+                     {many_ans}/{many_ran} — a several-term query is matched as one contiguous \
+                     string, so only it can miss on words the vault has{unseen}"
                 ))
             }
         }
@@ -525,21 +526,36 @@ pub fn searches(conn: &Connection, since: Option<f64>) -> Result<Searches> {
         multi_term: bucket(conn, floor, "terms >= 2")?,
         terms_unrecorded: one(&format!(
             "SELECT count(*) FROM searches
-              WHERE ts >= ?1 AND terms IS NULL AND lane = '{LANE_TEXT}'"
+              WHERE ts >= ?1 AND terms IS NULL AND lane = '{LANE_TEXT}'
+                AND origin = 'session'"
         ))?,
     })
 }
 
-/// `(ran, answered)` for the text searches matching one term-count predicate.
+/// `(ran, answered)` for the **human** text searches matching one term-count predicate.
 ///
 /// **Restricted to [`LANE_TEXT`] at the source.** A `path` or `across` search has no query, so it
 /// is not a smaller number in these buckets — it is outside the question entirely, and letting it
 /// through would make the denominator "searches" while the claim beside it is about "queries".
+///
+/// **And restricted to `session`, which is the harder half.** The two buckets are only comparable
+/// if they draw from the same population, and machine callers do not choose query shapes the way
+/// a person does: devt's bridge tokenises a task and issues *one search per token*, so every row
+/// it writes is single-term by construction. Left in, it would pack the one-term bucket with
+/// traffic of its own shape while the several-term bucket stayed purely human — two ratios over
+/// different populations printed as a comparison, which is question 1 of the ratio rule arriving
+/// inside the instrument built to answer it. `probe` is excluded by the same clause and for a
+/// sharper reason: a session testing whether the matcher is broken picks queries it *expects* to
+/// fail.
+///
+/// Spelled as `= 'session'` rather than as a NOT-IN list of machine labels, because `origin` is
+/// free text and cannot be enumerated. That also keeps the conservative direction the column was
+/// designed with: an integration that forgets to label itself is counted as a person.
 fn bucket(conn: &Connection, floor: f64, pred: &str) -> Result<(usize, usize)> {
     conn.query_row(
         &format!(
             "SELECT count(*), coalesce(sum(hits > 0), 0) FROM searches
-              WHERE ts >= ?1 AND lane = '{LANE_TEXT}' AND {pred}"
+              WHERE ts >= ?1 AND lane = '{LANE_TEXT}' AND origin = 'session' AND {pred}"
         ),
         params![floor],
         |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize)),
@@ -1244,6 +1260,69 @@ mod tests {
         assert_eq!(s.one_term, (0, 0));
     }
 
+    /// **A machine caller does not vote in a comparison about how people ask.**
+    ///
+    /// The two buckets are only comparable if they draw from the same population. devt's bridge
+    /// tokenises a task and issues one search per token, so every row it writes is single-term by
+    /// construction — left in, it would pack the one-term bucket with traffic of its own shape
+    /// while the several-term bucket stayed purely human. Two ratios over different populations,
+    /// printed as a comparison: question 1 of the ratio rule, inside the instrument built to
+    /// answer it.
+    ///
+    /// A truth-table shape rather than an absence list: the `session` rows prove the buckets
+    /// rendered at all, so the zeroes for the machine rows mean something (M27).
+    #[test]
+    fn only_a_person_s_query_shape_counts_toward_the_term_split() {
+        let (_d, conn) = board();
+        let found = [hit()];
+        let mut at = 100.0;
+        let mut rec = |origin: &str, query: &str, found: &[IndexedNote]| {
+            super::record_search(
+                &conn,
+                &Search {
+                    session: "s",
+                    lane: LANE_TEXT,
+                    origin,
+                    query: Some(query),
+                },
+                found,
+                "nest",
+                at,
+            )
+            .expect("recorded");
+            at += 1.0;
+        };
+        // The human population: one of each shape, the several-term one missing.
+        rec("session", "solo", &found);
+        rec("session", "two words", &[]);
+        // Machine traffic of both shapes, all answering — the flattering direction.
+        rec("integration", "solo", &found);
+        rec("integration", "also solo", &found);
+        rec("probe", "deliberately obscure phrase", &found);
+
+        let s = super::searches(&conn, None).expect("counted");
+        assert_eq!(s.ran, 5, "every search is still a cost that was paid");
+        assert_eq!(
+            s.one_term,
+            (1, 1),
+            "two integration one-term rows must not join the human baseline"
+        );
+        assert_eq!(
+            s.multi_term,
+            (1, 0),
+            "and the probe's several-term row must not join the population under test"
+        );
+        let line = s.terms_note().expect("both human buckets present");
+        assert!(
+            line.contains("one 1/1") && line.contains("several 0/1"),
+            "{line}"
+        );
+        assert!(
+            line.contains("asked by a person"),
+            "the line names the population it counted, or a reader assumes all searches: {line}"
+        );
+    }
+
     /// **A row from before the column is excluded and counted, never coalesced to a browse.**
     ///
     /// This is why the migration is nullable. `sum(terms >= 2)` over NULL is NULL rather than 0,
@@ -1260,6 +1339,15 @@ mod tests {
             [],
         )
         .expect("legacy row");
+        // M9's survivor: an *integration* row that also predates the column. This board had 17
+        // of them, and counting them as unclassified HUMAN exposure overstates the very number
+        // published to qualify the human ratio. No fixture reached the branch until this one.
+        conn.execute(
+            "INSERT INTO searches (session, ts, lane, origin, hits, foreign_hits, terms)
+             VALUES ('old', 51.0, 'text', 'integration', 1, 0, NULL)",
+            [],
+        )
+        .expect("legacy machine row");
         super::record_search(
             &conn,
             &Search {
@@ -1288,10 +1376,13 @@ mod tests {
         .expect("recorded");
 
         let s = super::searches(&conn, None).expect("counted");
-        assert_eq!(s.ran, 3, "the legacy row is still a search that ran");
+        assert_eq!(s.ran, 4, "both legacy rows are still searches that ran");
         assert_eq!(s.one_term, (1, 1), "and it is in neither bucket");
         assert_eq!(s.multi_term, (1, 0));
-        assert_eq!(s.terms_unrecorded, 1, "it is reported instead");
+        assert_eq!(
+            s.terms_unrecorded, 1,
+            "only the HUMAN unclassified row is reported: the machine one qualifies no ratio here"
+        );
 
         let line = s.terms_note().expect("both buckets present");
         assert!(

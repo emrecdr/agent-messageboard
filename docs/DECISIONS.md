@@ -7147,6 +7147,18 @@ tuned threshold.** Contiguous matching breaks precisely when a space appears; a 
 query fail for the identical reason. Splitting them further would invent a distinction the matcher
 does not have.
 
+**The buckets count only `session` rows, and missing that was the same error one layer down.**
+The first cut of this bucketed *every* text search. devt's bridge tokenises a task and issues one
+search per token, so every row it writes is single-term **by construction** — the one-term bucket
+would have filled with machine traffic of its own shape while the several-term bucket stayed purely
+human, and the two ratios printed side by side would have been over different populations. That is
+question 1 of the ratio rule occurring inside the instrument built to satisfy it, caught by running
+the instrument against the real board rather than by any test. `probe` is excluded by the same
+clause and for a sharper reason: those queries are picked *because* they are expected to fail. The
+clause is `= 'session'` rather than a NOT-IN list, because `origin` is free text and cannot be
+enumerated — which also keeps the column's conservative direction, where an unlabelled machine
+caller is counted as a person.
+
 **Rejected: storing the query text.** It is what the 2026 search-analytics literature recommends —
 capture real queries and what was clicked as a small evaluation set — and it is the right answer
 for *tuning relevance*. amb is not tuning relevance; it is deciding one binary architectural
