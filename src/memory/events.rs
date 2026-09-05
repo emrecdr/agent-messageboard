@@ -254,28 +254,67 @@ pub fn search_lane(has_file: bool, across_repos: bool) -> &'static str {
 /// and that is the reason this is not an `event` in `note_events`: that table's primary key
 /// deduplicates per `(session, note, event)`, so a session searching five times would record
 /// once. The cost is paid per search, so the denominator rises per search.
+/// One reach for the vault: who asked, through which lane, labelled how, for what.
+///
+/// **A struct because these four are one fact, not because clippy counted to eight.** Each field
+/// was added by a separate finding — `lane` by D91, `origin` when a devt fan-out and a person's
+/// question turned out to be the same row, `query` when a 55% miss rate could not be attributed —
+/// and every one of them answers *what kind of asking was this*. Passing them positionally next to
+/// `found`/`home`/`at`, which describe the answer rather than the question, is what let them drift
+/// apart in the first place.
+pub struct Search<'a> {
+    /// The session that reached, and the exposure behind `ran`.
+    pub session: &'a str,
+    /// [`LANE_TEXT`], [`LANE_PATH`] or [`LANE_ACROSS`] — and the only thing that says whether a
+    /// term count means anything.
+    pub lane: &'a str,
+    /// `session`, `integration` or `probe`. Free text; the receipt prints whatever arrives.
+    pub origin: &'a str,
+    /// The text needle, when there was one. `None` on a path lane, `Some("")` for a browse.
+    pub query: Option<&'a str>,
+}
+
+/// Record that recall ran, and whether it answered.
+///
+/// **One row per search, never per note.** A search that matched nothing has no note to key on,
+/// and that is the reason this is not an `event` in `note_events`: that table's primary key
+/// deduplicates per `(session, note, event)`, so a session searching five times would record
+/// once. The cost is paid per search, so the denominator rises per search.
 pub fn record_search(
     conn: &Connection,
-    session: &str,
-    lane: &str,
-    origin: &str,
+    s: &Search<'_>,
     found: &[IndexedNote],
     home: &str,
     at: f64,
 ) -> Result<()> {
+    let Search {
+        session,
+        lane,
+        origin,
+        query,
+    } = *s;
     // Counted here rather than at the call site, so every lane answers the cross-repo question
     // the same way and none can forget to.
     let foreign = found.iter().filter(|n| n.id.scope != home).count();
+    // **Derived from `lane`, not from whether a query happened to be passed.** `--file` and
+    // `--query` are not mutually exclusive on the CLI, and when both are given the path lane wins
+    // and the text is never matched against anything. Recording that ignored string's term count
+    // would describe a search that did not run — M17's shape, where the fixture reaches a branch
+    // the rule was never about. Only `LANE_TEXT` compares a needle, so only `LANE_TEXT` has a
+    // term count; the other lanes store NULL because they have no query, not because it is
+    // unknown.
+    let terms = (lane == LANE_TEXT).then(|| crate::memory::text::term_count(query.unwrap_or("")));
     conn.execute(
-        "INSERT INTO searches (session, ts, lane, origin, hits, foreign_hits)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO searches (session, ts, lane, origin, hits, foreign_hits, terms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             session,
             at,
             lane,
             origin,
             found.len() as i64,
-            foreign as i64
+            foreign as i64,
+            terms.map(|n| n as i64)
         ],
     )
     .map_err(sql("recording a search"))?;
@@ -310,6 +349,28 @@ pub struct Searches {
     /// Origins that never searched are dropped rather than padded with a `0/0` row, which is the
     /// same omission `by_force` makes and the same one M23 required an *absence* assertion for.
     pub by_origin: Vec<(String, usize, usize)>,
+    /// Text searches carrying exactly one term: `(ran, answered)`.
+    ///
+    /// **The baseline.** A single-term query is the only kind the contiguous-needle matcher
+    /// cannot fail on for structural reasons, so its miss rate is what "the vault genuinely does
+    /// not have it" looks like. Browses (0 terms) are excluded — they always answer, and folding
+    /// them in would flatter exactly this number.
+    pub one_term: (usize, usize),
+    /// Text searches carrying two or more terms: `(ran, answered)`.
+    ///
+    /// **The population under test.** Every one of these is exposed to `search`'s single-needle
+    /// match; none of the `one_term` ones are. If this ratio sits well below that one, the miss
+    /// is the matcher rather than the corpus — which is the reading `query.rs` says must come
+    /// from the ledger before FTS5 is adopted.
+    pub multi_term: (usize, usize),
+    /// Text searches from before the column existed, which cannot be placed in either bucket.
+    ///
+    /// **Reported rather than folded in.** A row predating the migration has an unknown term
+    /// count, and the conservative-default trick that `origin` could use does not work here:
+    /// `0` is a browse, which is a real and always-answered event, so backfilling it would
+    /// invent evidence (D95). Printing the exposure beside the ratio is question 1 of the ratio
+    /// rule — the reader is told how much of the window the comparison could not see.
+    pub terms_unrecorded: usize,
 }
 
 impl Searches {
@@ -364,6 +425,42 @@ impl Searches {
             "  by origin: {} — machine fan-out cannot cite, so it raises `ran` and never `answered`'s meaning",
             parts.join(" · ")
         ))
+    }
+
+    /// Whether a multi-term query misses more often than a single-term one, or nothing.
+    ///
+    /// **This is the line the FTS5 decision is supposed to be read off, so it refuses to print a
+    /// comparison it cannot make.** `search` lowercases the whole query into ONE needle: a
+    /// one-term query fails only when the corpus lacks the word, a multi-term query fails
+    /// *additionally* whenever the words are present but not adjacent. Two ratios, one
+    /// difference, and the difference is the matcher.
+    ///
+    /// **Silent unless both buckets have a row**, and spelled as a pattern rather than
+    /// `ran > 0` on purpose. `status.rs` scored 52/92 under mutation and thirty-seven of its
+    /// forty survivors sat on exactly this kind of render guard, ten of them the literal
+    /// `x > 0` -> `x >= 0`. A `0` in a pattern has no such relaxation — every edit to it changes
+    /// what renders, so any presence test kills the mutant.
+    ///
+    /// One bucket alone is not a weak comparison, it is no comparison: a window in which nobody
+    /// typed a multi-word query says nothing about multi-word queries. `terms_unrecorded` rides
+    /// along because a ratio published without its exposure is question 1 of the ratio rule, and
+    /// rows from before the column exist in numbers that dwarf it for the first window.
+    pub fn terms_note(&self) -> Option<String> {
+        let ((one_ran, one_ans), (many_ran, many_ans)) = (self.one_term, self.multi_term);
+        match (one_ran, many_ran) {
+            (0, _) | (_, 0) => None,
+            _ => {
+                let unseen = match self.terms_unrecorded {
+                    0 => String::new(),
+                    n => format!(" · {n} predate(s) the column and are not counted"),
+                };
+                Some(format!(
+                    "  by terms: one {one_ans}/{one_ran} · several {many_ans}/{many_ran} — \
+                     a several-term query is matched as one contiguous string, so only it can \
+                     miss on words the vault has{unseen}"
+                ))
+            }
+        }
     }
 }
 
@@ -421,7 +518,33 @@ pub fn searches(conn: &Connection, since: Option<f64>) -> Result<Searches> {
                 .map_err(sql("counting searches by origin"))?;
             rows.flatten().collect()
         },
+        // Bucketed in SQL rather than in Rust because the NULL rows must be *excluded* rather
+        // than swept into a default — `sum(terms >= 2)` over a NULL returns NULL, not 0, and a
+        // silent coalesce is how the fabricated-evidence failure gets back in.
+        one_term: bucket(conn, floor, "terms = 1")?,
+        multi_term: bucket(conn, floor, "terms >= 2")?,
+        terms_unrecorded: one(&format!(
+            "SELECT count(*) FROM searches
+              WHERE ts >= ?1 AND terms IS NULL AND lane = '{LANE_TEXT}'"
+        ))?,
     })
+}
+
+/// `(ran, answered)` for the text searches matching one term-count predicate.
+///
+/// **Restricted to [`LANE_TEXT`] at the source.** A `path` or `across` search has no query, so it
+/// is not a smaller number in these buckets — it is outside the question entirely, and letting it
+/// through would make the denominator "searches" while the claim beside it is about "queries".
+fn bucket(conn: &Connection, floor: f64, pred: &str) -> Result<(usize, usize)> {
+    conn.query_row(
+        &format!(
+            "SELECT count(*), coalesce(sum(hits > 0), 0) FROM searches
+              WHERE ts >= ?1 AND lane = '{LANE_TEXT}' AND {pred}"
+        ),
+        params![floor],
+        |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize)),
+    )
+    .map_err(sql("counting searches by term count"))
 }
 
 /// Below this cited ratio, with nothing ever reached for unprompted, the layer is withdrawn (D59).
@@ -936,6 +1059,251 @@ mod tests {
         (dir, conn)
     }
 
+    /// A note the search can be said to have "found", for term-count fixtures.
+    fn hit() -> IndexedNote {
+        IndexedNote {
+            id: NoteId::observation("nest", "a-slug"),
+            title: "t".into(),
+            status: ACTIVE.into(),
+            created: 0.0,
+            vault_path: "p.md".into(),
+            excerpt: None,
+            paths: Vec::new(),
+            force: ADVICE.into(),
+        }
+    }
+
+    /// **The comparison renders only when both sides exist — as a truth table, not a needle list.**
+    ///
+    /// M27: an assertion that a line is *absent* proves nothing unless the block containing it
+    /// rendered, and five of six tests written against that finding were safe precisely because
+    /// they were truth tables. The `expected == true` row here fails if `terms_note` stops
+    /// rendering at all, which is what makes the three `false` rows mean something.
+    #[test]
+    fn a_term_split_needs_both_buckets_or_it_is_not_a_comparison() {
+        let found = [hit()];
+        // (one-term searches, multi-term searches, should a comparison render)
+        let cases = [
+            (0usize, 0usize, false),
+            (2, 0, false),
+            (0, 2, false),
+            (1, 1, true),
+        ];
+        for (ones, manys, expected) in cases {
+            let (_d, conn) = board();
+            let mut at = 100.0;
+            for _ in 0..ones {
+                super::record_search(
+                    &conn,
+                    &Search {
+                        session: "s",
+                        lane: LANE_TEXT,
+                        origin: "session",
+                        query: Some("solo"),
+                    },
+                    &found,
+                    "nest",
+                    at,
+                )
+                .expect("recorded");
+                at += 1.0;
+            }
+            for _ in 0..manys {
+                super::record_search(
+                    &conn,
+                    &Search {
+                        session: "s",
+                        lane: LANE_TEXT,
+                        origin: "session",
+                        query: Some("two words"),
+                    },
+                    &found,
+                    "nest",
+                    at,
+                )
+                .expect("recorded");
+                at += 1.0;
+            }
+            let got = super::searches(&conn, None).expect("counted").terms_note();
+            assert_eq!(
+                got.is_some(),
+                expected,
+                "one={ones} several={manys} rendered {got:?}"
+            );
+        }
+    }
+
+    /// **A browse is not a one-term search, and this is the fixture that can tell.**
+    ///
+    /// `amb memory recall` with no query lists recent notes and always answers, so counting it as
+    /// one term would inflate the baseline the several-term bucket is judged against — the
+    /// denominator failure D74 records, arriving through a default rather than a decision.
+    #[test]
+    fn a_browse_lands_in_neither_bucket() {
+        let (_d, conn) = board();
+        let found = [hit()];
+        super::record_search(
+            &conn,
+            &Search {
+                session: "s",
+                lane: LANE_TEXT,
+                origin: "session",
+                query: None,
+            },
+            &found,
+            "nest",
+            100.0,
+        )
+        .expect("recorded");
+        let s = super::searches(&conn, None).expect("counted");
+        assert_eq!(s.ran, 1, "the browse is still a search that was run");
+        assert_eq!(s.one_term, (0, 0), "and it is not a one-term query");
+        assert_eq!(s.multi_term, (0, 0));
+        assert_eq!(
+            s.terms_unrecorded, 0,
+            "0 terms is recorded, so it is not 'unrecorded' either"
+        );
+    }
+
+    /// **A lane with no query stores NULL, not zero.**
+    ///
+    /// `--file` and a query are not mutually exclusive on the CLI and the path lane wins, so the
+    /// text is never matched. Recording its term count would describe a comparison that did not
+    /// happen — M17's shape, a fixture reaching a branch the rule is not about.
+    #[test]
+    fn a_path_search_has_no_term_count_even_when_a_query_was_typed() {
+        let (_d, conn) = board();
+        let found = [hit()];
+        super::record_search(
+            &conn,
+            &Search {
+                session: "s",
+                lane: LANE_PATH,
+                origin: "session",
+                query: Some("ignored words"),
+            },
+            &found,
+            "nest",
+            100.0,
+        )
+        .expect("recorded");
+        let stored: Option<i64> = conn
+            .query_row("SELECT terms FROM searches", [], |r| r.get(0))
+            .expect("read back");
+        assert_eq!(stored, None, "the path lane compared no needle");
+        let s = super::searches(&conn, None).expect("counted");
+        assert_eq!(s.multi_term, (0, 0), "and it is outside the question");
+        assert_eq!(
+            s.terms_unrecorded, 0,
+            "a path row is not an unclassified TEXT row: only lane=text can be that"
+        );
+    }
+
+    /// **The reader excludes a non-text lane on its own, not because the writer never writes one.**
+    ///
+    /// M6's survivor. Dropping `lane = 'text'` from the bucket query reddened nothing, because
+    /// `record_search` stores NULL for those lanes and `terms >= 2` over NULL is already falsy —
+    /// so the filter is defence behind an invariant that another function keeps. Two layers carry
+    /// the rule "a path search is outside the term question" and only the writer asserted it,
+    /// which is the layer-counting arithmetic CLAUDE.md prescribes, arriving in a suite written
+    /// against that very rule.
+    ///
+    /// A raw INSERT is the only fixture that can separate them: it is what a future writer change
+    /// (or a hand-edited board) looks like from the reader's side. Without this, relaxing the
+    /// writer AND the reader together would leave the suite green.
+    #[test]
+    fn a_path_row_carrying_a_term_count_is_still_excluded_by_the_reader() {
+        let (_d, conn) = board();
+        conn.execute(
+            "INSERT INTO searches (session, ts, lane, origin, hits, foreign_hits, terms)
+             VALUES ('s', 100.0, 'path', 'session', 1, 0, 2)",
+            [],
+        )
+        .expect("a path row with a term count, which only a writer bug produces");
+        let found = [hit()];
+        super::record_search(
+            &conn,
+            &Search {
+                session: "s",
+                lane: LANE_TEXT,
+                origin: "session",
+                query: Some("two words"),
+            },
+            &found,
+            "nest",
+            101.0,
+        )
+        .expect("recorded");
+
+        let s = super::searches(&conn, None).expect("counted");
+        assert_eq!(
+            s.multi_term,
+            (1, 1),
+            "only the text search counts; the path row is not a several-term query"
+        );
+        assert_eq!(s.one_term, (0, 0));
+    }
+
+    /// **A row from before the column is excluded and counted, never coalesced to a browse.**
+    ///
+    /// This is why the migration is nullable. `sum(terms >= 2)` over NULL is NULL rather than 0,
+    /// and a silent `coalesce` there would place every historical row in the browse bucket —
+    /// D95's shape, evidence authored by a migration rather than measured.
+    #[test]
+    fn a_row_predating_the_column_is_reported_rather_than_bucketed() {
+        let (_d, conn) = board();
+        let found = [hit()];
+        // Exactly what the migration leaves behind: a text search with no term count.
+        conn.execute(
+            "INSERT INTO searches (session, ts, lane, origin, hits, foreign_hits, terms)
+             VALUES ('old', 50.0, 'text', 'session', 1, 0, NULL)",
+            [],
+        )
+        .expect("legacy row");
+        super::record_search(
+            &conn,
+            &Search {
+                session: "s",
+                lane: LANE_TEXT,
+                origin: "session",
+                query: Some("solo"),
+            },
+            &found,
+            "nest",
+            100.0,
+        )
+        .expect("recorded");
+        super::record_search(
+            &conn,
+            &Search {
+                session: "s",
+                lane: LANE_TEXT,
+                origin: "session",
+                query: Some("two words"),
+            },
+            &[],
+            "nest",
+            101.0,
+        )
+        .expect("recorded");
+
+        let s = super::searches(&conn, None).expect("counted");
+        assert_eq!(s.ran, 3, "the legacy row is still a search that ran");
+        assert_eq!(s.one_term, (1, 1), "and it is in neither bucket");
+        assert_eq!(s.multi_term, (1, 0));
+        assert_eq!(s.terms_unrecorded, 1, "it is reported instead");
+
+        let line = s.terms_note().expect("both buckets present");
+        assert!(
+            line.contains("predate(s) the column"),
+            "the exposure is published beside the ratio: {line}"
+        );
+        assert!(
+            line.contains("one 1/1") && line.contains("several 0/1"),
+            "{line}"
+        );
+    }
+
     /// Every search is a row, because every search is a cost that was paid.
     ///
     /// **This is CLAUDE.md's second question, asserted rather than assumed.** The cheap
@@ -964,7 +1332,19 @@ mod tests {
         let mixed = [note("nest"), note("elsewhere")];
 
         let rec = |sess, lane, found: &[IndexedNote], at| {
-            super::record_search(&conn, sess, lane, "session", found, "nest", at).expect("recorded")
+            super::record_search(
+                &conn,
+                &Search {
+                    session: sess,
+                    lane,
+                    origin: "session",
+                    query: None,
+                },
+                found,
+                "nest",
+                at,
+            )
+            .expect("recorded")
         };
         rec("sess-a", LANE_TEXT, none, 100.0);
         rec("sess-a", LANE_TEXT, none, 101.0); // the same query again
@@ -999,6 +1379,7 @@ mod tests {
             sessions: 2,
             crossed: 0,
             by_origin: Vec::new(),
+            ..Default::default()
         };
         let found = Searches {
             ran: 6,
@@ -1006,6 +1387,7 @@ mod tests {
             sessions: 2,
             crossed: 0,
             by_origin: Vec::new(),
+            ..Default::default()
         };
         let (a, b, c) = (never.note(0), missed.note(0), found.note(0));
         assert_ne!(a, b, "never run must not read like run-and-missed");
@@ -1389,6 +1771,7 @@ mod tests {
             sessions: 0,
             crossed: 0,
             by_origin: Vec::new(),
+            ..Default::default()
         };
         let missed = Searches {
             ran: 5,
@@ -1396,6 +1779,7 @@ mod tests {
             sessions: 2,
             crossed: 0,
             by_origin: Vec::new(),
+            ..Default::default()
         };
         let hit = Searches {
             ran: 5,
@@ -1403,6 +1787,7 @@ mod tests {
             sessions: 2,
             crossed: 2,
             by_origin: Vec::new(),
+            ..Default::default()
         };
 
         assert!(none.crossed_note().contains("no search to observe yet"));

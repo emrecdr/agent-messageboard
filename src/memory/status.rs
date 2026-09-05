@@ -308,6 +308,11 @@ pub fn render_status(
     if let Some(l) = st.searches.origin_note() {
         let _ = writeln!(out, "{l}");
     }
+    // Directly under the origin split, because both qualify the same `ran`: that line says who
+    // asked, this one says what shape the asking took. Neither is readable without `note()` above.
+    if let Some(l) = st.searches.terms_note() {
+        let _ = writeln!(out, "{l}");
+    }
     // The differentiator's own line, counted where it fires rather than on the flag (D91).
     let _ = writeln!(out, "{}", st.searches.crossed_note());
     // The plan's own stopping rule, stated where the number is read rather than only in a

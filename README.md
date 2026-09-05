@@ -43,7 +43,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 686 tests (688 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 694 tests (688 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -103,7 +103,7 @@ SQLite is compiled in — there is no system dependency.
 ```bash
 git clone https://github.com/emrecdr/agent-messageboard.git && cd agent-messageboard
 cargo install --path . --locked      # builds release, installs `amb` onto your PATH
-amb --version                        # amb 0.2.0 (16d672b 2026-09-01, schema 14, sqlite 3.53.2)
+amb --version                        # amb 0.2.0 (16d672b 2026-09-01, schema 15, sqlite 3.53.2)
 ```
 
 Then wire up delivery, **once per machine**:
@@ -363,6 +363,22 @@ unfindable; the index now narrows and the file itself decides (D88). Frontmatter
 otherwise `recall nest` would return every note in the project.
 
 ### From observation to decision
+
+`--origin` says **who is asking**, and it exists because the ledger behind it decides whether
+`amb` ever adopts FTS5. `session` is the default and means a person. `integration` is for a tool
+that fans one task out into many searches — devt's bridge issues up to six per lane call, and that
+traffic can never cite a note, so counted as human demand it makes recall look like it is missing
+when it is only being swept. `probe` is for testing recall itself: a session checking whether the
+matcher is broken picks queries it *expects* to fail, so its searches are systematically
+unrepresentative. The field is free text and any label is recorded; `amb memory status` prints the
+split, so a caller that forgets to label itself is visible rather than silent.
+
+`amb memory status` also splits searches by how many terms they carried. `search` builds one
+needle from the whole query and asks whether a body contains it contiguously, so `recall "glob"`
+and `recall "glob anchors"` are not the same kind of question — only the second can miss on words
+the vault actually has. A one-term query fails only when the corpus lacks the word; comparing the
+two ratios is what separates "the vault does not have it" from "the matcher could not reach it",
+and the second is the only one FTS5 would fix.
 
 A note earns its place rather than being declared important. Something noticed once is an
 observation; the same thing arrived at again by a session that had not been shown the first one is
@@ -647,7 +663,7 @@ between commits, and scripts that scrape it get what they asked for.
 | `amb install [--vendor V] [--mode M] [--memory] [--dry-run]` | Wire delivery into the host CLI's settings file. `--vendor claude-code` (default) or `gemini-cli` (D111) |
 | `amb uninstall [--dry-run]` | Remove them, leaving other tools' hooks intact |
 | `amb memory observe --title T --files F --learned L` | Record what this session learned (needs `AMB_VAULT`). `--cites`, `--supersedes`, `--force`, `--same-as`, `--project` optional |
-| `amb memory recall [query] [--file P] [--across-repos] [--project P] [--all-projects] [--limit N]` | Search **titles and note bodies** (D88), or ask what is known about one path. Every kind but `candidate`, which reaches you through `promote` instead |
+| `amb memory recall [query] [--file P] [--across-repos] [--project P] [--all-projects] [--limit N] [--origin O]` | Search **titles and note bodies** (D88), or ask what is known about one path. Every kind but `candidate`, which reaches you through `promote` instead |
 | `amb memory derive <slug> --title T --note N` | Record that something was noticed again — the three-strikes ledger (D49) |
 | `amb memory candidates` | Candidates, and how close each is to being offered |
 | `amb memory promote <id> [--direct]` | Promote one candidate. One at a time, derivations shown, never writes without `--yes` (D49). `--direct` promotes on first sight, skipping the three-derivation ledger — still gated on `--yes` |
@@ -808,7 +824,7 @@ thing that checks the one failure this project has hit most often.
 $ amb doctor
 BAD   binary          the PostToolUse hook runs /Users/you/.local/bin/amb
          which reports  0.1.0 (f9f79f9 2026-08-31, schema 12, sqlite 3.53.2)
-         but this build is  0.2.0 (16d672b 2026-09-01, schema 14, sqlite 3.53.2)
+         but this build is  0.2.0 (16d672b 2026-09-01, schema 15, sqlite 3.53.2)
          Manual commands work and every hook is stale. Run tools/install.sh
          from the amb checkout — or by hand: rm /Users/you/.local/bin/amb && cp "$(command -v amb)" /Users/you/.local/bin/amb
          (rm first: an in-place cp onto a cached signature leaves macOS killing the copy)
@@ -889,7 +905,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 686 tests (688 on Linux)
+cargo test                       # all 694 tests (688 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -961,7 +977,7 @@ stays in `main.rs` is sequencing and printing, which is what the shell is for.
 
 ```
 $ amb --version
-amb 0.2.0 (16d672b 2026-09-01, schema 14, sqlite 3.53.2)
+amb 0.2.0 (16d672b 2026-09-01, schema 15, sqlite 3.53.2)
 ```
 
 The release, the commit it was built from, and the schema it expects — so a binary can be
@@ -1036,7 +1052,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D130, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D131, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

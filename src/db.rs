@@ -419,7 +419,7 @@ pub const PRUNE_AT_BYTES: u64 = 50 * 1024 * 1024;
 ///
 /// Equal to `MIGRATIONS.len()`, asserted by a test rather than computed, so that bumping one
 /// without the other is caught rather than silently accepted.
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 /// Migrations, applied in order from whatever version the board is already at.
 ///
@@ -817,6 +817,30 @@ const MIGRATIONS: &[&str] = &[
     // see is the shape D91 records, where a counter measured one thing and the page claimed
     // another.
     "ALTER TABLE searches ADD COLUMN origin TEXT NOT NULL DEFAULT 'session';",
+    // **Nullable, and that is the whole design of this migration.**
+    //
+    // `recall` answered 65 of 146 human searches on this board. The matcher builds ONE needle
+    // from the whole query and asks whether a body contains it contiguously, so `recall "glob"`
+    // returns 7 notes and `recall "glob anchors"` returns 0 with both words in the vault. But
+    // `searches` recorded `hits` and not what was asked, so "the vault genuinely lacks it" and
+    // "the query had a space in it" wrote the identical row — and only the second is a defect.
+    // `query.rs` names this ledger as the condition for adopting FTS5 and says the sequence out
+    // loud: fix the defect (D88), fix the instrument (D89), then let the instrument choose. This
+    // is the instrument still being unable to answer the question it is now being asked.
+    //
+    // The `origin` migration above took a DEFAULT because `'session'` is the conservative reading
+    // of a historical row: an unlabelled caller counted as a person inflates the human number
+    // rather than hiding behind a machine one. **There is no conservative default here.** 0 does
+    // not mean "unknown", it means *browse-all* — a real event, always answered, and the healthy
+    // baseline the multi-term bucket is measured against. Backfilling it onto the 163 existing
+    // rows would invent 163 browse-alls and drown the ratio in fabricated evidence, which is
+    // D95's shape: a number that reads as measurement and was authored by a migration.
+    //
+    // So old rows are NULL and the receipt reports how many it could not classify, rather than
+    // folding them into a bucket. NULL is also what a `path`/`across` lane stores, because those
+    // searches have no text query at all — the two are separable by `lane` without a second
+    // column, and neither is invented.
+    "ALTER TABLE searches ADD COLUMN terms INTEGER;",
 ];
 
 /// Bring the board up to [`SCHEMA_VERSION`], or explain why it cannot be.

@@ -7118,3 +7118,67 @@ blunt and the fix is a severity the sender can set — not a return to spelling 
 knowing that the disk thread this decision was written during was carried on `@@` and would now be
 one line in every foreign project; the senders in it were coordinating with each other and with
 `studygo` by name, and both are reachable directly.
+
+## D131 · A search records how many terms it carried, and the column is nullable because 0 means something
+
+**Decided.** Schema 15. `searches` gains `terms INTEGER`, written only on `LANE_TEXT`.
+
+**The ledger could say a search missed and not why.** `recall` answered 65 of 146 human searches
+in the open window. `search` lowercases the whole query into **one needle** and asks whether a body
+contains it contiguously, so on this board `recall "glob"` returns 7 notes and `recall "glob
+anchors"` returns 0 with both words in the vault. Against a ledger holding only `hits`, "the vault
+genuinely lacks this" and "the words are there but not adjacent" wrote the identical row — and only
+the second is a defect. `query.rs` names this ledger as the condition for adopting FTS5 and states
+the sequence: *fix the defect (D88), fix the instrument (D89), then let the instrument choose.*
+This is the instrument still unable to answer the question now being asked of it.
+
+**Nullable, and no default — this is the whole design.** D-schema-14 gave `origin` a
+`DEFAULT 'session'` because that is the *conservative* reading of a historical row: an unlabelled
+caller counted as a person inflates the human number rather than hiding behind a machine one.
+**There is no conservative default here.** `0` is not "unknown", it is *browse-all* — a real event,
+always answered, and the healthy baseline the multi-term bucket is measured against. Backfilling it
+onto the 163 existing rows would have invented 163 browse-alls and drowned the ratio in evidence
+authored by a migration, which is D95's shape exactly. Old rows are NULL, the receipt reports how
+many it could not classify, and question 1 of the ratio rule is satisfied by publishing that
+exposure beside the ratio.
+
+**The bucket boundary is one-versus-several, and that is the mechanism's own boundary rather than a
+tuned threshold.** Contiguous matching breaks precisely when a space appears; a 2-term and a 5-term
+query fail for the identical reason. Splitting them further would invent a distinction the matcher
+does not have.
+
+**Rejected: storing the query text.** It is what the 2026 search-analytics literature recommends —
+capture real queries and what was clicked as a small evaluation set — and it is the right answer
+for *tuning relevance*. amb is not tuning relevance; it is deciding one binary architectural
+question, which the count answers completely. Storing user-typed strings would also put a new class
+of content in a database D15 calls disposable, on a path `redact.rs` does not currently cover. If
+the split comes back saying the matcher *is* the problem, an eval set becomes the next instrument
+and the redaction question has to be settled first.
+
+**Rejected: reading the industry zero-result benchmark as a verdict.** Standard practice targets a
+zero-result rate below 5% and this board sits at 55%, which reads as catastrophic and is not
+comparable. One unit of the e-commerce denominator is *a shopper searching a catalogue that
+contains the product*; one unit of amb's is *someone asking whether anyone ever noted X*, where
+most X's genuinely were never noted. A high miss rate is the expected state. That is question 1 of
+the ratio rule applied to a borrowed number, and it is the reason the term split — not the flat
+rate — is the thing worth measuring.
+
+**`probe` is named as an origin, and it was already possible.** `--origin` is free text, so any
+label always worked; `probe` was a mechanism nobody could reach, which is D91's shape. It earns a
+name because the traffic is *systematically unrepresentative*: a session checking whether the
+matcher is broken picks queries it expects to fail. Four such probes entered this board as
+`session` while this very finding was being written up, three of them chosen to miss, moving the
+human ratio from 64/142 to 65/146 in the direction that flattered the investigation. **The rows
+were not deleted.** A ledger edited until it reads well is what D87 refuses; labelling is the fix.
+
+**And `--origin` was absent from the README entirely** — the flag whose split the receipt prints,
+undocumented, which is the same D91 defect one layer out from the one being fixed. Documented now,
+because fixing one instance trains attention on the thing fixed rather than on its siblings.
+
+**A schema bump is machine-wide the moment any build of it is executed, including an uncommitted
+one.** The migration ladder runs on `open`, so the first run of a schema-15 binary migrated the
+shared board and every installed schema-14 copy then refused it — mail broken for every session on
+the machine, from a change still in the working tree. There is no safe local rehearsal of a schema
+change while the default board is shared. `./tools/install.sh` is the recovery and D94 already says
+so; what is new is that the window opens at *first execution*, not at commit.
+

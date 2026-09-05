@@ -308,7 +308,7 @@ enum MemoryCommand {
         /// that missed — the distinction D89 exists to make.
         #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..))]
         limit: u64,
-        /// Who is asking: `session` (default) or `integration`.
+        /// Who is asking: `session` (default), `integration`, or `probe`.
         ///
         /// **A tool that fans a task out into one search per keyword should say so.** The devt
         /// bridge issues up to six searches per lane call, and that traffic can never cite a
@@ -319,6 +319,16 @@ enum MemoryCommand {
         /// The default is `session` because that is the conservative miss: an integration that
         /// forgets to label itself inflates the human count rather than hiding behind a machine
         /// one, and `amb memory status` prints the split so the mistake is visible.
+        ///
+        /// **`probe` is for testing recall itself, and it is named here because it was already
+        /// possible and undocumented.** This is a free-text field, so any label works and always
+        /// has — which made `probe` a mechanism nobody could reach, the shape D91 records. It
+        /// earns a name because the traffic is *systematically unrepresentative*: a session
+        /// checking whether the matcher is broken picks queries it expects to FAIL. Four such
+        /// probes went into this board as `session` while their own finding was being written
+        /// up, three of them chosen to miss, moving the human ratio from 64/142 to 65/146 in the
+        /// direction that flattered the investigation. Labelling is the fix; deleting the rows is
+        /// not, because a ledger edited until it reads well is what D87 refuses.
         #[arg(long, default_value = "session")]
         origin: String,
     },
@@ -1604,7 +1614,18 @@ fn run_memory(
             // Recorded whatever the answer was, and *before* it is rendered: a search that
             // found nothing is the reading D89 exists to make possible, so it is the one that
             // must not be skipped.
-            memory::record_search(conn, &me.id, lane, origin, &notes, &me.project, at)?;
+            memory::record_search(
+                conn,
+                &memory::Search {
+                    session: &me.id,
+                    lane,
+                    origin,
+                    query: query.as_deref(),
+                },
+                &notes,
+                &me.project,
+                at,
+            )?;
             if cli.json {
                 let items: Vec<_> = notes.iter().map(|n| n.to_json(at)).collect();
                 print_json(&serde_json::json!({ "count": items.len(), "notes": items }));

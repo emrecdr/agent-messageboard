@@ -274,10 +274,76 @@ pub fn unsupported_glob(declared: &str) -> Option<char> {
         .find(|c| matches!(c, '?' | '[' | ']' | '{' | '}'))
 }
 
+/// How many whitespace-separated terms a recall query carries.
+///
+/// **The one thing that separates "the vault does not have it" from "the matcher could not reach
+/// it".** [`super::search`] lowercases and trims the query into a *single* needle and asks whether
+/// the body contains it contiguously, so `glob` returns 7 notes on this board and `glob anchors`
+/// returns 0 with both words present. Every multi-term query is exposed to that failure and no
+/// single-term query is — which is why the count is recorded rather than the query text, and why
+/// the bucket boundary is 1-versus-more rather than a tuned threshold. A 2-term and a 5-term
+/// query fail for the identical reason, so splitting them further would invent a distinction the
+/// mechanism does not have.
+///
+/// **Zero is a real answer, not a missing one.** `amb memory recall` with no query lists the most
+/// recent notes; that is a browse, it always "answers", and folding it in with genuine one-term
+/// queries would inflate exactly the bucket used as the healthy baseline. The ledger stores 0 for
+/// it and the reader excludes it by name.
+///
+/// Whitespace is the only separator, deliberately. Punctuation is left inside the term because
+/// the needle it is compared against is not tokenised either — counting `foo-bar` as two terms
+/// would describe a query the matcher never sees.
+pub fn term_count(query: &str) -> usize {
+    query.split_whitespace().count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// **The count exists to predict one failure, so it is tested against that failure.**
+    ///
+    /// `search` builds ONE needle from the whole query. Anything above 1 term is exposed to the
+    /// contiguous-match miss and 1 term never is — that is the entire contract, and a test of the
+    /// arithmetic alone would not say so.
+    #[test]
+    fn a_multi_term_query_is_the_one_exposed_to_a_contiguous_match() {
+        assert_eq!(term_count("glob"), 1, "single term: never exposed");
+        assert_eq!(term_count("glob anchors"), 2, "two terms: exposed");
+        assert_eq!(term_count("how do claims lapse"), 4);
+
+        // The needle `search` actually builds, spelled out so the link is not left to prose.
+        let q = "glob anchors";
+        assert!(
+            q.trim().to_lowercase().contains(' '),
+            "a >1-term query contains a separator the body must reproduce contiguously"
+        );
+    }
+
+    /// **A browse is not a failed query, and 0 must not land in the 1-term bucket.**
+    ///
+    /// `amb memory recall` with no argument lists recent notes and always answers. Counting it as
+    /// a one-term search would inflate the healthy baseline the multi-term bucket is compared
+    /// against — the denominator error D74 records, arriving through a default.
+    #[test]
+    fn a_browse_counts_zero_terms_rather_than_one() {
+        assert_eq!(term_count(""), 0);
+        assert_eq!(term_count("   "), 0, "whitespace only is still a browse");
+        assert_eq!(term_count("\t\n"), 0);
+    }
+
+    /// Runs of whitespace are one separator, because the needle collapses nothing.
+    #[test]
+    fn repeated_whitespace_does_not_invent_terms() {
+        assert_eq!(term_count("a  b"), 2);
+        assert_eq!(term_count("  a b  "), 2);
+        assert_eq!(
+            term_count("foo-bar"),
+            1,
+            "punctuation stays inside the term: the matcher does not tokenise either"
+        );
+    }
 
     /// M55's text.rs survivors, cluster by cluster: every boundary in `age`, the slug cap's
     /// own edge, the two `safe_component` flips that mangle letters and underscores, FNV-1a
