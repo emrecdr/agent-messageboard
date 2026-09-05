@@ -1260,6 +1260,88 @@ mod tests {
         assert_eq!(s.one_term, (0, 0));
     }
 
+    /// **Every prose sentence `Searches` can print, checked as a class.**
+    ///
+    /// M24's defect is a wrapped string literal whose continuation keeps its indentation, so the
+    /// rendered line carries a run of spaces mid-sentence. `contains` cannot see it: each needle
+    /// sits on one side of the damage. One renderer here already had that assertion — and the
+    /// rule has five renderers in this file and had one assertion, which is CLAUDE.md's own
+    /// "grep the literal, count the renderers, count the assertions" arithmetic coming due on the
+    /// file that records it. `terms_note` is a wrapped literal too, and guarding only the one I
+    /// had just written is how D86, D88 and D90 each became a second instance of a defect fixed
+    /// in the same file hours earlier.
+    ///
+    /// A property, not a needle list: any sentence added to `Searches` is covered the moment it
+    /// is returned here.
+    #[test]
+    fn no_sentence_searches_prints_leaks_a_wrapped_literals_indentation() {
+        let (_d, conn) = board();
+        let found = [hit()];
+        let mut at = 100.0;
+        let mut rec = |origin: &str, query: &str, found: &[IndexedNote]| {
+            super::record_search(
+                &conn,
+                &Search {
+                    session: "s",
+                    lane: LANE_TEXT,
+                    origin,
+                    query: Some(query),
+                },
+                found,
+                "nest",
+                at,
+            )
+            .expect("recorded");
+            at += 1.0;
+        };
+        // Populated so that EVERY optional sentence has something to say: two origins, both term
+        // buckets, and a cross-repo hit. A fixture that leaves one silent proves nothing about it.
+        rec("session", "solo", &found);
+        rec("session", "two words", &[]);
+        rec("integration", "swept", &found);
+        let foreign = IndexedNote {
+            id: NoteId::observation("elsewhere", "f"),
+            ..hit()
+        };
+        super::record_search(
+            &conn,
+            &Search {
+                session: "s",
+                lane: LANE_TEXT,
+                origin: "session",
+                query: Some("x y"),
+            },
+            &[foreign],
+            "nest",
+            200.0,
+        )
+        .expect("recorded");
+
+        let s = super::searches(&conn, None).expect("counted");
+        let sentences = [
+            Some(s.note(1)),
+            s.origin_note(),
+            s.terms_note(),
+            Some(s.crossed_note()),
+        ];
+        let mut seen = 0;
+        for line in sentences.into_iter().flatten() {
+            seen += 1;
+            // The *body*, not the line: every receipt sentence opens with a deliberate two-space
+            // indent, so checking the whole string would fail on the layout it is supposed to
+            // have. The defect being guarded is a run of spaces *mid-sentence*.
+            assert!(
+                !line.trim_start().contains("  "),
+                "a wrapped literal leaked its indentation: {line:?}"
+            );
+            crate::assert_rendered_shape("Searches sentence", &line);
+        }
+        assert_eq!(
+            seen, 4,
+            "the fixture must reach every sentence, or the ones it misses are unguarded"
+        );
+    }
+
     /// **A machine caller does not vote in a comparison about how people ask.**
     ///
     /// The two buckets are only comparable if they draw from the same population. devt's bridge
