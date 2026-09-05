@@ -11,6 +11,20 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **`amb claims` reported one claim's liveness beside another claim's horizon, and the dangerous
+  direction says a held file is free** (D120). `summarise` aggregated `Group.until` with `max`
+  while taking `Group.live` from whichever claim opened the group, then rendered both from one
+  `match`. `list` orders by `taken_at DESC` and `take`'s upsert advances `expires_at` but not
+  `taken_at` — correctly, since `taken_at` means *when first claimed* — so a path held and renewed
+  for hours sorts **behind** an abandoned sibling and the least current claim speaks for the group.
+  Reproduced against the shipped binary in both orderings: `src/foo/ (2 files) · expired` with
+  three hours left on one of them, and `· in 3h` with one lapsed an hour earlier. The first is the
+  collision claims exist to prevent, produced by the tool, on the surface a session reads before
+  deciding what is safe to touch — and it had already misled two sessions on this board.
+  Liveness now joins the grouping key, so a group is homogeneous and the two fields describe the
+  same files by construction; a genuinely uniform group still aggregates unchanged. The weaker
+  `live = any` fix is rejected in D120 and a test staging it is red.
+
 - **A declared path containing a glob anchored a note to nothing, and bought less than the plainer
   spelling it looks like an improvement on** (D119). `--files 'src/memory/**'` is not a
   directory-prefix of anything, so `claims::overlaps` refused it and the note was never retrieved

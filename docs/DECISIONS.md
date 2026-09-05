@@ -6344,3 +6344,64 @@ observation. The note is worth more than the anchor. So the write proceeds and t
 which is exactly the shape `redacted` already had: **surfaced while the only person who can fix it
 is still in the session.** The read side can never report this — a pattern that matches nothing and
 a path nobody edited are the same zero (D89).
+
+---
+
+## D120 · A display group is homogeneous in liveness, so its state and its horizon describe the same claims
+
+**Decided.** `summarise` groups by `(holder, directory, liveness)`. A directory holding one live
+claim and one lapsed one renders as **two rows**, not one.
+
+### The defect: two fields, one `match`, different sets
+
+`Group.until` was aggregated (`g.until.max(c.expires_at)`); `Group.live` was taken from whichever
+claim happened to open the group and never revisited. Both are then rendered by a single `match
+(g.live, g.holder_alive)`. So the row asserted one claim's state beside another claim's horizon,
+and which claim won was decided by row order.
+
+**Row order is not neutral here, which is what makes it reachable with default TTLs.** `list`
+orders by `taken_at DESC`, and `take`'s upsert advances `expires_at` while deliberately leaving
+`taken_at` alone — `taken_at` means *when first claimed*, which is the right meaning. The
+consequence is that a path you have held and renewed for hours sorts **behind** an abandoned
+sibling, so the least current claim speaks for the group.
+
+**Reproduced against the shipped binary, in both orderings, and both are wrong in opposite
+directions:**
+
+| Query order | Rendered | Truth |
+|---|---|---|
+| lapsed first | `holder · src/foo/ (2 files) · expired` | `active.rs` had **3 hours** left |
+| held first | `holder · src/foo/ (2 files) · in 3h` | `stale.rs` had lapsed **an hour** earlier |
+
+The first is the dangerous one. A peer reads `expired`, concludes the ground is free, and edits a
+file someone is inside — **the collision claims exist to prevent, produced by the tool, on the
+surface a session consults before deciding what is safe to touch.** It cost something concrete
+before it was fixed: two sessions on this board made coordination decisions from it, one of them
+declining to touch a file that was not held and one of them told it held files it did not.
+
+### Rejected: aggregating `live` as `any`
+
+The one-line version — `g.live = g.live || c.is_live(at)` — fixes the dangerous direction and
+keeps the other. The row would then report *two files held for three hours* when one of them had
+already lapsed, which is over-claiming, and over-claiming is what D5's segment-aware rule and the
+whole store-exact-paths-aggregate-on-display design exist to avoid.
+
+**Partitioning is the stronger form: the two fields cannot disagree because the group is
+homogeneous.** That is the same move as D51's "one source, so they cannot disagree again", applied
+to a grouping key rather than to a constant. A test staging exactly that weaker fix is red.
+
+### Rejected: reordering `list` by `expires_at`
+
+It would make the symptom rarer without making the invariant true, and it changes what `--raw`
+prints for every reader to fix a defect that is not in the ordering. Once the group is
+homogeneous the ordering cannot produce a wrong state at all, so there is nothing left for it to
+fix. `taken_at DESC` stays.
+
+### Why no existing test caught it
+
+Both tests over `summarise`'s aggregation used **homogeneous** fixtures — all-live or all-expired
+— and both render correctly however the bug is spelled. This is M27's shape: a guard over a derived
+value needs the *middle* state, populated in everything except the quantity it guards. And a
+presence-only assertion cannot see it in either direction, because *"renders as live"* is true in
+one ordering and *"renders as expired"* is true in the other. **The false statement in both is that
+the two fields describe the same claims**, so the assertion has to be on the pair.

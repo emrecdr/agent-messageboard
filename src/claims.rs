@@ -496,9 +496,14 @@ pub fn summarise(claims: &[Claim], at: f64) -> Vec<String> {
         dir: String,
         paths: Vec<&'a str>,
         intent: Option<&'a str>,
+        /// Part of the grouping key, not a summary of it. Every member of a group agrees on
+        /// this, which is what lets [`Group::until`] describe the same claims it does.
         live: bool,
         holder_alive: bool,
         /// When the last claim in this group lapses — the horizon an aggregate row reports.
+        ///
+        /// Aggregated with `max`, and safe only because `live` partitions the group: a mixed
+        /// group would report one claim's liveness beside another's horizon.
         until: f64,
     }
 
@@ -510,9 +515,27 @@ pub fn summarise(claims: &[Claim], at: f64) -> Vec<String> {
             Some((d, _)) if c.source == "observed" => format!("{d}/"),
             _ => c.path.clone(),
         };
+        // **Liveness is part of the key, so `live` and `until` cannot describe different
+        // claims.** They did. `until` was aggregated with `max` while `live` was taken from
+        // whichever claim happened to open the group and never revisited — two fields rendered
+        // by one `match`, computed over different sets. `list` orders by `taken_at DESC` and
+        // renewal advances `expires_at` and not `taken_at`, so the claim you are holding *right
+        // now* sorts behind an abandoned sibling, which then speaks for the group.
+        //
+        // Reproduced against the real binary, both orderings, and both are wrong in opposite
+        // directions: `src/foo/ (2 files) · expired` while one of them had three hours left,
+        // and `src/foo/ (2 files) · in 3h` when one had lapsed an hour earlier. The first is
+        // the dangerous one — a peer reads "expired", concludes the ground is free, and edits
+        // a file someone is in. That is the collision claims exist to prevent, produced by the
+        // display a session consults *before* deciding what is safe to touch.
+        //
+        // Partitioning rather than aggregating `live` too: a group is now homogeneous, so the
+        // horizon describes exactly the files in the row. `live = any` would have fixed the
+        // dangerous direction and kept the other, reporting two files held for three hours when
+        // one was already free.
         match groups
             .iter_mut()
-            .find(|g| g.holder == c.holder() && g.dir == dir)
+            .find(|g| g.holder == c.holder() && g.dir == dir && g.live == c.is_live(at))
         {
             Some(g) => {
                 g.paths.push(&c.path);
@@ -1203,6 +1226,59 @@ mod tests {
         let dead = claim("src/b.rs", "alice", "declared", 10.0);
         let line = &summarise(&[dead], 50.0)[0];
         assert!(line.contains("expired") && !line.contains("in "), "{line}");
+    }
+
+    /// **`live` and `until` described different claims, and one `match` renders both.**
+    ///
+    /// The fixture is the middle state — one held file and one lapsed one, same holder, same
+    /// directory. It is the only shape that can show this: an all-live group and an all-expired
+    /// group both render correctly however the bug is spelled, which is why two existing tests
+    /// over homogeneous groups stayed green for as long as the defect existed.
+    ///
+    /// **Both orderings, because each proves a different half.** `live` was taken from whichever
+    /// claim opened the group; `until` was the max over all of them. So the answer depended on
+    /// row order, and `list` orders by `taken_at DESC` while renewal advances `expires_at` and
+    /// not `taken_at` — the file you are holding right now sorts *behind* an abandoned sibling.
+    /// Reproduced against the real binary: `src/foo/ (2 files) · expired` with three hours left
+    /// on one of them, and `· in 3h` with one already lapsed. The first is the dangerous one — a
+    /// peer reads "expired", concludes the ground is free, and edits a file someone is in.
+    ///
+    /// The assertion is on the PAIR. "renders as live" is true in one ordering and "renders as
+    /// expired" is true in the other; the false statement in both is that the state and the
+    /// horizon describe the same files.
+    #[test]
+    fn a_group_never_reports_one_claims_liveness_beside_anothers_horizon() {
+        let held = claim("src/foo/active.rs", "bob", "observed", 500.0);
+        let lapsed = claim("src/foo/stale.rs", "bob", "observed", 10.0);
+        let at = 50.0;
+
+        for (order, cs) in [
+            ("lapsed first", vec![lapsed.clone(), held.clone()]),
+            ("held first", vec![held.clone(), lapsed.clone()]),
+        ] {
+            let lines = summarise(&cs, at);
+            assert_eq!(
+                lines.len(),
+                2,
+                "{order}: two files in different states cannot share a row: {lines:?}"
+            );
+            let held_line = lines
+                .iter()
+                .find(|l| l.contains("active.rs"))
+                .unwrap_or_else(|| panic!("{order}: held file missing: {lines:?}"));
+            assert!(
+                held_line.contains("in ") && !held_line.contains("expired"),
+                "{order}: a file being held must not be reported free: {held_line}"
+            );
+            let lapsed_line = lines
+                .iter()
+                .find(|l| l.contains("stale.rs"))
+                .unwrap_or_else(|| panic!("{order}: lapsed file missing: {lines:?}"));
+            assert!(
+                lapsed_line.contains("expired") && !lapsed_line.contains("in "),
+                "{order}: a lapsed claim must not borrow a live sibling's horizon: {lapsed_line}"
+            );
+        }
     }
 
     #[test]
