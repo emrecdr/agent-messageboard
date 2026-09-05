@@ -101,6 +101,17 @@ enum Command {
         #[arg(long, conflicts_with = "body")]
         body_file: Option<String>,
     },
+    /// Show a whole conversation, oldest first, from any message in it.
+    ///
+    /// **Marks nothing read.** `amb read` is the only thing that does (D9), and following a thread
+    /// to decide whether it concerns you is exactly the case where acknowledging it would be
+    /// wrong. Not scoped to your own inbox either: a thread spanning three agents is not visible
+    /// in any single one, and being able to read the conversation you were replied into is the
+    /// point.
+    Thread {
+        /// Any message in the thread — the root, or a reply, or the newest.
+        id: i64,
+    },
     /// Record a display name for this session. Optional — every command registers (D12).
     Register {
         /// The name peers will use to address you, e.g. `amb send alice ...`. Omit for a
@@ -907,6 +918,24 @@ fn run(cli: Cli) -> Result<(), Error> {
         // `--project`, `--since`, `--mine` — is a way to compute a number over a narrower
         // population than the sentence beside it describes, which is U11's defect and D74's. The
         // whole board is the one population every count here can honestly share.
+        // Reuses `render_inbox` rather than growing a renderer of its own. Every field on these
+        // lines is sender-written, so a new renderer would owe `quoted()`, `UNTRUSTED` and a row
+        // in the enumeration test — three obligations M23 says a renderer added quietly will not
+        // pay. A thread *is* a list of messages; there is nothing for a second renderer to say.
+        Command::Thread { id } => {
+            let found = messages::thread(&conn, &me, id)?;
+            if cli.json {
+                let items: Vec<_> = found.iter().map(|m| m.to_json()).collect();
+                print_json(&serde_json::json!({
+                    "count": items.len(),
+                    "anchor": id,
+                    "messages": items,
+                }));
+            } else {
+                println!("{}", delivery::render_inbox(&found, &me.name, &me.project));
+            }
+        }
+
         Command::Status => {
             let b = status::gather(&conn)?;
             if cli.json {

@@ -202,6 +202,76 @@ fn a_second_offer_of_one_message_costs_twice_and_is_still_one_offer() {
     );
 }
 
+/// **`amb thread` returns the message that started the conversation, through the shipped binary.**
+///
+/// The library test asserts the same id list, and this one exists because the defect it guards is a
+/// property of how `reply` writes rather than of one function: the root carries no `thread_id`, so
+/// a `WHERE thread_id = ?` returns the conversation minus its own question. A library test proves
+/// the query; only this proves that the command a person types returns nine messages and not eight
+/// (M20 — the layer to suspect first is the outermost, because it is the one users run).
+///
+/// Also asserts what the command must NOT do: `amb read` is the only thing that marks mail read
+/// (D9), and following a thread to decide whether it concerns you is exactly the case where
+/// acknowledging it would be wrong.
+#[test]
+fn a_thread_read_from_any_message_returns_the_whole_conversation_and_marks_nothing_read() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run("uuid-bob", &["register", "--name", "bob"]);
+    b.run(
+        "uuid-alice",
+        &["send", "bob", "--subject", "the question", "--body", "why"],
+    );
+    b.run("uuid-bob", &["reply", "1", "--body", "because"]);
+    b.run("uuid-alice", &["reply", "2", "--body", "then this"]);
+    // A second conversation, so an over-selecting query fails here too.
+    b.run(
+        "uuid-alice",
+        &["send", "bob", "--subject", "unrelated", "--body", "other"],
+    );
+
+    // Sampled before, so the assertion below is that nothing MOVED rather than that it equals a
+    // number I worked out in my head. The first draft asserted `2` and the true value is 3 —
+    // `reply` does not acknowledge the message it answers — so the fixed number would have failed
+    // for a reason that has nothing to do with what this test is about.
+    let before = unread(&b, "uuid-bob");
+
+    for anchor in ["1", "3"] {
+        let v = b.json("uuid-bob", &["thread", anchor]);
+        let ids: Vec<u64> = v["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["id"].as_u64().expect("id"))
+            .collect();
+        assert_eq!(
+            ids,
+            vec![1, 2, 3],
+            "anchored at {anchor}: the root is message 1 and carries no thread_id — a query \
+             that only matched thread_id would return [2, 3] and drop the question: {v}"
+        );
+        assert_eq!(v["anchor"], anchor.parse::<u64>().expect("anchor"), "{v}");
+    }
+
+    // The rendered form carries the boundary, because every field in it is sender-written.
+    let out = b.run("uuid-bob", &["thread", "3"]);
+    assert!(
+        out.contains(amb::delivery::UNTRUSTED),
+        "a thread renders other agents' text and must say whose it is: {out}"
+    );
+
+    // And nothing was acknowledged by looking — three `thread` invocations later.
+    assert_eq!(
+        unread(&b, "uuid-bob"),
+        before,
+        "reading a thread marks nothing read — `amb read` is the only thing that does (D9)"
+    );
+    assert!(
+        before > 0,
+        "and the count was non-zero, so that proved something"
+    );
+}
+
 /// **Every `--json` object says which contract it satisfies, success or failure** (D117).
 ///
 /// D56's table names `CLI + --json shapes` a versioned surface, *bound by agents parsing output*,

@@ -846,6 +846,61 @@ pub fn get(conn: &Connection, msg_id: i64) -> Result<Message> {
     })
 }
 
+/// Every message in the conversation containing `msg_id`, oldest first.
+///
+/// **The root of a thread carries no `thread_id`, so the obvious query returns the conversation
+/// minus the thing that started it.** [`reply`] sets `thread_id` to the *root's own id* and never
+/// back-fills the root — correct, because the root predates the thread it turned out to start —
+/// but it means `WHERE thread_id = ?` is short by exactly one message, and the missing one is the
+/// question everyone else is answering.
+///
+/// Measured on the real board before this was written, which is the only reason it is not wrong:
+/// thread `195` has **8** replies carrying `thread_id = '195'` and a **ninth** message, id 195,
+/// carrying `NULL`. The naive query drops "Cleaning the shared cargo target dir (24G)" and returns
+/// eight answers to nothing. Reading `schema.sql` would not have shown this; `reply` is where the
+/// invariant lives, and the invariant is *the root is not a member of its own thread*.
+///
+/// Not scoped to what this agent may see, matching [`get`], which takes any id and checks no
+/// identity. The board is shared by design (D15) and a thread spanning three agents is not visible
+/// in any one inbox — being able to read the conversation you were replied into is the point.
+///
+/// A message with no `thread_id` and no replies is a thread of one and returns itself. That is a
+/// more useful answer than an error: "nobody replied to this" is a fact worth rendering.
+pub fn thread(conn: &Connection, me: &Identity, msg_id: i64) -> Result<Vec<Message>> {
+    let anchor = get(conn, msg_id)?;
+    let root = anchor
+        .thread_id
+        .clone()
+        .unwrap_or_else(|| anchor.id.to_string());
+    // **Parsed rather than left to SQLite's affinity comparison.** `thread_id` is TEXT and holds
+    // whatever a sender passed to `--thread`, so it need not be a message id at all. Comparing it
+    // to an INTEGER column would coerce — and a thread deliberately named `0` would then also
+    // match message id 0, which is a different conversation. `-1` matches no row, since `id` is
+    // `INTEGER PRIMARY KEY AUTOINCREMENT` and starts at 1.
+    let root_id: i64 = root.parse().unwrap_or(-1);
+    let sql_text = format!(
+        "SELECT {MESSAGE_COLUMNS},
+                EXISTS(SELECT 1 FROM reads r
+                        WHERE r.msg_id = m.id AND r.agent = ?3 AND r.read_at IS NOT NULL)
+         FROM messages m
+         LEFT JOIN agents a ON a.id = m.from_agent
+         WHERE m.id = ?1 OR m.thread_id = ?2
+         ORDER BY m.id"
+    );
+    let mut stmt = conn
+        .prepare(&sql_text)
+        .map_err(sql("preparing the thread query"))?;
+    let rows = stmt
+        .query_map(params![root_id, root, me.id], |r| {
+            let mut m = row_to_message(r)?;
+            m.read = Some(r.get(11)?);
+            Ok(m)
+        })
+        .map_err(sql("running the thread query"))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(sql("reading a thread row"))
+}
+
 /// Reply to a message, addressed back to its sender and keeping its thread.
 ///
 /// A reply to a *broadcast* goes to the sender, not back to the whole project. Broadcasting a
@@ -1073,6 +1128,163 @@ mod tests {
             crate::identity::touch(&conn, me, Some(&me.name)).expect("register");
         }
         (dir, conn, alice, bob, carol)
+    }
+
+    /// **The root of a thread is not a member of its own thread, and the count is the assertion.**
+    ///
+    /// This is the whole reason [`thread`] is a union rather than a `WHERE thread_id = ?`. `reply`
+    /// stamps the root's *id* onto every reply and never back-fills the root, so the naive query
+    /// returns the conversation minus the message that started it — and the missing one is the
+    /// question the rest are answering.
+    ///
+    /// Asserted as the exact id list rather than a length, because a length is satisfied by any
+    /// four messages: a query that dropped the root and picked up an unrelated message would pass
+    /// a count and fail this. That distinction cost a real finding on this board eight hours ago —
+    /// asserting a count is not asserting the list.
+    #[test]
+    fn a_thread_includes_the_message_that_started_it() {
+        let (_d, mut conn, alice, bob, _c) = board();
+        let to_bob = Recipient {
+            agent_id: Some(bob.id.clone()),
+            project: Some("nest".into()),
+        };
+        let root = send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &to_bob,
+                subject: "the question",
+                body: "why is the target dir 24G",
+                kind: "question",
+                thread: None,
+                ext_id: None,
+            },
+        )
+        .expect("root");
+        let r1 = reply(&mut conn, &bob, root, "because mutants").expect("first reply");
+        let r2 = reply(&mut conn, &alice, r1, "then clean it").expect("second reply");
+
+        // An unrelated message, so a query that over-selects is caught too.
+        send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &to_bob,
+                subject: "unrelated",
+                body: "different conversation",
+                kind: "note",
+                thread: None,
+                ext_id: None,
+            },
+        )
+        .expect("noise");
+
+        // The root itself carries no thread_id — the invariant this function exists for.
+        assert_eq!(
+            get(&conn, root).expect("root row").thread_id,
+            None,
+            "the root predates the thread, so it is not stamped with one"
+        );
+
+        let ids = |anchor| {
+            thread(&conn, &bob, anchor)
+                .expect("thread")
+                .iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(root),
+            vec![root, r1, r2],
+            "asking from the root returns the root and both replies, oldest first"
+        );
+        assert_eq!(
+            ids(r2),
+            vec![root, r1, r2],
+            "and asking from the newest reply returns the same conversation, not a suffix"
+        );
+    }
+
+    /// A message nobody answered is a thread of one, not an error.
+    ///
+    /// The absence row of the pair above. Without it, a `thread` that returned only rows carrying
+    /// a `thread_id` would still pass the test above — the root would arrive through the `m.id`
+    /// half — while answering "nobody replied to this" with an empty list.
+    #[test]
+    fn an_unanswered_message_is_a_thread_of_one() {
+        let (_d, mut conn, alice, bob, _c) = board();
+        let id = send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &Recipient {
+                    agent_id: Some(bob.id.clone()),
+                    project: Some("nest".into()),
+                },
+                subject: "solo",
+                body: "no answer came",
+                kind: "note",
+                thread: None,
+                ext_id: None,
+            },
+        )
+        .expect("send");
+        let found = thread(&conn, &bob, id).expect("thread");
+        assert_eq!(
+            found.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![id],
+            "it returns itself rather than nothing"
+        );
+    }
+
+    /// A thread named `0` must not collect message id 0's conversation.
+    ///
+    /// `thread_id` is TEXT and holds whatever `--thread` was given, so it need not be an id at
+    /// all. Comparing it against an INTEGER column lets SQLite's affinity rules coerce, and the
+    /// parse-or-`-1` in [`thread`] is what stops a named thread colliding with a numbered one.
+    #[test]
+    fn a_thread_named_like_a_number_does_not_collide_with_that_message_id() {
+        let (_d, mut conn, alice, bob, _c) = board();
+        let to_bob = Recipient {
+            agent_id: Some(bob.id.clone()),
+            project: Some("nest".into()),
+        };
+        let first = send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &to_bob,
+                subject: "first",
+                body: "b",
+                kind: "note",
+                thread: None,
+                ext_id: None,
+            },
+        )
+        .expect("first");
+        // A message deliberately filed under a thread whose *name* is the first message's id.
+        let named = send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &to_bob,
+                subject: "named thread",
+                body: "b",
+                kind: "note",
+                thread: Some(&first.to_string()),
+                ext_id: None,
+            },
+        )
+        .expect("named");
+        let ids: Vec<i64> = thread(&conn, &bob, named)
+            .expect("thread")
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert!(
+            ids.contains(&named) && ids.contains(&first),
+            "a thread_id that IS an id still gathers that message: {ids:?}"
+        );
     }
 
     /// An oversized body is refused *and* leaves nothing behind.

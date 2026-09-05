@@ -25,7 +25,7 @@ install.
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite compiles; ~15s cold
-cargo test                       # all 678 tests (680 on Linux)
+cargo test                       # all 682 tests (684 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # run before finishing; the gate runs `cargo fmt --check`
 ./tools/verify.sh                # every gate check in one command, ~30s after a change (D70)
@@ -97,7 +97,7 @@ AMB_VAULT=/tmp/v cargo run -- memory observe --title t --learned l   # memory is
 
 ## `docs/DECISIONS.md` is the specification
 
-D1–D128 are **settled**, and each records *what was rejected and why*. Read it before proposing a
+D1–D129 are **settled**, and each records *what was rejected and why*. Read it before proposing a
 design change — the argument has probably already been had. `docs/OPEN-QUESTIONS.md` holds what is
 genuinely undecided; when one is settled, delete it there and record it as a new decision.
 

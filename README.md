@@ -43,7 +43,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 678 tests (680 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 682 tests (684 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -634,6 +634,7 @@ between commits, and scripts that scrape it get what they asked for.
 | `amb inbox [--unread]` | What is waiting for you. The header counts unread, `*` marks it, and `--json` rows carry `"read"` |
 | `amb read <id>` · `amb read --all` | Acknowledge one, or everything unread — the only thing that marks mail read |
 | `amb reply <id> --body B` [`--body-file F`] | Answer its sender, keeping the thread. `-` reads stdin |
+| `amb thread <id>` | The whole conversation, oldest first, from any message in it. **Marks nothing read** — and includes the root, which carries no `thread_id` of its own (D129) |
 | `amb agents [--live] [--project P]` | Who else is on the board |
 | `amb register [--name N]` | Set a display name. Optional |
 | `amb doctor` | What is wrong with this installation, especially what fails silently |
@@ -888,7 +889,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 678 tests (680 on Linux)
+cargo test                       # all 682 tests (684 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -1035,7 +1036,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D128, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D129, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

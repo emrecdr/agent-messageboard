@@ -6970,3 +6970,65 @@ Verified by restoring the shipped sentence — both go red on it.
 installed, where `cargo install` is exactly right; the README already names `tools/install.sh` as
 the command to use instead once hooks exist. The defect is remediation advice for a machine that
 *has* hooks, not installation advice for one that does not.
+
+---
+
+## D129 · A thread is the union of a root and its replies, because the root is not a member of its own thread
+
+**Decided.** `amb thread <id>` renders the whole conversation from any message in it, oldest first,
+and marks nothing read. The query is `WHERE m.id = ?root OR m.thread_id = ?root`, and the first
+half of that `OR` is the entire decision.
+
+### The column existed for weeks and nothing could follow it
+
+`thread_id` has been written by [`reply`] since before publication, is carried in `--json` as
+`"thread"`, and was rendered by nothing and queryable by nothing. Measured on the live board the
+day this shipped: **164 of 425 messages carried one, across 89 distinct conversations, the deepest
+nine messages long.** An agent receiving the ninth message in a thread could not retrieve the other
+eight — `amb inbox` shows only what is addressed to it, and a conversation spanning three agents is
+whole in nobody's inbox.
+
+Both surveyed competitors ship this (`RESEARCH.md` R1, R2): MCP Agent Mail groups by `thread_id`
+with a `summarize_thread` tool, AMQ has `amq thread`. This is the row where the gap was real rather
+than a difference of philosophy.
+
+### The root is not stamped with its own thread
+
+`reply` sets `thread_id` to the **root message's id** and never back-fills the root. That is
+correct — the root predates the thread it turned out to start, and rewriting it would be a write to
+a message somebody has already read — but it means the obvious query is short by exactly one row,
+and the missing row is *the question every other message is answering*.
+
+Verified against the real board **before the function was written**, which is the only reason it is
+not wrong:
+
+| | |
+|---|---|
+| `SELECT count(*) WHERE thread_id = '195'` | **8** |
+| `SELECT count(*) WHERE id = 195 OR thread_id = '195'` | **9** |
+| the message the first query drops | `Cleaning the shared cargo target dir (24G)` |
+
+Reading `schema.sql` would not have shown this. The invariant lives in `reply`, three files away
+from the column it constrains, and it is stated nowhere. **A nullable column's meaning is set by
+whoever writes it, and that is not always the module that declares it.**
+
+### Consequences chosen deliberately
+
+- **Marks nothing read.** `amb read` is the only thing that does (D9). Following a thread to decide
+  whether it concerns you is exactly the case where acknowledging it would be wrong.
+- **Not scoped to the caller's inbox**, matching `get`, which takes any id and checks no identity.
+  The board is shared by design (D15); being able to read the conversation you were replied into is
+  the point of having one.
+- **A message nobody answered is a thread of one**, not an error. "Nobody replied to this" is a
+  fact worth rendering.
+- **`thread_id` is parsed to an integer rather than compared across types.** It is TEXT and holds
+  whatever `--thread` was given, so it need not be an id. SQLite's affinity rules would coerce, and
+  a thread deliberately *named* `0` would then also gather message id 0 — a different conversation.
+
+### Rejected: a renderer of its own
+
+`render_inbox` already carries `UNTRUSTED`, quotes every sender-written field, and is enumerated in
+the containment test. A second renderer would owe all three, and M23 records what happens to the
+obligations a renderer acquires quietly: `quoted()` guarded `n.title` at one site while six others
+printed it raw. A thread **is** a list of messages; there was nothing for a new renderer to say
+that the existing one does not.
