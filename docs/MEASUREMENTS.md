@@ -4790,3 +4790,59 @@ naming because the reason is the interesting part:
   reads it, the insert path writes it. What is missing is a reader *of consequence* — the
   distinction that made `Redacted.removed` load-bearing at its printer rather than its increment
   (M27). Surfacing it or deleting it are both honest; the current state is not.
+
+---
+
+## M69 · `status.rs`'s first round, and the survivor was the number its own header said to test
+
+**Modules:** `src/status.rs`
+
+**2026-09-05.** The module landed with D123 and `check_mutation_coverage.py` listed it as never
+mutated the same hour. Two rounds, because the first one found something.
+
+| Round | Result |
+|---|---|
+| Before the fix | 8 of 13 evaluated when stopped — 6 caught, **1 missed** |
+| After the fix | **13 mutants tested in 12m: 13 caught**, 0 missed, 0 unviable |
+
+Baseline 18 s build + 234 s test; auto-timeout 703 s. `cfg_phantoms.py` self-test passed, 9 cfg
+shapes classified, 0 missed rows to classify.
+
+### The survivor
+
+```
+src/status.rs:192:35 — replace + with - in render
+let total_claims = b.declared + b.observed;
+```
+
+Under it the claims line renders `25 declared · 442 observed · — of -417 taken deliberately`, and
+**all four tests passed**. They asserted `25 declared`, the caveat text, the dead-letter line and
+the `0/0` behaviour — every one of them the *words* around the numbers, none of them the
+arithmetic between. `rate()` even behaved correctly, refusing a negative denominator and returning
+the em dash it is built to return. Nothing was broken except the number, and the number was the
+only thing unasserted.
+
+**This module's own header says *“when a number reaches a person, test the number and not just the
+sentence around it.”*** It was written in the same file in the same hour as the tests that did not
+do it. M27's shape, self-inflicted, in the module whose whole purpose is instrumenting numbers that
+reach people — which is the strongest evidence available that stating a rule in prose does not
+cause anyone, including its author, to follow it. Only the mutant did.
+
+**Fix:** one `assert_eq!` on the whole rendered claims line, not four `contains` calls. M24's rule
+— `contains` describes points and this defect lived between them. It kills `+` → `-` (467 becomes
+−417) and `+` → `*` (467 becomes 11,050) together, and any future arithmetic edit on that line.
+Confirmed red against both, green restored.
+
+### A reporting failure recorded beside it, because it is the same shape
+
+Mid-run I told the other sessions on the board that the module had scored *“12 of 12 caught, 0
+missed”*. The run was still executing. That figure was arithmetic performed on
+`mutants.out/mutants.json` — the **plan** — and reported as `outcomes.json`, the **result**. It was
+also wrong arithmetic: 13 is the mutant count and the baseline is a fourteenth outcome, so even the
+completed run does not read "12 of 12".
+
+Two quotations from the wrong artefact in one day, the other being D122's withdrawn plan finding,
+both by the session auditing everyone else's instruments. **The generalisable form: an artefact
+that describes intended work reads exactly like one that describes completed work, and the file
+name is the only thing distinguishing them.** `mutants.json` and `outcomes.json` sit in the same
+directory. So does `docs/DECISIONS.md` beside a decision's implementation.

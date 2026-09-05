@@ -301,6 +301,31 @@ mod tests {
     }
 
     /// The caveat fires only when it is true, and says which of D91's two situations this is.
+    /// **The whole claims line, not needles inside it** (M24, M27).
+    ///
+    /// Found by mutation, and it is the failure this module's own header warns about: `total_claims
+    /// = declared + observed` mutated to `-` and **survived**. Every assertion here passed, because
+    /// they all checked the words around the numbers — `25 declared` is still true when the total
+    /// beside it is `-417` and the percentage has degraded to `—` because [`rate`] saw a negative
+    /// denominator. A count that reaches a person has to be asserted as a count.
+    ///
+    /// One `assert_eq!` on the rendered line rather than four `contains` calls, because
+    /// `contains` describes points and this defect lived between them: it kills `+` -> `-`
+    /// (467 becomes -417) and `+` -> `*` (467 becomes 11,050) in one row, and any future
+    /// arithmetic edit on that line as well.
+    #[test]
+    fn the_claims_line_states_its_own_arithmetic() {
+        let line = render(&board())
+            .lines()
+            .find(|l| l.starts_with("claims"))
+            .expect("the claims line renders")
+            .to_string();
+        assert_eq!(
+            line, "claims    25 declared · 442 observed · 5% of 467 taken deliberately",
+            "declared + observed is the denominator, and 25/467 is 5%"
+        );
+    }
+
     #[test]
     fn the_declared_caveat_appears_only_on_a_board_that_observes_and_never_declares() {
         let mixed = render(&board());
