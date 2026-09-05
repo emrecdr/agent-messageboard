@@ -128,8 +128,21 @@ def main() -> int:
         )
         return 1
 
+    # **`tests/` too, and it was left out for a reason that turned out to be wrong.** The first
+    # version walked `src/` alone on the reasoning that a test's docstring documents no public
+    # item. But M63's defect is about a `///` block being *adopted by the wrong item*, and the
+    # thing that makes it expensive is that the block goes on explaining a rule the function
+    # beneath it no longer implements. That is worse in a test, not better: this project's
+    # convention is that a test's docstring carries the argument for why the assertion exists —
+    # M17 is an entire entry about a comment naming a branch its fixture never reached.
+    #
+    # Found by being bitten. Two instances of M63 were introduced within an hour of each other on
+    # 2026-09-05: one in `src/memory/write.rs`, caught here within minutes, and one in
+    # `tests/cli_e2e.rs`, which this check reported clean because it never looked. The D117
+    # docstring had been adopted by a new `status` test and the function it argued for stood bare.
     findings, compared = [], 0
-    for p in sorted(list((ROOT / "src").rglob("*.rs"))):
+    roots = sorted((ROOT / "src").rglob("*.rs")) + sorted((ROOT / "tests").rglob("*.rs"))
+    for p in roots:
         rel = p.relative_to(ROOT).as_posix()
         before = at_ref(base, rel)
         if not before:

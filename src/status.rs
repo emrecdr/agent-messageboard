@@ -1,0 +1,335 @@
+//! What the board is actually doing — the receipt for the three surfaces that had none.
+//!
+//! `amb memory status` has existed since D42 and carries a withdrawal verdict, a measurement
+//! window (D87), a search ledger (D91) and a per-force split. Messaging, claims and delivery — the
+//! three things this tool exists to do — had **no ledger of any kind**. `doctor`'s `deliver` row
+//! reads `max(delivered_at)` and answers *is delivery firing*; nothing answered *is it working*.
+//!
+//! **The cost of that was concrete and is why this module exists.** Two interventions shipped on
+//! measured grounds within a week: the primer taught `--kind` (U9) and taught `amb claim` (D58,
+//! D91). Reading the first receipt took copying `board.db` and hand-writing SQL — it worked, 1 of
+//! 12 senders before against 5 of 9 after. The second could not be read at all: 25 declared claims
+//! before and 0 after, with the agent population falling 15 to 6 over the same window, and nothing
+//! anywhere recording whether a session ever saw the line. "Nobody wanted to declare a claim" and
+//! "nobody read that far" print the same zero.
+//!
+//! # The four questions this had to answer before it could be written
+//!
+//! CLAUDE.md's ratio rule is not decoration here; it is the specification for this file.
+//!
+//! 1. **What is one unit of the denominator, on each side?** Two different units are reported and
+//!    they are never divided into each other. An *offer* is one `(message, agent)` pair — a row in
+//!    `reads`. A *delivery* is one injection into one session's context — `reads.attempts`. A
+//!    broadcast to five agents offered three times each is 5 offers and 15 deliveries, and calling
+//!    either "messages delivered" would be wrong in a different direction.
+//!
+//! 2. **Does the denominator rise every time the cost is paid?** For rows, no — `reads` is
+//!    `PRIMARY KEY (msg_id, agent)`, so a message injected ten times into one session records
+//!    **one** row. That key is right for the question the table was built for (*was this put in
+//!    front of them*) and wrong for *what did it cost*, exactly as D77 predicts. Measured on this
+//!    board the day the module landed: 599 rows against 1,025 attempts, so the row count
+//!    understates the real delivery cost by 71%. Both numbers are printed side by side and the
+//!    gap between them is the point.
+//!
+//! 3. **What is recorded on the unhappy path?** [`Board::dead`] and [`Board::unoffered`] exist for
+//!    this and for no other reason. A message that was offered [`MAX_OFFERS`] times and never
+//!    acknowledged, and a message addressed to somebody who never came back, are the two ways
+//!    delivery fails — and both were previously indistinguishable from a quiet board. D89's rule:
+//!    a ledger that only writes on success reports a broken mechanism as an idle one.
+//!
+//! 4. **What can move this number, and can anyone reach it?** [`Board::declared`] moves only when
+//!    somebody runs `amb claim`. The render says so in as many words, because D91 is the case
+//!    where a counter watched a flag nobody had been told about and the resulting zero was a
+//!    verdict by construction. Here the surface *is* reachable — the primer teaches it — so the
+//!    zero would be real. Saying which is which is the whole difference.
+//!
+//! # What this deliberately does not do
+//!
+//! **No verdict, and no threshold.** D59 retires the memory injection layer on a number, and that
+//! is a decision someone made about a feature that was explicitly experimental. Messaging and
+//! claims are the product. A withdrawal condition on them would be theatre, and D95 records what a
+//! stated threshold that cannot fire does to the next reader.
+
+use crate::error::{Result, sql};
+use crate::messages::MAX_OFFERS;
+use rusqlite::Connection;
+
+/// Counts over the whole board, with each field's unit named where it is not obvious.
+///
+/// Every field is a plain count read from one query. There is no arithmetic here on purpose: the
+/// division is done in [`render`], where the two units are next to each other and a reader can see
+/// which is which.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Board {
+    /// Rows in `messages`.
+    pub messages: i64,
+    /// Distinct senders — the population any per-agent rate is really over.
+    pub senders: i64,
+    /// Messages whose sender set an explicit `--kind`. U9's intervention, still readable.
+    pub explicit_kind: i64,
+    /// Senders who have *ever* set one. The per-agent form, which is the one that survived U9's
+    /// population confound: message counts are dominated by whoever talks most.
+    pub kind_senders: i64,
+
+    /// **One `(message, agent)` pair that has been offered at least once.** Rows in `reads`.
+    pub offers: i64,
+    /// **One injection into one session's context.** `sum(reads.attempts)`, and the number that
+    /// rises every time the cost is actually paid (question 2).
+    pub deliveries: i64,
+    /// Offers the recipient acknowledged with `amb read`.
+    pub acknowledged: i64,
+    /// **The unhappy path.** Offered [`MAX_OFFERS`] times and never acknowledged — D6's
+    /// dead-letter condition, which nothing has ever reported.
+    pub dead: i64,
+    /// **The other unhappy path.** Addressed to one agent and never offered to them at all,
+    /// because that session never came back. Distinct from `dead`: nothing was spent here.
+    pub unoffered: i64,
+
+    /// Claims taken by `amb claim` — the proactive half of D5.
+    pub declared: i64,
+    /// Claims recorded by the `PostToolUse` hook as files were edited.
+    pub observed: i64,
+    /// Distinct `(agent, path, holder)` conflicts that have ever been surfaced.
+    pub conflicts: i64,
+    /// Times a conflict notice was actually shown. Same rows-versus-attempts split as delivery,
+    /// and it is `claim_notices.count` that carries the cost.
+    pub conflict_tells: i64,
+}
+
+/// Read every count in one pass per table.
+pub fn gather(conn: &Connection) -> Result<Board> {
+    let one = |q: &str| -> Result<i64> {
+        conn.query_row(q, [], |r| r.get::<_, Option<i64>>(0))
+            .map(|v| v.unwrap_or(0))
+            .map_err(sql("counting the board"))
+    };
+    Ok(Board {
+        messages: one("SELECT count(*) FROM messages")?,
+        senders: one("SELECT count(DISTINCT from_agent) FROM messages")?,
+        explicit_kind: one("SELECT count(*) FROM messages WHERE kind <> 'note'")?,
+        kind_senders: one("SELECT count(DISTINCT from_agent) FROM messages WHERE kind <> 'note'")?,
+        offers: one("SELECT count(*) FROM reads WHERE delivered_at IS NOT NULL")?,
+        deliveries: one("SELECT sum(attempts) FROM reads")?,
+        acknowledged: one("SELECT count(*) FROM reads WHERE read_at IS NOT NULL")?,
+        dead: one(&format!(
+            "SELECT count(*) FROM reads WHERE read_at IS NULL AND attempts >= {MAX_OFFERS}"
+        ))?,
+        // Direct mail only. A broadcast has no one recipient it can be said to have missed, so
+        // counting it here would inflate this with messages nobody was ever owed.
+        unoffered: one("SELECT count(*) FROM messages m
+             WHERE m.to_agent IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM reads r WHERE r.msg_id = m.id)")?,
+        declared: one("SELECT count(*) FROM claims WHERE source = 'declared'")?,
+        observed: one("SELECT count(*) FROM claims WHERE source = 'observed'")?,
+        conflicts: one("SELECT count(*) FROM claim_notices")?,
+        conflict_tells: one("SELECT sum(count) FROM claim_notices")?,
+    })
+}
+
+/// A percentage that says `—` rather than `0.0` when there is nothing to divide.
+///
+/// **`0/0` is not zero, and printing it as zero is this project's catalogued failure.** D74's
+/// whole subject is a ratio read as a verdict when its denominator described nothing; a lane that
+/// has never run and a lane that ran and never succeeded must not render identically.
+fn rate(numerator: i64, denominator: i64) -> String {
+    if denominator <= 0 {
+        "—".to_string()
+    } else {
+        format!("{:.0}%", 100.0 * numerator as f64 / denominator as f64)
+    }
+}
+
+/// The receipt, as a person reads it.
+///
+/// Pure, so the exact bytes are testable without a board — the same split `delivery::render` uses
+/// and for the same reason.
+pub fn render(b: &Board) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+
+    let _ = writeln!(s, "messages  {} from {} sender(s)", b.messages, b.senders);
+    let _ = writeln!(
+        s,
+        "  kind      {} of {} message(s) set one · {} of {} sender(s) ever have",
+        b.explicit_kind, b.messages, b.kind_senders, b.senders
+    );
+
+    // **The two units, adjacent and never divided into each other** (question 1). An offer is a
+    // `(message, agent)` pair; a delivery is one injection. The gap between them is what a row
+    // count hides, so it is stated rather than left to be noticed.
+    let _ = writeln!(s, "delivery  {} offer(s) to a recipient", b.offers);
+    let _ = writeln!(
+        s,
+        "  cost      {} injection(s) — the offers above were each made {} time(s) on average",
+        b.deliveries,
+        if b.offers > 0 {
+            format!("{:.1}", b.deliveries as f64 / b.offers as f64)
+        } else {
+            "0".to_string()
+        }
+    );
+    let _ = writeln!(
+        s,
+        "  read      {} of {} offer(s) acknowledged · {}",
+        b.acknowledged,
+        b.offers,
+        rate(b.acknowledged, b.offers)
+    );
+
+    // The unhappy path, and it prints even at zero. A dead-letter count that appears only when
+    // non-zero is one a reader cannot distinguish from a metric that was never wired up (D89).
+    let _ = writeln!(
+        s,
+        "  dead      {} offered {MAX_OFFERS} time(s) and never acknowledged",
+        b.dead
+    );
+    let _ = writeln!(
+        s,
+        "  unoffered {} direct message(s) whose recipient never came back",
+        b.unoffered
+    );
+
+    let total_claims = b.declared + b.observed;
+    let _ = writeln!(
+        s,
+        "claims    {} declared · {} observed · {} of {} taken deliberately",
+        b.declared,
+        b.observed,
+        rate(b.declared, total_claims),
+        total_claims
+    );
+    let _ = writeln!(
+        s,
+        "  conflict  {} surfaced, told {} time(s)",
+        b.conflicts, b.conflict_tells
+    );
+
+    // **What this cannot answer, said plainly rather than left as an inference.** D91 is the case
+    // where a number was read as a verdict on a capability when it only ever watched an
+    // unreachable flag. `declared` is not that — `amb claim` is in the primer every session
+    // reads — but the reader cannot know which situation they are in unless the instrument says.
+    if b.declared == 0 && b.observed > 0 {
+        let _ = writeln!(
+            s,
+            "  ! nothing has been declared, and the primer does teach `amb claim` — so this is a \
+             real zero rather than an unreachable one. Auto-claiming already covers the ground; \
+             declaring buys the intent string and the warning before the edit, not the claim"
+        );
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn board() -> Board {
+        Board {
+            messages: 425,
+            senders: 13,
+            explicit_kind: 16,
+            kind_senders: 5,
+            offers: 599,
+            deliveries: 1025,
+            acknowledged: 589,
+            dead: 0,
+            unoffered: 2,
+            declared: 25,
+            observed: 442,
+            conflicts: 4,
+            conflict_tells: 9,
+        }
+    }
+
+    /// The two units must both reach the page, because the whole reason this module exists is that
+    /// one of them was silently standing in for the other (D77, CLAUDE.md's question 2).
+    ///
+    /// Measured on the real board the day this landed: 599 rows against 1,025 attempts. A render
+    /// that printed only the row count would understate delivery cost by 71% and read as precise.
+    #[test]
+    fn both_delivery_units_are_printed_and_neither_is_divided_into_the_other() {
+        let out = render(&board());
+        assert!(out.contains("599 offer(s)"), "the pair count: {out}");
+        assert!(out.contains("1025 injection(s)"), "the cost: {out}");
+        assert!(
+            out.contains("1.7 time(s) on average"),
+            "and the gap between them, stated rather than left to be noticed: {out}"
+        );
+        crate::assert_rendered_shape("status", &out);
+    }
+
+    /// **A truth table over the unhappy path, and the zero row is the one that matters.**
+    ///
+    /// D89: a ledger that only writes on success reports a broken mechanism as an idle one. If
+    /// `dead` rendered only when non-zero, a reader could not tell a healthy board from a counter
+    /// nobody wired up — which is the exact confusion `unprompted: 0` caused before D91.
+    #[test]
+    fn the_dead_letter_count_is_printed_even_when_it_is_zero() {
+        let healthy = render(&board());
+        assert!(
+            healthy.contains("dead      0 offered"),
+            "zero is stated, not omitted: {healthy}"
+        );
+
+        let mut broken = board();
+        broken.dead = 7;
+        broken.unoffered = 3;
+        let out = render(&broken);
+        assert!(out.contains("dead      7 offered"), "{out}");
+        assert!(out.contains("3 direct message(s)"), "{out}");
+        crate::assert_rendered_shape("status dead", &out);
+    }
+
+    /// `0/0` renders as `—` and never as `0%`.
+    ///
+    /// A lane that has never run and a lane that ran and always failed are different facts, and
+    /// D74 is the entry about what happens when a ratio with a meaningless denominator is read as
+    /// a verdict. The `0%` row is the presence assertion that keeps the `—` row honest: without
+    /// it, a `rate` that returned `—` unconditionally would pass.
+    #[test]
+    fn an_empty_denominator_renders_as_no_answer_rather_than_as_zero_percent() {
+        assert_eq!(rate(0, 0), "—", "nothing offered is not nought percent");
+        assert_eq!(rate(0, 10), "0%", "but nothing read out of ten really is");
+        assert_eq!(rate(5, 10), "50%");
+
+        let empty = render(&Board::default());
+        assert!(
+            empty.contains("0 of 0 offer(s) acknowledged · —"),
+            "an untouched board says it has no answer: {empty}"
+        );
+        crate::assert_rendered_shape("status empty", &empty);
+    }
+
+    /// The caveat fires only when it is true, and says which of D91's two situations this is.
+    #[test]
+    fn the_declared_caveat_appears_only_on_a_board_that_observes_and_never_declares() {
+        let mixed = render(&board());
+        assert!(
+            !mixed.contains("real zero"),
+            "a board with declared claims needs no explanation: {mixed}"
+        );
+        assert!(
+            mixed.contains("25 declared"),
+            "and states them positively, so the absence above has a proven premise: {mixed}"
+        );
+
+        let mut never = board();
+        never.declared = 0;
+        let out = render(&never);
+        assert!(
+            out.contains("real zero rather than an unreachable one"),
+            "it names which kind of zero this is (D91): {out}"
+        );
+
+        // Neither surface used at all: no claim of either sort. Saying "this is a real zero"
+        // there would assert something about a mechanism that has had no opportunity to run.
+        let quiet = Board {
+            messages: 3,
+            ..Default::default()
+        };
+        assert!(
+            !render(&quiet).contains("real zero"),
+            "an untouched board is not evidence about the declare surface"
+        );
+    }
+}

@@ -74,6 +74,17 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`amb status` — the board's own receipt** (D123). Messaging, claims and delivery had no ledger
+  of any kind while the experimental, off-by-default memory layer had four tables and a withdrawal
+  verdict. It reports delivery in **two units that are never divided into each other**: an *offer*
+  is one `(message, agent)` pair, a *delivery* is one injection, and because `reads` is
+  `PRIMARY KEY (msg_id, agent)` a message injected ten times into one session records one row —
+  measured live at 674 rows against 1,143 attempts, a 71% understatement. Also reports what died
+  unread (`MAX_OFFERS` with no acknowledgement), direct mail whose recipient never came back, and
+  declared-versus-observed claims, which is the question D58's primer intervention could not be
+  evaluated against. Unhappy-path counts print at zero, and `0/0` renders `—` rather than `0%`.
+
+
 - **`amb`'s `--json` output says which contract it satisfies** (D117). Every object carries
   `"v": 1`, on the error path as well as the success path. D56 already named `CLI + --json shapes`
   a versioned surface *bound by agents parsing output*; until now the payload could not report

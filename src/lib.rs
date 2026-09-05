@@ -29,6 +29,7 @@ pub mod hooks;
 pub mod identity;
 pub mod memory;
 pub mod messages;
+pub mod status;
 pub mod vendors;
 pub mod version;
 

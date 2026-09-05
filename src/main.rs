@@ -14,6 +14,7 @@ use amb::hooks;
 use amb::identity;
 use amb::memory;
 use amb::messages::{self, Outgoing};
+use amb::status;
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 
@@ -221,6 +222,12 @@ enum Command {
     /// is not itself a failure — so `--json` carries the verdict in `worst`.
     Doctor,
 
+    /// What the board is doing: delivery, claims, and what is failing silently (D123).
+    ///
+    /// The receipt for the three surfaces that had none. `amb memory status` has carried one since
+    /// D42; messaging, claims and delivery had no ledger at all, so whether a shipped change to
+    /// any of them worked could only be answered by hand-querying SQLite.
+    Status,
     /// List agents known to the board.
     Agents {
         /// Another project's roster. Defaults to this project.
@@ -870,6 +877,35 @@ fn run(cli: Cli) -> Result<(), Error> {
                 println!("wrote {} message(s) to {path} (render #{runs})", msgs.len());
             }
         }
+        // Counts only, and it takes no arguments on purpose. Every filter this could grow —
+        // `--project`, `--since`, `--mine` — is a way to compute a number over a narrower
+        // population than the sentence beside it describes, which is U11's defect and D74's. The
+        // whole board is the one population every count here can honestly share.
+        Command::Status => {
+            let b = status::gather(&conn)?;
+            if cli.json {
+                print_json(&serde_json::json!({
+                    "messages": b.messages,
+                    "senders": b.senders,
+                    "explicit_kind": b.explicit_kind,
+                    "kind_senders": b.kind_senders,
+                    // Two units, named as such in the key rather than only in the prose, so a
+                    // consumer cannot mistake one for the other (question 1).
+                    "offers_distinct": b.offers,
+                    "deliveries_total": b.deliveries,
+                    "acknowledged": b.acknowledged,
+                    "dead": b.dead,
+                    "unoffered": b.unoffered,
+                    "claims_declared": b.declared,
+                    "claims_observed": b.observed,
+                    "conflicts_distinct": b.conflicts,
+                    "conflict_tells_total": b.conflict_tells,
+                }));
+            } else {
+                print!("{}", status::render(&b));
+            }
+        }
+
         Command::Agents { ref project, live } => {
             let rows = identity::list(&conn, project.as_deref())?;
             let at = db::now()?;

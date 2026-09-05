@@ -141,6 +141,67 @@ fn a_failure_under_json_is_reported_as_json() {
     );
 }
 
+/// **The receipt's two delivery units must differ through the shipped binary, not just in a unit
+/// test** (D123, M20).
+///
+/// The whole reason `status` exists is that a row count silently stood in for a cost: `reads` is
+/// `PRIMARY KEY (msg_id, agent)`, so re-offering a message advances `attempts` and creates no row.
+/// A library test can assert the render given two numbers; only this can assert that the *board*
+/// produces two different numbers when the same message is offered twice.
+///
+/// It has to drive the hook rather than `amb inbox`, because `delivered_at` and `attempts` are
+/// written on the delivery path alone — asserting this against `inbox` would leave both at zero
+/// and pass for the wrong reason.
+#[test]
+fn a_second_offer_of_one_message_costs_twice_and_is_still_one_offer() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run("uuid-bob", &["register", "--name", "bob"]);
+    b.run(
+        "uuid-alice",
+        &[
+            "send",
+            "bob",
+            "--subject",
+            "s",
+            "--body",
+            "unread on purpose",
+        ],
+    );
+
+    // One turn boundary: bob is offered the message once.
+    b.hook("uuid-bob", "monitor", r#"{"hook_event_name":"Stop"}"#);
+    let after_one = b.json("uuid-bob", &["status"]);
+    assert_eq!(after_one["offers_distinct"], 1, "{after_one}");
+    assert_eq!(after_one["deliveries_total"], 1, "{after_one}");
+
+    // A second turn boundary, same message, still unacknowledged.
+    b.hook("uuid-bob", "monitor", r#"{"hook_event_name":"Stop"}"#);
+    let after_two = b.json("uuid-bob", &["status"]);
+    assert_eq!(
+        after_two["offers_distinct"], 1,
+        "still one (message, agent) pair — the row count cannot see the second offer: {after_two}"
+    );
+    assert_eq!(
+        after_two["deliveries_total"], 2,
+        "but it cost twice, and this is the number that says so: {after_two}"
+    );
+
+    // The rendered form carries both, so a person reading the receipt sees the gap rather than
+    // one number standing in for the other.
+    let out = b.run("uuid-bob", &["status"]);
+    assert!(out.contains("1 offer(s)"), "{out}");
+    assert!(out.contains("2 injection(s)"), "{out}");
+
+    // And the unhappy path is reported at zero rather than omitted (D89): nothing here has hit
+    // MAX_OFFERS, and a reader must be able to tell that from a counter nobody wired up.
+    assert_eq!(after_two["dead"], 0, "{after_two}");
+    assert!(
+        out.contains("dead      0 offered"),
+        "zero is stated, not skipped: {out}"
+    );
+}
+
 /// **Every `--json` object says which contract it satisfies, success or failure** (D117).
 ///
 /// D56's table names `CLI + --json shapes` a versioned surface, *bound by agents parsing output*,
@@ -170,6 +231,7 @@ fn every_json_object_carries_the_contract_version() {
         vec!["claims"],
         vec!["claims", "--all"],
         vec!["doctor"],
+        vec!["status"],
     ] {
         let v = b.json("uuid-alice", &args);
         assert_eq!(

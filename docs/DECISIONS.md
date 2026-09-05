@@ -6496,3 +6496,73 @@ pin whichever regime the fixture happened to build and redden on boards where th
 will this do here*, and reads as though it answered *what does this do*. One plan on one fixture is
 a measurement of that fixture. This project's own rule — repeat any measurement before quoting it —
 extends to plans, and repeating means varying the *data*, not running it twice.
+
+---
+
+## D123 · The board gets a receipt, and it reports two delivery units rather than one
+
+**Decided.** `amb status` reports what messaging, claims and delivery are actually doing. It takes
+no arguments, states no threshold, and prints its unhappy-path counts even when they are zero.
+
+### Why the fifth surface had a receipt and the first three did not
+
+`amb memory status` has carried one since D42: a measurement window (D87), a search ledger (D91), a
+per-force split, and a withdrawal verdict D59 can be read off. Memory is **experimental and off by
+default**. Messaging, claims and delivery — the product — had no ledger of any kind.
+`doctor`'s `deliver` row reads `max(delivered_at)`, which answers *is delivery firing* and cannot
+answer *is it working*.
+
+**The cost was concrete.** Two interventions shipped on measured grounds within one week, and the
+receipts for them diverged:
+
+| Intervention | Could it be evaluated? |
+|---|---|
+| Primer teaches `--kind` (U9) | Yes — by copying `board.db` and hand-writing SQL. 1 of 12 senders before, 5 of 9 after |
+| Primer teaches `amb claim` (D58, D91) | **No.** 25 declared before, 0 after — with the agent population falling 15 to 6 over the same window |
+
+Nothing recorded whether a session ever saw the second line, so *nobody wanted to declare a claim*
+and *nobody read that far* printed the same zero. That is D89's rule — a ledger that only writes on
+success reports a broken mechanism as an idle one — reaching a surface that had no ledger to fail.
+
+### Two units, adjacent, never divided into each other
+
+This is the design constraint, and it comes straight from D77 and CLAUDE.md's question 2.
+
+- An **offer** is one `(message, agent)` pair: a row in `reads`.
+- A **delivery** is one injection into one session's context: `reads.attempts`.
+
+`reads` is `PRIMARY KEY (msg_id, agent)`, so a message injected ten times into one session records
+**one row**. That key is correct for the question the table was built to answer — *was this put in
+front of them* — and wrong for *what did it cost*. Measured on the live board the day this landed:
+**674 rows against 1,143 attempts**, so a row count understates real delivery cost by 71%.
+
+Both are printed, side by side, with the ratio between them stated rather than left to be noticed.
+Neither is ever divided into the other. The `--json` keys are `offers_distinct` and
+`deliveries_total` rather than two spellings of "delivered", so a consumer cannot mistake one for
+the other either.
+
+`tests/cli_e2e.rs` asserts the distinction **through the shipped binary**, because that is the
+layer where it is a property of the board rather than of a struct: offer one message at two turn
+boundaries and `offers_distinct` stays 1 while `deliveries_total` reaches 2. A library test given
+two numbers cannot prove the board produces two different ones (M20).
+
+### Zeroes are printed
+
+`dead` (offered `MAX_OFFERS` times, never acknowledged) and `unoffered` (addressed to a session
+that never came back) render at zero. A count that appears only when non-zero is indistinguishable
+from one nobody wired up, which is precisely the confusion `unprompted: 0` caused before D91.
+
+`0/0` renders as `—` and never as `0%`, for the same reason: a lane that never ran and a lane that
+ran and always failed are different facts (D74).
+
+### Rejected
+
+**A verdict or a withdrawal threshold.** D59 retires the memory injection layer on a number, and it
+can do that because memory is explicitly experimental. Messaging and claims are the product; a
+withdrawal condition on them would be theatre, and D95 records what a stated threshold that cannot
+fire does to the next reader — it makes them assume something is watching.
+
+**Every filter.** `--project`, `--since` and `--mine` were all considered and all rejected together.
+Each one computes a number over a narrower population than the sentence printed beside it describes,
+which is U11's defect (a session concluded twice that nobody uses claims, from a project-scoped
+default) and D74's. The whole board is the one population every count here can honestly share.
