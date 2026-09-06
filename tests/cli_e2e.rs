@@ -424,13 +424,45 @@ fn broadcasting_to_a_real_project_warns_about_nothing() {
     );
     assert!(out["warning"].is_null(), "got {}", out["warning"]);
 
-    let global = b.json(
+    // **This asserted `@@` never warns, under the reasoning D126 refuted, and passed because the
+    // fixture could not reach the branch.** The message read "`@@` names no project, so there is
+    // nothing to be wrong about" — true of the *name* and false of the *reach*, which is exactly
+    // the sentence D126 replaced when it gave `@@` a blast-radius warning. It stayed green because
+    // `Board::new` pins every agent to `nest`, so there was no other project to reach and
+    // `global_reach` returned `None` for a reason unrelated to the stated one. M17's shape: a
+    // fixture that never reaches the guarded branch, under a comment naming a rule it does not run.
+    //
+    // A truth table now, so neither row can go vacuous.
+    let alone = b.json(
         "uuid-alice",
         &["send", "@@", "--subject", "all", "--body", "x"],
     );
     assert!(
-        global["warning"].is_null(),
-        "`@@` names no project, so there is nothing to be wrong about"
+        alone["warning"].is_null(),
+        "one project on the board: `@@` and `@` reach the same sessions, so there is no blast \
+         radius to report — got {}",
+        alone["warning"]
+    );
+
+    // A second project, so `@@` now genuinely reaches somewhere `@` would not.
+    b.cmd("uuid-cl")
+        .env("AMB_PROJECT", "codelore")
+        .args(["register", "--name", "cl"])
+        .output()
+        .expect("register");
+
+    let reaching = b.json(
+        "uuid-alice",
+        &["send", "@@", "--subject", "all", "--body", "x"],
+    );
+    let warning = reaching["warning"].as_str().unwrap_or_default();
+    assert!(
+        warning.contains("codelore"),
+        "`@@` must name where it reaches, or the sender cannot weigh it (D126): {warning:?}"
+    );
+    assert!(
+        warning.contains("besides yours"),
+        "and must count them: {warning:?}"
     );
 }
 

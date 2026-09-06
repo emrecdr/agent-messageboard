@@ -816,3 +816,68 @@ fn a_manifest_vendor_that_exports_no_variable_still_records_a_claim() {
         "a payload-only manifest vendor must hold a claim beside the control: {both}"
     );
 }
+
+/// **A `@@` from another project is counted, not spelled out — asserted at the outermost layer.**
+///
+/// D130 withholds the content and D134 caps the notice at one mention. Both rules were guarded at
+/// two layers and not at the third: `delivery`'s tests render without a database, `messages`' test
+/// queries without a renderer, and nothing drove a foreign global through the shipped binary. M20
+/// is explicit that the outermost layer is the one to suspect first, "because a library test is
+/// cheaper to write and therefore usually the one that exists" — which is exactly how this gap
+/// arose. It was found by an altitude review of the two commits, not by the suite.
+///
+/// The two failure directions this closes are both catalogued. If the renderer's rule and the SQL
+/// cap ever disagree, either the notice never drains (D134's defect returning) or a message that
+/// *was* spelled out retires after one offer (D33's shape). Only a test that runs both halves
+/// against one board can see either.
+#[test]
+fn a_foreign_global_is_counted_once_and_never_spelled_out() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+
+    // The sender lives somewhere else, which is the whole premise.
+    b.cmd("uuid-cl")
+        .env("AMB_PROJECT", "codelore")
+        .args(["register", "--name", "cl"])
+        .output()
+        .expect("register");
+    b.cmd("uuid-cl")
+        .env("AMB_PROJECT", "codelore")
+        .args(["send", "@@", "--subject", "cargo HOLD", "--body", "detail"])
+        .output()
+        .expect("send");
+
+    let (code, out) = b.hook("uuid-alice", "turn", STOP);
+    assert_eq!(code, 0, "D9 is absolute");
+    let first = injected(&out).expect("the reader must be told something exists");
+
+    assert!(
+        first.contains("1 broadcast(s) to every project"),
+        "the count must reach the reader: {first}"
+    );
+    assert!(
+        first.contains("codelore"),
+        "and name where it came from, or a bare count cannot be triaged: {first}"
+    );
+    assert!(
+        !first.contains("cargo HOLD"),
+        "the content belongs in `amb inbox`, not in an unrelated project's context: {first}"
+    );
+
+    // **Offered once.** Nothing drains this notice but the cap, so a second turn must be silent.
+    let (code, out) = b.hook("uuid-alice", "turn", STOP);
+    assert_eq!(code, 0, "D9 is absolute");
+    let second = injected(&out).unwrap_or_default();
+    assert!(
+        !second.contains("broadcast(s) to every project"),
+        "a notice repeated every turn is D24's defect in miniature (D134): {second}"
+    );
+
+    // **And the escape hatch the notice points at still has every word.** A fix that quietened the
+    // hook by also hiding the mail would be strictly worse than the defect it replaced.
+    let inbox = b.run("uuid-alice", &["inbox"]);
+    assert!(
+        inbox.contains("cargo HOLD"),
+        "`amb inbox` must still hold what the hook withheld: {inbox}"
+    );
+}
