@@ -276,6 +276,10 @@ pub fn unsupported_glob(declared: &str) -> Option<char> {
 
 /// The single string [`super::search`] asks a note body to contain, contiguously.
 ///
+/// Named `search_needle` rather than `needle` because `search` calls its own local binding
+/// `needle`; the collision made `find_unread_fields.py` report eleven phantom by-reference uses,
+/// and a standing false positive in that advisory is how D84 nearly lost a real finding.
+///
 /// **Extracted so the ledger's premise is a call rather than a copy.** `term_count` exists to
 /// predict one failure — a several-term query missing on words the vault has — and that
 /// prediction is only true while `search` matches ONE needle. Spelling the construction out a
@@ -286,7 +290,7 @@ pub fn unsupported_glob(declared: &str) -> Option<char> {
 /// reddens.
 ///
 /// Trimming and lowercasing, and nothing else: the caller decides what an empty needle means.
-pub fn needle(query: &str) -> String {
+pub fn search_needle(query: &str) -> String {
     query.trim().to_lowercase()
 }
 
@@ -336,13 +340,13 @@ mod tests {
         for q in ["glob anchors", "how do claims lapse"] {
             assert!(term_count(q) > 1);
             assert!(
-                needle(q).contains(' '),
+                search_needle(q).contains(' '),
                 "a >1-term query becomes one needle carrying a separator the body must \
                  reproduce contiguously: {q:?}"
             );
         }
         assert!(
-            !needle("glob").contains(' '),
+            !search_needle("glob").contains(' '),
             "and a single term never can, which is why it is the baseline"
         );
     }
