@@ -9,6 +9,24 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`SECURITY.md` said what a failed attestation check means and never what success looks like.**
+  `gh attestation verify` prints nothing and exits `0` on success, so a reader following the
+  documented command sees an empty line and reasonably concludes it did not work — this project's
+  own failure shape, silence that reads as absence, landing in the instructions for a security
+  mechanism. Now stated, with the `--format json` form for anyone who would rather see the
+  workflow, repository and commit that were matched than trust an exit code.
+
+  Found by running it: the first verification returned empty, which is the only reason the
+  negative controls got run at all. Both fail as they should — an unattested file and a wrong
+  `--repo` each exit `1` with a 404.
+
+- **D138 said the release pipeline had never run, hours after it ran.** `v0.2.1-rc.1` fired
+  `release.yml` for the first time in this repository's history and every step passed, including
+  `Attest`. The paragraph recording that the configuration was "reasoned and not observed" is now
+  the record of what was observed.
+
 ## [0.2.1-rc.1] — 2026-09-06
 
 **A pre-release, cut to fire the release pipeline for the first time.** D116 settled Q14 with the
