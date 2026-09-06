@@ -1064,6 +1064,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |
 | [`docs/BRIEF.md`](docs/BRIEF.md) | What was asked for, and how the ask evolved |
 | [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md) | What is genuinely undecided |
+| [`docs/VENDOR-COMPATIBILITY.md`](docs/VENDOR-COMPATIBILITY.md) | Hosts beyond Claude Code — what `amb` already serves, and what it cannot (Q15) |
 | [`CHANGELOG.md`](CHANGELOG.md) | What changed and when. The versioning policy itself is **D56** |
 | [`docs/AMB-MEMORY-IMPLEMENTATION-PLAN.md`](docs/AMB-MEMORY-IMPLEMENTATION-PLAN.md) | The memory/vault layer. **All four phases built (D34–D52)**, less the one part deliberately refused |
 | [`docs/MEMORY-DESIGN.md`](docs/MEMORY-DESIGN.md) | The design detail behind that plan: storage, schema, retrieval, trust |

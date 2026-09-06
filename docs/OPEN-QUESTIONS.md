@@ -323,3 +323,45 @@ local surfaces (M32). **Building this without a real second host would ship the 
 unexercised**, and the section above already forbids quoting a latency figure obtained that way.
 
 So: unchanged in principle, better specified, and waiting on a hub rather than on a decision.
+
+---
+
+## Q15 · Does `amb` target hosts beyond Claude Code, and does Google ADK come first?
+
+**Deferred 2026-09-06, not rejected.** Raised by the user: *"we are not just aiming claude code
+anymore, our tool also should be compatible with other llm providers and also with google adk."*
+Researched in full and then postponed at the user's direction, before any implementation.
+
+**The evidence lives in [`VENDOR-COMPATIBILITY.md`](VENDOR-COMPATIBILITY.md) and is deliberately not
+repeated here** — this entry owns whether the question is open and what would close it; that file
+owns what was measured and how. Duplicating the findings across two documents is the drift this
+repository has already recorded four times.
+
+**What is settled enough to state:**
+
+- **ADK needs no change to `amb`.** Verified against the real binary: a caller with no settings
+  file, no hook system and no session-id environment variable registers and receives mail, because
+  D113 and D114 made identity and vendor payload-driven. The integration inverts — an ADK plugin
+  calls `amb hook turn` rather than `amb` installing into ADK.
+- **D11 does not fire.** Its condition names "a target agent tool with no hook mechanism at all";
+  ADK has one, in-process rather than subprocess.
+- **There is no cross-vendor standard to target.** Agent Plugins 1.0 excludes hook behavior by
+  design, and Anthropic is not a maintainer.
+
+**What is open:**
+
+1. Whether an ADK adapter ships in this repository (`contrib/adk/`) or as a separate package.
+2. Whether it uses ADK's Plugin API or per-agent callbacks.
+3. Whether `hooks::plan_install` grows a settings-*shape* abstraction. **Not yet**: `Vendor` carries
+   paths, events and tool vocabulary but not the file's schema, and only Cursor is confirmed
+   different — one consumer is a speculative field, which is the ordering D111 settled.
+
+**What would close it.** For 1 and 2, the user. For 3, a second host whose schema is confirmed
+different **from a shipped binary rather than from documentation** — the standard D111 set after
+Gemini 0.55.1 turned out to contain no occurrence of `PreToolUse` at all.
+
+**A correction is recorded rather than quietly fixed.** The first pass of this research told the
+user that OpenAI Codex CLI "is not a manifest away." Its documentation actually describes the same
+nested matcher-group shape `amb` already writes, so that was probably wrong — and the revised claim
+is doc-derived too, which D111 says is not admissible either. Codex is **unverified**, not
+"different", and `~/.codex` on this machine predates the hooks release, so it could not settle it.
