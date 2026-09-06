@@ -9,6 +9,8 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-09-06
+
 ### Added
 
 - **`amb sent` — what happened to the mail *you* sent** (D139). A sender had no delivery signal:
