@@ -76,6 +76,18 @@ enum Command {
         /// Only mail whose sender set this --kind. `note` is the default, so it is a real value.
         #[arg(long, value_name = "KIND")]
         kind: Option<String>,
+        /// How many messages to list, newest first. 0 lists all of them. Default 25.
+        ///
+        /// Bodies are previewed in either case — `amb read <id>` is what returns one whole.
+        ///
+        /// **A list view, unlike `amb read <id>`, and that difference had no spelling** (D137).
+        /// Uncapped, this command measured 265,949 characters on the live board — 12.8× the
+        /// number D24 called a defect on the injection path — because nothing bounds the count
+        /// and `messages` has no retention. The messages are still there: `--limit 0` renders
+        /// every one, and narrowing with `--unread`, `--from`, `--kind` or bare words is the
+        /// answer that keeps working as the board grows.
+        #[arg(long, value_name = "N", default_value_t = delivery::INBOX_MAX_RENDERED)]
+        limit: usize,
         /// Words that must ALL appear, each in a subject or a body: `amb inbox disk cargo`.
         #[arg(value_name = "TERM")]
         terms: Vec<String>,
@@ -675,6 +687,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             unread,
             ref from,
             ref kind,
+            limit,
             ref terms,
         } => {
             // Joined and re-split so `amb inbox "cargo clean"` and `amb inbox cargo clean` mean
@@ -687,11 +700,26 @@ fn run(cli: Cli) -> Result<(), Error> {
             };
             let msgs = messages::inbox_matching(&conn, &me, unread, &filter)?;
             let narrowed = filter.describe();
+            // **One `listing` feeds both branches, so text and `--json` cannot disagree about
+            // what was hidden** (D137). `0` is the documented spelling for "no limit"; every
+            // other value is a count. Computed here rather than inside each branch because D33
+            // records what it costs when a caller and a renderer each decide separately.
+            let view = delivery::listing(&msgs, (limit > 0).then_some(limit));
             if cli.json {
-                let items: Vec<_> = msgs.iter().map(messages::Message::to_json).collect();
+                let items: Vec<_> = view.shown.iter().map(messages::Message::to_json).collect();
                 print_json(&serde_json::json!({
                     "agent": me.name,
+                    // **`count` is what this object carries and `total` is what exists** — the
+                    // reason `JSON_CONTRACT` moved to 2. Before D137 they were the same number
+                    // and `count` alone was honest; a reader that cached "count is my whole
+                    // inbox" is now wrong, which is exactly the change D117's integer exists to
+                    // let it notice. `body` is untouched and still whole: the count is capped
+                    // here, never the field, so nothing a parser reads means something new.
                     "count": items.len(),
+                    "total": view.total(),
+                    "hidden": view.hidden,
+                    "unread": view.unread,
+                    "limit": limit,
                     // **The filter reaches the JSON too** (D132, one surface away and one day
                     // old). `count: 0` alone cannot tell a consumer whether the inbox is empty or
                     // whether its own filter matched nothing, and it is the parsing agent — not
@@ -702,7 +730,13 @@ fn run(cli: Cli) -> Result<(), Error> {
             } else {
                 println!(
                     "{}",
-                    delivery::render_inbox(&msgs, &me.name, &me.project, narrowed.as_deref())
+                    delivery::render_inbox(
+                        view,
+                        &me.name,
+                        &me.project,
+                        narrowed.as_deref(),
+                        delivery::Limits::LIST.body,
+                    )
                 );
             }
         }
@@ -749,7 +783,16 @@ fn run(cli: Cli) -> Result<(), Error> {
                     // own renderer's documented contract, and no mutation could redden the guard.
                     println!(
                         "{}",
-                        delivery::render_inbox(&shown, &me.name, &me.project, None)
+                        // `Limits::FULL`. **This is the call site that makes `inbox`'s
+                        // truncation remedy honest** (D137): the list says
+                        // `…+N more — amb read <id>`, and this is what that runs.
+                        delivery::render_inbox(
+                            delivery::listing(&shown, None),
+                            &me.name,
+                            &me.project,
+                            None,
+                            None,
+                        )
                     );
                 }
                 let list: Vec<String> = ids.iter().map(|i| format!("#{i}")).collect();
@@ -919,7 +962,16 @@ fn run(cli: Cli) -> Result<(), Error> {
                 // the last mail line with whatever the caller prints next (U6).
                 println!(
                     "{}",
-                    delivery::render_inbox(&found, &me.name, &me.project, None)
+                    // `Limits::FULL`: `watch` hands over mail that just arrived and `thread`
+                    // renders one conversation you asked for by id. Neither is the list view a
+                    // cap is for, and both are the remedy `inbox` names (D137).
+                    delivery::render_inbox(
+                        delivery::listing(&found, None),
+                        &me.name,
+                        &me.project,
+                        None,
+                        None,
+                    )
                 );
             }
         }
@@ -983,7 +1035,16 @@ fn run(cli: Cli) -> Result<(), Error> {
             } else {
                 println!(
                     "{}",
-                    delivery::render_inbox(&found, &me.name, &me.project, None)
+                    // `Limits::FULL`: `watch` hands over mail that just arrived and `thread`
+                    // renders one conversation you asked for by id. Neither is the list view a
+                    // cap is for, and both are the remedy `inbox` names (D137).
+                    delivery::render_inbox(
+                        delivery::listing(&found, None),
+                        &me.name,
+                        &me.project,
+                        None,
+                        None,
+                    )
                 );
             }
         }
@@ -1514,6 +1575,11 @@ fn read_body(body: Option<&str>, body_file: Option<&str>) -> Result<String, Erro
 
 /// The `--json` contract version, carried on every object this command prints.
 ///
+/// **The number and its history live in [`amb::JSON_CONTRACT`]**, because three things read it —
+/// this stamp, `tests/cli_e2e.rs`, and the changelog guard in `tests/versioning.rs` — and an
+/// integration test cannot see a `const` in `main.rs`, so it transcribed the literal instead.
+/// That is M28's shape exactly: a second copy whose only job is to drift.
+///
 /// **D56 names `--json` a versioned surface “bound by agents parsing output”, and until D117 the
 /// output could not say which version it satisfied.** `amb --version` has carried a full
 /// fingerprint since D56 — `amb 0.2.0 (532d23f 2026-09-05, schema 13, sqlite 3.53.2)` — and it
@@ -1521,12 +1587,12 @@ fn read_body(body: Option<&str>, body_file: Option<&str>) -> Result<String, Erro
 /// and caches a strategy therefore had no way to notice the shape moving under it; it found out
 /// by failing, which on the hook path D9 makes silent.
 ///
-/// **Independent of the package version, deliberately, and it is the schema's rule not SemVer's**
-/// (D56's own reasoning for keeping `PRAGMA user_version` off the version's list). `0.2.1` may
-/// ship for a reason no parser can observe; this integer moves only when a field a reader could
-/// be relying on changes meaning or leaves. Adding a field does not move it — that is what makes
-/// it safe to add one.
-const JSON_CONTRACT: u64 = 1;
+/// **`body` was deliberately not touched by v2.** Truncating it would have been the cheaper
+/// saving and would have changed what a field *means* rather than how many rows arrive — so
+/// `--json` caps the count and nothing else, and every message it does return is whole. The text
+/// renderer previews bodies because that is a rendering choice on a surface D56 says is
+/// explicitly *not* stable; this is the line between the two.
+use amb::JSON_CONTRACT;
 
 /// Print a JSON value, falling back to a valid JSON error object rather than panicking.
 ///

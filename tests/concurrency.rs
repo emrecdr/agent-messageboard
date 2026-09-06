@@ -14,10 +14,16 @@ use common::Board;
 const SENDERS: usize = 8;
 const PER_SENDER: usize = 10;
 
+/// **`total`, not `count`** — this suite sends 80 messages and `amb inbox` renders a window of
+/// 25 (D137). The two keys were the same number until the `--json` contract reached v2, and this
+/// helper is the first consumer that change broke: it had cached exactly the assumption the
+/// version bump exists to announce, *"`count` is my whole inbox"*. Reading `total` asks the
+/// question this suite is actually asking — how many arrived — which is a property of the ledger
+/// and has nothing to do with how many are spelled out.
 fn inbox_count(b: &Board, agent: &str) -> usize {
-    b.json(agent, &["inbox", "--unread"])["count"]
+    b.json(agent, &["inbox", "--unread"])["total"]
         .as_u64()
-        .expect("count is a number") as usize
+        .expect("total is a number") as usize
 }
 
 /// The same count, read *as a member of* `project`.
@@ -29,9 +35,9 @@ fn inbox_count(b: &Board, agent: &str) -> usize {
 fn inbox_count_in(b: &Board, agent: &str, project: &str) -> usize {
     let mut c = b.cmd(agent);
     c.env("AMB_PROJECT", project);
-    common::json_from(c, &["inbox", "--unread"])["count"]
+    common::json_from(c, &["inbox", "--unread"])["total"]
         .as_u64()
-        .expect("count is a number") as usize
+        .expect("total is a number") as usize
 }
 
 /// Register `agent` under `name` into `project`.

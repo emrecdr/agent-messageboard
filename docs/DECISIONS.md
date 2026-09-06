@@ -7543,3 +7543,111 @@ and the wrong one for a binary architectural question, and it puts user-typed st
 `redact.rs` does not cover.
 
 ---
+
+## D137 · `amb inbox` is a list, and one renderer was doing two jobs without being asked which
+
+**Decided 2026-09-06.** `amb inbox` renders the newest `--limit` messages (25 by default), previews
+each body at 400 characters, says how many it kept back and names the way through. `amb read <id>`,
+`amb watch` and `amb thread` are unchanged and render in full. The `--json` contract moves to **2**.
+
+### The measurement
+
+Against the live board on 2026-09-06 — 519 messages, 138 selecting into one inbox:
+
+| command | characters | ≈ tokens |
+|---|---|---|
+| `amb inbox --json` | 295,633 | 73,900 |
+| `amb inbox` | 265,949 | 66,500 |
+
+D24 measured 20,779 characters on the injection path and called that a defect worth building a cap
+for. This is **12.8×** it, on the command `PRIMER` names first and D90 calls "the command the banner
+tells every agent to run first" — and `--json`, the form the banner tells every agent to prefer, was
+the more expensive of the two.
+
+M72 measured the text form at 244,629 characters some hours earlier. The figure above is a second,
+independent run rather than a citation of that one, and it came back **higher**: the quantity moves,
+which is the half of the finding a single reading cannot show.
+
+### Why the existing argument did not already cover it
+
+`render_inbox`'s docstring declined D24's cap explicitly and its reasoning was published: bodies are
+whole because *"an injection is a per-turn tax on a context window (D24), while this is read once, on
+purpose, by someone who went looking"*.
+
+**That is true of `amb read <id>`, which is the same function at a different call site.** One
+renderer serves *listing* — many messages, one question, "what is waiting" — and *reading* — one
+message, named by id. Nobody chose to conflate them; `read` was routed through `render_inbox`
+deliberately and correctly, so that sender-written fields would not gain a fourth uncontained
+renderer (D90, M23). The containment argument was right and it carried the cap decision along with
+it, unexamined. The docstring's sentence was then doing the work of *unbounded* for an act it was
+never written about.
+
+**So this is not a reversal of D24's carve-out; it is the carve-out applied to the act it was about.**
+`Limits::FULL` at `read`, `watch` and `thread`; `Limits::LIST` at `inbox`. The question is now asked
+at the call site, where the two acts are distinguishable.
+
+### Both caps, and the count is the one that grows
+
+D24's own constant already says it — *"the cap bounds the count; the existing one-line body preview
+bounds the size of each. Both are needed, and only one was there"* — and the arithmetic here says the
+same thing from the other side. Measured over the same 138 messages:
+
+| cap | rendered | ≈ tokens |
+|---|---|---|
+| none | 265,949 | 66,500 |
+| body 400 only | 72,899 | 18,200 |
+| body 120 only | 35,880 | 9,000 |
+| 25 messages + body 400 | 16,287 | 4,100 |
+
+A body cap alone bottoms out near 9,000 tokens however hard it is tightened, because the per-message
+header is 140 characters and 138 of them cost 19,320 before a single body renders. **The header total
+is the term with no bound**: `messages` has no retention path — `grep` finds no `DELETE FROM messages`
+anywhere in `src/` — and this board took 78 messages/day.
+
+### What was rejected
+
+**Capping the count alone.** Cheaper and it bounds growth, but it leaves each rendered message at its
+full ~2,000 characters, so the window is 25 messages and 50,000 characters. The list stops being
+skimmable at the size that made it useful.
+
+**Truncating `body` in `--json`.** The larger saving, and refused. That changes what a *field means*,
+where capping the count changes how many rows arrive — and a parser that reads `body` would silently
+start receiving something else under a name it already trusts. `--json` caps the count and nothing
+else; every message it returns is whole. The text renderer previews bodies because D56 says the human
+form is explicitly not a stable surface, and that is the line between the two.
+
+**Leaving `--json` uncapped.** It would have avoided moving the contract integer, and it would have
+left the documented machine surface as the most expensive one on the board — which is the finding.
+
+**`doctor`'s size check as the guard.** It reports `ok  2.3 MB of the 50 MB at which D83 builds
+pruning` on the board measured above. That is not wrong, it is on a different axis: 4.6% of a byte
+threshold, beside a command costing a third of a context window. **A guard on the wrong axis cannot
+fire** (D95), and it is recorded here rather than fixed here — the token-aware check is its own
+change, and this decision should not be read as having closed it.
+
+### The contract moved, and the first thing it broke was ours
+
+`JSON_CONTRACT` goes to 2 because `count` stopped meaning "everything selected". `total`, `hidden`,
+`unread` and `limit` join it; added keys are MINOR under D117's own rule and are not what moved it.
+
+`tests/concurrency.rs` broke immediately: `inbox_count` read `count` after sending 80 messages, which
+is precisely the cached assumption — *"`count` is my whole inbox"* — that D117's integer exists to
+announce. **The mechanism was validated by the change that first used it**, on a consumer inside this
+repository, which is the cheapest possible place to find out.
+
+Two things moved with it. `JSON_CONTRACT` is now `amb::JSON_CONTRACT` rather than a private `const`
+in `main.rs`, because the one test asserting it could not see it and had transcribed the literal `1` —
+M28's shape, a second copy whose only job is to drift. And `tests/versioning.rs` now refuses a bump
+that no changelog entry explains: D117 shipped the integer with nothing obliging anyone to say what
+moved, which would make it a version with no referent.
+
+### The remedy has to be honest, and the first wording was not
+
+Each previewed body names `amb read <id>`, and that call site passes `Limits::FULL` — asserted, not
+described, because a remedy pointing at a command with the same cap is the "named residual" D135 was
+written about.
+
+The hidden-count line first said `` `--limit 0` shows every one ``. It does not: `--limit 0` lifts the
+*count* cap and leaves the body preview, so it returns every message and no message in full — 80,008
+characters rather than the original 265,949. It now says `lists all N`. **The overstatement was found
+by running the binary against a copy of the real board** (M32), after the suite was green.

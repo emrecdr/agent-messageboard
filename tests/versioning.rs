@@ -50,3 +50,23 @@ fn the_binary_serves_the_library_banner() {
          reaches the one surface that reports it",
     );
 }
+
+/// **A `--json` contract bump must say what moved, for the reason a release must** (D117, D137).
+///
+/// The integer exists so a parsing agent learns the shape changed *before* it fails on it — and
+/// it can only do that if a human somewhere wrote down what changed. Nothing forced that when
+/// D117 shipped the mechanism: `JSON_CONTRACT` was a bare `const` in `main.rs`, and moving it
+/// was a one-character edit with no obligation attached. This is `tests/versioning.rs`'s existing
+/// argument — bumping a number is half of the change — applied to the *other* number this
+/// project versions.
+#[test]
+fn the_changelog_documents_the_json_contract_version() {
+    let marker = format!("`--json` contract v{}", amb::JSON_CONTRACT);
+    assert!(
+        CHANGELOG.contains(&marker),
+        "src/lib.rs is at JSON_CONTRACT = {} but CHANGELOG.md never says `{marker}`. A parser \
+         reads that integer to find out the shape moved; something has to tell a person what \
+         moved, or the version is a number with no referent.",
+        amb::JSON_CONTRACT,
+    );
+}

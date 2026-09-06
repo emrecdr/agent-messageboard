@@ -9,6 +9,44 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Changed
+
+- **`amb inbox` is a list again, and it had grown to 265,949 characters** (D137). Measured against
+  the live board on 2026-09-06: 66,500 tokens for the text form and 73,900 for `--json`, on the
+  command PRIMER names first — 12.8× the 20,779 characters D24 called a defect on the injection
+  path. `--json` was the *more* expensive of the two, on the surface the banner tells every agent
+  to prefer.
+
+  D24's answer already existed and had been applied to only one of the two things
+  `render_inbox` does. Its docstring argued bodies must be whole because this surface is "read
+  once, on purpose, by someone who went looking" — true of `amb read <id>`, which is the same
+  function at a different call site, and standing in for *unbounded* at `amb inbox`, which is a
+  list. One renderer served both acts so the question never had to be answered. It is answered
+  now at the call site: `Limits::FULL` at `read`, `watch` and `thread`; `Limits::LIST` at `inbox`.
+
+  `amb inbox` now spells out the newest 25 and previews each body at 400 characters, says how many
+  it kept back, and names the way through — `--unread`, `--from`, `--kind`, bare words, or
+  `--limit 0` for every one. **Nothing is deleted and nothing is unreachable**; the log is still a
+  log.
+
+  Both caps are needed and the count is the one that matters. At 138 messages the per-message
+  header costs 140 characters, so 19,320 characters are spent before a single body renders — which
+  is why a body cap alone bottoms out around 9,000 tokens however far it is tightened, and why the
+  count is the term that grows without limit on a table nothing prunes.
+
+- **`--json` contract v2** (D117's integer, moved for the first time). `amb inbox --json` returns a
+  window, so `count` is now how many messages the object carries rather than everything selected,
+  and `total`, `hidden`, `unread` and `limit` join it. **`body` is untouched and every message
+  returned is whole** — the count is capped, never the field, so nothing a parser reads means
+  something new. A reader that cached "`count` is my whole inbox" is wrong from this version, and
+  moving the integer is how it finds out before failing.
+
+  `JSON_CONTRACT` moved from a private `const` in `main.rs` to `amb::JSON_CONTRACT`, because the
+  one test asserting it had transcribed the literal `1` — M28's shape, a second copy whose only
+  job is to drift. `tests/versioning.rs` now also refuses a bump that no changelog entry explains:
+  D117 shipped the mechanism with nothing obliging anyone to say what moved, which made the number
+  a version with no referent.
+
 ### Fixed
 
 - **`amb memory recall` could not find a note by two words from its own title** (D136). The query

@@ -366,7 +366,8 @@ fn every_json_object_carries_the_contract_version() {
     ] {
         let v = b.json("uuid-alice", &args);
         assert_eq!(
-            v["v"], 1,
+            v["v"],
+            amb::JSON_CONTRACT,
             "{args:?} must name the contract it satisfies: {v}"
         );
     }
@@ -378,7 +379,11 @@ fn every_json_object_carries_the_contract_version() {
         &["send", "ghost", "--subject", "s", "--body", "b", "--json"],
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON");
-    assert_eq!(v["v"], 1, "the error object is versioned too: {v}");
+    assert_eq!(
+        v["v"],
+        amb::JSON_CONTRACT,
+        "the error object is versioned too: {v}"
+    );
     assert_eq!(v["error"]["kind"], "no_such_agent", "and still an error");
 }
 

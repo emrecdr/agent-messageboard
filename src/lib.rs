@@ -35,6 +35,28 @@ pub mod version;
 
 pub use error::{Error, Result};
 
+/// The `--json` contract version, carried on every object the binary prints (D117).
+///
+/// **In the library rather than in `main.rs`, so the one test that asserts it cannot transcribe
+/// it** (M28: two constants rotted here because a second copy existed to drift from). The binary
+/// stamps it; `tests/versioning.rs` requires that moving it is documented; `tests/cli_e2e.rs`
+/// checks every command carries it. Three readers, one definition.
+///
+/// # What the number means
+///
+/// **Independent of the package version** — D56 keeps `PRAGMA user_version` off the release
+/// number's list for the same reason: two things with different compatibility rules need two
+/// numbers. `0.2.1` may ship for a reason no parser can observe.
+///
+/// It moves when a field a reader could be relying on **changes meaning or leaves**. Adding a
+/// field does not move it, and that is what makes adding one safe.
+///
+/// | v | Changed |
+/// |---|---|
+/// | 1 | D117, 2026-09-05. Every object carries `v`, on the success and error paths alike. |
+/// | 2 | D137, 2026-09-06. `amb inbox --json` returns a window: `count` is what the object carries rather than everything selected, and `total`, `hidden`, `unread` and `limit` join it. `body` is untouched and still whole. |
+pub const JSON_CONTRACT: u64 = 2;
+
 /// Assert a query's plan reaches the named index — for guards where the *plan* is the rule.
 ///
 /// Two defects arrived in one audit that were invisible to every result-shaped assertion,
