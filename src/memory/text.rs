@@ -274,6 +274,22 @@ pub fn unsupported_glob(declared: &str) -> Option<char> {
         .find(|c| matches!(c, '?' | '[' | ']' | '{' | '}'))
 }
 
+/// The single string [`super::search`] asks a note body to contain, contiguously.
+///
+/// **Extracted so the ledger's premise is a call rather than a copy.** `term_count` exists to
+/// predict one failure — a several-term query missing on words the vault has — and that
+/// prediction is only true while `search` matches ONE needle. Spelling the construction out a
+/// second time inside a test asserts nothing about `search`: it is a comment naming a mechanism
+/// the code beneath it does not exercise, which is the shape D88 and M17 both record, and it
+/// would stay green through exactly the change this instrument exists to authorise. Token-AND or
+/// FTS5 lands, the receipt keeps printing a comparison whose premise has evaporated, and nothing
+/// reddens.
+///
+/// Trimming and lowercasing, and nothing else: the caller decides what an empty needle means.
+pub fn needle(query: &str) -> String {
+    query.trim().to_lowercase()
+}
+
 /// How many whitespace-separated terms a recall query carries.
 ///
 /// **The one thing that separates "the vault does not have it" from "the matcher could not reach
@@ -313,11 +329,21 @@ mod tests {
         assert_eq!(term_count("glob anchors"), 2, "two terms: exposed");
         assert_eq!(term_count("how do claims lapse"), 4);
 
-        // The needle `search` actually builds, spelled out so the link is not left to prose.
-        let q = "glob anchors";
+        // **The needle `search` actually builds — called, not re-spelled.** The previous version
+        // of this assertion wrote `q.trim().to_lowercase()` inline, which is true of any string
+        // with a space in it and never touched `query.rs`. `needle` is the function `search`
+        // itself uses, so if the matcher stops building one contiguous string this reddens.
+        for q in ["glob anchors", "how do claims lapse"] {
+            assert!(term_count(q) > 1);
+            assert!(
+                needle(q).contains(' '),
+                "a >1-term query becomes one needle carrying a separator the body must \
+                 reproduce contiguously: {q:?}"
+            );
+        }
         assert!(
-            q.trim().to_lowercase().contains(' '),
-            "a >1-term query contains a separator the body must reproduce contiguously"
+            !needle("glob").contains(' '),
+            "and a single term never can, which is why it is the baseline"
         );
     }
 

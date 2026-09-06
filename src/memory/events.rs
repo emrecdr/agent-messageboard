@@ -223,6 +223,24 @@ pub const VERDICT_MIN_INJECTED: usize = 50;
 /// query an agent chose to write; `PATH` is `--file`, which the tool suggests; `ACROSS` is the
 /// cross-repo differentiator Q10 turns on.
 pub const LANE_TEXT: &str = "text";
+
+/// A person typed this search.
+///
+/// **Named for the same reason the lanes are, and it took longer to earn.** `origin` is free text
+/// by design (D131: the labels cannot be enumerated, so the reader asks `= 'session'` rather than
+/// excluding a list of machine names). That justifies the *predicate*, not four independent
+/// spellings of the word: the migration default, clap's `default_value`, and both reader clauses
+/// each carried their own literal. Change one and the buckets go to `(0, 0)`, `terms_note`
+/// returns `None` through its empty-bucket arm, and the line D131's whole argument is read off
+/// stops printing — with no error, no failing test and no `!` warning. That is this project's
+/// signature failure shape, so the word gets a name.
+pub const ORIGIN_SESSION: &str = "session";
+
+/// A tool fanned one task out into many searches — devt's bridge, one per task token.
+pub const ORIGIN_INTEGRATION: &str = "integration";
+
+/// Someone is testing recall itself, so these queries were picked *because* they should fail.
+pub const ORIGIN_PROBE: &str = "probe";
 pub const LANE_PATH: &str = "path";
 pub const LANE_ACROSS: &str = "across";
 
@@ -248,12 +266,6 @@ pub fn search_lane(has_file: bool, across_repos: bool) -> &'static str {
     }
 }
 
-/// Record that recall ran, and whether it answered.
-///
-/// **One row per search, never per note.** A search that matched nothing has no note to key on,
-/// and that is the reason this is not an `event` in `note_events`: that table's primary key
-/// deduplicates per `(session, note, event)`, so a session searching five times would record
-/// once. The cost is paid per search, so the denominator rises per search.
 /// One reach for the vault: who asked, through which lane, labelled how, for what.
 ///
 /// **A struct because these four are one fact, not because clippy counted to eight.** Each field
@@ -262,6 +274,7 @@ pub fn search_lane(has_file: bool, across_repos: bool) -> &'static str {
 /// and every one of them answers *what kind of asking was this*. Passing them positionally next to
 /// `found`/`home`/`at`, which describe the answer rather than the question, is what let them drift
 /// apart in the first place.
+#[derive(Debug, Clone, Copy)]
 pub struct Search<'a> {
     /// The session that reached, and the exposure behind `ran`.
     pub session: &'a str,
@@ -303,7 +316,7 @@ pub fn record_search(
     // the rule was never about. Only `LANE_TEXT` compares a needle, so only `LANE_TEXT` has a
     // term count; the other lanes store NULL because they have no query, not because it is
     // unknown.
-    let terms = (lane == LANE_TEXT).then(|| crate::memory::text::term_count(query.unwrap_or("")));
+    let terms = (lane == LANE_TEXT).then(|| term_count(query.unwrap_or("")));
     conn.execute(
         "INSERT INTO searches (session, ts, lane, origin, hits, foreign_hits, terms)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -524,11 +537,15 @@ pub fn searches(conn: &Connection, since: Option<f64>) -> Result<Searches> {
         // silent coalesce is how the fabricated-evidence failure gets back in.
         one_term: bucket(conn, floor, "terms = 1")?,
         multi_term: bucket(conn, floor, "terms >= 2")?,
-        terms_unrecorded: one(&format!(
-            "SELECT count(*) FROM searches
-              WHERE ts >= ?1 AND terms IS NULL AND lane = '{LANE_TEXT}'
-                AND origin = 'session'"
-        ))?,
+        // **Through `bucket`, because "which rows are a person's" must have exactly one
+        // definition.** `terms IS NULL` is a term-count predicate like any other, and this number
+        // is printed *beside* the ratios as their exposure — so if the two definitions of the
+        // human population ever drift, the exposure would describe rows the ratio was not drawn
+        // from, which is the question-1 failure D131 exists to prevent. The near-miss is already
+        // on record: 4aa03fb had to add `origin = 'session'` in two places and M9 survived the
+        // first attempt at the second one. `answered` is meaningless for unclassified rows and is
+        // discarded.
+        terms_unrecorded: bucket(conn, floor, "terms IS NULL")?.0,
     })
 }
 
@@ -555,7 +572,7 @@ fn bucket(conn: &Connection, floor: f64, pred: &str) -> Result<(usize, usize)> {
     conn.query_row(
         &format!(
             "SELECT count(*), coalesce(sum(hits > 0), 0) FROM searches
-              WHERE ts >= ?1 AND lane = '{LANE_TEXT}' AND origin = 'session' AND {pred}"
+              WHERE ts >= ?1 AND lane = '{LANE_TEXT}' AND origin = '{ORIGIN_SESSION}' AND {pred}"
         ),
         params![floor],
         |r| Ok((r.get::<_, i64>(0)? as usize, r.get::<_, i64>(1)? as usize)),
@@ -1075,10 +1092,13 @@ mod tests {
         (dir, conn)
     }
 
-    /// A note the search can be said to have "found", for term-count fixtures.
-    fn hit() -> IndexedNote {
+    /// A note a search can be said to have found, in `scope`.
+    ///
+    /// One builder rather than three: this was `hit()`, a closure named `note` further down that
+    /// was field-for-field identical to it, and a struct-update expression for the foreign case.
+    fn note(scope: &str) -> IndexedNote {
         IndexedNote {
-            id: NoteId::observation("nest", "a-slug"),
+            id: NoteId::observation(scope, "a-slug"),
             title: "t".into(),
             status: ACTIVE.into(),
             created: 0.0,
@@ -1087,6 +1107,40 @@ mod tests {
             paths: Vec::new(),
             force: ADVICE.into(),
         }
+    }
+
+    /// Record one search, so a fixture is a line rather than a twelve-line literal.
+    ///
+    /// `Search` gained its fourth field in this change and its own docs say each one arrived from
+    /// a separate finding, so a fifth is likely. Written out at every call site, that edit is
+    /// eleven places in this file — which is how the two byte-identical closures this replaces
+    /// came to exist in the first place.
+    fn recorded(
+        conn: &Connection,
+        lane: &str,
+        origin: &str,
+        query: Option<&str>,
+        found: &[IndexedNote],
+        at: f64,
+    ) {
+        super::record_search(
+            conn,
+            &Search {
+                session: "s",
+                lane,
+                origin,
+                query,
+            },
+            found,
+            "nest",
+            at,
+        )
+        .expect("recorded");
+    }
+
+    /// The local-scope note, which is what most fixtures want.
+    fn hit() -> IndexedNote {
+        note("nest")
     }
 
     /// **The comparison renders only when both sides exist — as a truth table, not a needle list.**
@@ -1279,19 +1333,7 @@ mod tests {
         let found = [hit()];
         let mut at = 100.0;
         let mut rec = |origin: &str, query: &str, found: &[IndexedNote]| {
-            super::record_search(
-                &conn,
-                &Search {
-                    session: "s",
-                    lane: LANE_TEXT,
-                    origin,
-                    query: Some(query),
-                },
-                found,
-                "nest",
-                at,
-            )
-            .expect("recorded");
+            recorded(&conn, LANE_TEXT, origin, Some(query), found, at);
             at += 1.0;
         };
         // Populated so that EVERY optional sentence has something to say: two origins, both term
@@ -1359,19 +1401,7 @@ mod tests {
         let found = [hit()];
         let mut at = 100.0;
         let mut rec = |origin: &str, query: &str, found: &[IndexedNote]| {
-            super::record_search(
-                &conn,
-                &Search {
-                    session: "s",
-                    lane: LANE_TEXT,
-                    origin,
-                    query: Some(query),
-                },
-                found,
-                "nest",
-                at,
-            )
-            .expect("recorded");
+            recorded(&conn, LANE_TEXT, origin, Some(query), found, at);
             at += 1.0;
         };
         // The human population: one of each shape, the several-term one missing.
@@ -1490,16 +1520,7 @@ mod tests {
     #[test]
     fn a_repeated_search_is_a_second_row_not_the_same_one() {
         let (_d, conn) = board();
-        let note = |scope: &str| IndexedNote {
-            id: NoteId::observation(scope, "a-slug"),
-            title: "t".into(),
-            status: ACTIVE.into(),
-            created: 0.0,
-            vault_path: "p.md".into(),
-            excerpt: None,
-            paths: Vec::new(),
-            force: ADVICE.into(),
-        };
+
         let none: &[IndexedNote] = &[];
         let local = [note("nest")];
         let mixed = [note("nest"), note("elsewhere")];

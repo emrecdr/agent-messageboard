@@ -331,9 +331,10 @@ pub fn search(
         .map_err(sql("running a search"))?
         .flatten();
 
-    let needle = query
-        .map(|q| q.trim().to_lowercase())
-        .filter(|q| !q.is_empty());
+    // `text::needle`, not an inline `trim().to_lowercase()`: the search ledger's term-count
+    // column predicts a miss that is only real while this stays ONE contiguous string, and its
+    // test asserts against this function. Change the matcher here and that assertion reddens.
+    let needle = query.map(text::needle).filter(|q| !q.is_empty());
     let Some(needle) = needle else {
         return Ok(candidates.take(limit).collect());
     };

@@ -338,7 +338,7 @@ enum MemoryCommand {
         /// up, three of them chosen to miss, moving the human ratio from 64/142 to 65/146 in the
         /// direction that flattered the investigation. Labelling is the fix; deleting the rows is
         /// not, because a ledger edited until it reads well is what D87 refuses.
-        #[arg(long, default_value = "session")]
+        #[arg(long, default_value = memory::ORIGIN_SESSION)]
         origin: String,
     },
     /// Record that something was noticed again — the three-strikes ledger (Phase 2, D49).
