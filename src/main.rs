@@ -4,6 +4,7 @@
 //! shelling out for every assertion, and it is why `amb`'s behaviour can be tested without a
 //! process at all — except where the point *is* the process, as in the concurrency tests.
 
+use amb::JSON_CONTRACT;
 use amb::address;
 use amb::claims;
 use amb::db;
@@ -335,6 +336,12 @@ enum MemoryCommand {
         all_projects: bool,
         /// Floored at 1: `--limit 0` returned nothing, which is indistinguishable from a search
         /// that missed — the distinction D89 exists to make.
+        ///
+        /// **`amb inbox` and `amb claims` spell the same flag the opposite way, deliberately**
+        /// (D137): there `0` means *unlimited*, because an unbounded list is a coherent request
+        /// and nothing is being distinguished. Here it is refused. Both are right and neither
+        /// used to name the other, so an agent taught `--limit 0` by the inbox hidden-count line
+        /// would type it here and get exit 64 with no idea why. See `delivery::Limits::list_of`.
         #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..))]
         limit: u64,
         /// Who is asking: `session` (default), `integration`, or `probe`.
@@ -709,10 +716,11 @@ fn run(cli: Cli) -> Result<(), Error> {
             let msgs = messages::inbox_matching(&conn, &me, unread, &filter)?;
             let narrowed = filter.describe();
             // **One `listing` feeds both branches, so text and `--json` cannot disagree about
-            // what was hidden** (D137). `0` is the documented spelling for "no limit"; every
-            // other value is a count. Computed here rather than inside each branch because D33
-            // records what it costs when a caller and a renderer each decide separately.
-            let view = delivery::listing(&msgs, (limit > 0).then_some(limit));
+            // what was hidden** (D137). Computed here rather than inside each branch because D33
+            // records what it costs when a caller and a renderer each decide separately. The
+            // `--limit 0` convention lives in `Limits::list_of`, not in this line.
+            let limits = delivery::Limits::list_of(limit);
+            let view = delivery::listing(&msgs, limits.messages);
             if cli.json {
                 let items: Vec<_> = view.shown.iter().map(messages::Message::to_json).collect();
                 print_json(&serde_json::json!({
@@ -743,7 +751,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                         &me.name,
                         &me.project,
                         narrowed.as_deref(),
-                        delivery::Limits::LIST.body,
+                        limits.body,
                     )
                 );
             }
@@ -789,19 +797,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                     // is unreachable, because `render_inbox` ends `out.trim_end()`. Three callers
                     // of one renderer had three tail idioms, one of them defending against its
                     // own renderer's documented contract, and no mutation could redden the guard.
-                    println!(
-                        "{}",
-                        // `Limits::FULL`. **This is the call site that makes `inbox`'s
-                        // truncation remedy honest** (D137): the list says
-                        // `…+N more — amb read <id>`, and this is what that runs.
-                        delivery::render_inbox(
-                            delivery::listing(&shown, None),
-                            &me.name,
-                            &me.project,
-                            None,
-                            None,
-                        )
-                    );
+                    println!("{}", delivery::render_full(&shown, &me.name, &me.project));
                 }
                 let list: Vec<String> = ids.iter().map(|i| format!("#{i}")).collect();
                 println!("marked {} read", list.join(" "));
@@ -922,15 +918,16 @@ fn run(cli: Cli) -> Result<(), Error> {
             // JSON rows, the `--raw` lines and the aggregate summary. Splitting it would let
             // `--json` and the text disagree about what was hidden, which is D33's failure and
             // the reason D137 put the same computation in one place.
-            let (rows, hidden) = claims::visible(&all_rows, (limit > 0).then_some(limit));
+            let view = claims::visible(&all_rows, delivery::Limits::list_of(limit).messages);
+            let rows = view.shown;
             if cli.json {
                 let items: Vec<_> = rows.iter().map(|c| c.to_json(at)).collect();
                 print_json(&serde_json::json!({
                     // Same split as `inbox` and part of the same v2: `count` is what this object
                     // carries, `total` is what exists. See `amb::JSON_CONTRACT`.
                     "count": items.len(),
-                    "total": all_rows.len(),
-                    "hidden": hidden,
+                    "total": view.total(),
+                    "hidden": view.hidden,
                     "limit": limit,
                     "claims": items,
                 }));
@@ -960,23 +957,20 @@ fn run(cli: Cli) -> Result<(), Error> {
             }
             // **Outside the three *text* branches, so no rendering of claims can truncate
             // silently** — including `--raw`, which is one line per claim and the form the cap
-            // bites hardest. `--live` is named first because it is the answer on a real board:
-            // 526 of 528 rows had lapsed when this was measured, and `--live` cut the same
-            // listing by 260x.
+            // bites hardest. What the line *says* is `Listed::hidden_notice`'s to decide; this
+            // is only the sequencing, which is all D78 leaves to the binary.
             //
             // **`!cli.json` is load-bearing and was missing.** Written first as a bare
             // `if hidden > 0` after the whole `if/else` chain, it appended a prose line to the
             // JSON object — `trailing characters at line 2 column 3`, invalid on the one surface
             // D117 versions and a hook feeds straight to a model. The unit test could not see it
-            // (the guard is in `main.rs`) and neither could any text assertion. The e2e test
+            // (the guard was in `main.rs`) and neither could any text assertion. The e2e test
             // that drives the binary found it on its first run, which is M20's whole argument:
             // count the layers, and suspect the outermost.
-            if !cli.json && hidden > 0 {
-                println!(
-                    "  …{hidden} older claim(s) not shown — `--live` hides lapsed ones · \
-                     `--limit 0` lists all {}.",
-                    all_rows.len()
-                );
+            if !cli.json
+                && let Some(line) = view.hidden_notice()
+            {
+                println!("{line}");
             }
         }
 
@@ -1002,19 +996,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                 // `println!`, like the `inbox` arm above: `render_inbox` trims its tail, and
                 // `watch` is the monitor-mode primitive — a missing final newline concatenates
                 // the last mail line with whatever the caller prints next (U6).
-                println!(
-                    "{}",
-                    // `Limits::FULL`: `watch` hands over mail that just arrived and `thread`
-                    // renders one conversation you asked for by id. Neither is the list view a
-                    // cap is for, and both are the remedy `inbox` names (D137).
-                    delivery::render_inbox(
-                        delivery::listing(&found, None),
-                        &me.name,
-                        &me.project,
-                        None,
-                        None,
-                    )
-                );
+                println!("{}", delivery::render_full(&found, &me.name, &me.project));
             }
         }
 
@@ -1075,19 +1057,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                     "messages": items,
                 }));
             } else {
-                println!(
-                    "{}",
-                    // `Limits::FULL`: `watch` hands over mail that just arrived and `thread`
-                    // renders one conversation you asked for by id. Neither is the list view a
-                    // cap is for, and both are the remedy `inbox` names (D137).
-                    delivery::render_inbox(
-                        delivery::listing(&found, None),
-                        &me.name,
-                        &me.project,
-                        None,
-                        None,
-                    )
-                );
+                println!("{}", delivery::render_full(&found, &me.name, &me.project));
             }
         }
 
@@ -1614,27 +1584,6 @@ fn read_body(body: Option<&str>, body_file: Option<&str>) -> Result<String, Erro
         (None, None) => Err(Error::MissingBody),
     }
 }
-
-/// The `--json` contract version, carried on every object this command prints.
-///
-/// **The number and its history live in [`amb::JSON_CONTRACT`]**, because three things read it —
-/// this stamp, `tests/cli_e2e.rs`, and the changelog guard in `tests/versioning.rs` — and an
-/// integration test cannot see a `const` in `main.rs`, so it transcribed the literal instead.
-/// That is M28's shape exactly: a second copy whose only job is to drift.
-///
-/// **D56 names `--json` a versioned surface “bound by agents parsing output”, and until D117 the
-/// output could not say which version it satisfied.** `amb --version` has carried a full
-/// fingerprint since D56 — `amb 0.2.0 (532d23f 2026-09-05, schema 13, sqlite 3.53.2)` — and it
-/// travels in a *different invocation* from the data. A program that parses `amb inbox --json`
-/// and caches a strategy therefore had no way to notice the shape moving under it; it found out
-/// by failing, which on the hook path D9 makes silent.
-///
-/// **`body` was deliberately not touched by v2.** Truncating it would have been the cheaper
-/// saving and would have changed what a field *means* rather than how many rows arrive — so
-/// `--json` caps the count and nothing else, and every message it does return is whole. The text
-/// renderer previews bodies because that is a rendering choice on a surface D56 says is
-/// explicitly *not* stable; this is the line between the two.
-use amb::JSON_CONTRACT;
 
 /// Print a JSON value, falling back to a valid JSON error object rather than panicking.
 ///

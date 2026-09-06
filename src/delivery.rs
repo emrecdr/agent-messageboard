@@ -369,6 +369,27 @@ impl Limits {
         messages: Some(INBOX_MAX_RENDERED),
         body: Some(INBOX_BODY_PREVIEW),
     };
+
+    /// [`Limits::LIST`] with the count a `--limit` flag asked for.
+    ///
+    /// **`0` means no limit, and this is the only place that convention is written as code.** It
+    /// was spelled `(limit > 0).then_some(limit)` at two call sites and stated in eight pieces of
+    /// prose, enforced nowhere — a convention repeated rather than encoded.
+    ///
+    /// **The sibling flag means the opposite, deliberately, and neither said so.**
+    /// `amb memory recall --limit 0` is *refused* at parse time (`range(1..)`, D89): returning
+    /// nothing there is indistinguishable from a search that missed, which is the distinction
+    /// that whole receipt exists to draw. Here nothing is being distinguished — an unbounded
+    /// list is a coherent request — so `0` is the natural spelling for it. Both decisions are
+    /// right and an agent taught `--limit 0` by the hidden-count line will try it on `recall`
+    /// and get exit 64, so the divergence is named here and in `recall`'s own argument.
+    #[must_use]
+    pub fn list_of(limit: usize) -> Self {
+        Self {
+            messages: (limit > 0).then_some(limit),
+            ..Self::LIST
+        }
+    }
 }
 
 /// Which messages a bounded view spells out, and how many it did not.
@@ -843,6 +864,27 @@ pub fn render_inbox(
     out.trim_end().to_string()
 }
 
+/// Every message given, each body whole — [`Limits::FULL`] through [`render_inbox`].
+///
+/// **Three call sites had this expression and two carried a byte-identical comment.** `read`,
+/// `watch` and `thread` each spelled out `render_inbox(listing(&xs, None), …, None, None)` and
+/// explained the choice in prose; editing one left the others stale, which is the doc-rot this
+/// file's own conventions warn about. The reason lives here once instead.
+///
+/// **This is the call site `amb inbox`'s truncation remedy points at.** A previewed body says
+/// `…+N more — amb read <id>`, and a remedy whose way through truncates identically would be the
+/// named residual D135 was written about. `read`, `watch` and `thread` are not list views:
+/// `watch` hands over mail that has just arrived, and `read` and `thread` were asked for by id.
+pub fn render_full(msgs: &[Message], me_name: &str, me_project: &str) -> String {
+    render_inbox(
+        listing(msgs, Limits::FULL.messages),
+        me_name,
+        me_project,
+        None,
+        Limits::FULL.body,
+    )
+}
+
 /// A markdown snapshot of the board, for a reader that cannot open the database.
 ///
 /// **A render is not a delivery.** It is built from [`crate::messages::inbox`], which is a plain
@@ -1012,7 +1054,16 @@ mod tests {
     /// suite of containment assertions at a different behaviour, which is how a fix comes to
     /// read as the regression. The capped path has its own tests, named for it.
     fn full(msgs: &[Message], me: &str, project: &str, narrowed: Option<&str>) -> String {
-        render_inbox(listing(msgs, None), me, project, narrowed, None)
+        // `narrowed` is the one axis `render_full` does not take (it exists for the empty case,
+        // which `read`/`watch`/`thread` cannot reach), so this stays a thin wrapper rather than
+        // a second spelling of the limits.
+        render_inbox(
+            listing(msgs, Limits::FULL.messages),
+            me,
+            project,
+            narrowed,
+            Limits::FULL.body,
+        )
     }
 
     /// Every renderer of a sender-written field, rendered from one message.

@@ -764,9 +764,31 @@ fn the_claims_listing_is_bounded_in_every_form_the_binary_prints() {
     let b = Board::new();
     b.run("uuid-alice", &["register", "--name", "alice"]);
 
+    // **Seeded in-process, not with 55 more `b.run`s.** The property this test owns is that the
+    // *shipped binary* applies the cap across all three render branches (M20), and the four
+    // assertions below are what establish it — the fixture rows are setup, and spawning a
+    // process apiece cost ~55 launches of gate time on every commit for nothing the assertions
+    // could not get from the same database file.
     let over = amb::claims::MAX_LISTED + 5;
-    for i in 0..over {
-        b.run("uuid-alice", &["claim", &format!("src/f{i}.rs")]);
+    {
+        let conn = amb::db::open_at(std::path::Path::new(&b.db)).expect("open the board");
+        let me = amb::identity::Identity {
+            id: "uuid-alice".into(),
+            name: "alice".into(),
+            project: "nest".into(),
+            root: ".".into(),
+        };
+        for i in 0..over {
+            amb::claims::take(
+                &conn,
+                &me,
+                &format!("src/f{i}.rs"),
+                None,
+                None,
+                amb::claims::Source::Declared,
+            )
+            .expect("claim");
+        }
     }
 
     // `--json`: a window, and the keys that say so. `count` is what the object carries and

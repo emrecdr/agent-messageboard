@@ -42,6 +42,15 @@ pub use error::{Error, Result};
 /// stamps it; `tests/versioning.rs` requires that moving it is documented; `tests/cli_e2e.rs`
 /// checks every command carries it. Three readers, one definition.
 ///
+/// # Why it exists at all
+///
+/// **D56 names `--json` a versioned surface “bound by agents parsing output”, and until D117 the
+/// output could not say which version it satisfied.** `amb --version` has carried a full
+/// fingerprint since D56 — `amb 0.2.1-rc.1 (de69dfc 2026-09-06, schema 15, sqlite 3.53.2)` — and
+/// it travels in a *different invocation* from the data. A program that parses `amb inbox --json`
+/// and caches a strategy therefore had no way to notice the shape moving under it; it found out
+/// by failing, which on the hook path D9 makes silent.
+///
 /// # What the number means
 ///
 /// **Independent of the package version** — D56 keeps `PRAGMA user_version` off the release
@@ -54,7 +63,7 @@ pub use error::{Error, Result};
 /// | v | Changed |
 /// |---|---|
 /// | 1 | D117, 2026-09-05. Every object carries `v`, on the success and error paths alike. |
-/// | 2 | D137, 2026-09-06. **A list-shaped command returns a window.** `amb inbox --json` and `amb claims --json` both report `count` as what the object carries rather than everything selected, with `total`, `hidden` and `limit` beside it (`unread` too, on the inbox). `body` is untouched and still whole. |
+/// | 2 | D137, 2026-09-06. **A list-shaped command returns a window.** `amb inbox --json` and `amb claims --json` both report `count` as what the object carries rather than everything selected, with `total`, `hidden` and `limit` beside it (`unread` too, on the inbox). **`limit` is `0` when the caller asked for no limit**, so a reader seeing `limit: 0` beside a non-zero `count` is looking at an unwindowed answer rather than an empty one. `body` is untouched and still whole. |
 pub const JSON_CONTRACT: u64 = 2;
 
 /// Assert a query's plan reaches the named index — for guards where the *plan* is the rule.

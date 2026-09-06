@@ -398,10 +398,69 @@ pub const MAX_LISTED: usize = 50;
 /// newest" is `[..n]` here and `[len - n..]` there. Written out because the slice is the half a
 /// reader checks and the ordering is the half they assume — flipping either produces a listing
 /// that is the right size, reports the right counts, and shows the wrong rows.
-pub fn visible(claims: &[Claim], limit: Option<usize>) -> (&[Claim], usize) {
+pub fn visible(claims: &[Claim], limit: Option<usize>) -> Listed<'_> {
     match limit {
-        Some(n) if claims.len() > n => (&claims[..n], claims.len() - n),
-        _ => (claims, 0),
+        Some(n) if claims.len() > n => Listed {
+            shown: &claims[..n],
+            hidden: claims.len() - n,
+        },
+        _ => Listed {
+            shown: claims,
+            hidden: 0,
+        },
+    }
+}
+
+/// Which claims a bounded listing spells out, and how many it did not.
+///
+/// **Named rather than a `(&[Claim], usize)` tuple, so `total` has one definition.** Returned as
+/// a tuple first, `total` was re-derived as `all_rows.len()` at two separate call sites in
+/// `main.rs` — the split computation `delivery::Listing::total` exists to prevent (D33),
+/// reappearing one command over in the same change that introduced the fix.
+///
+/// Deliberately *not* generic over `delivery::Listing`. That type also carries `unread`, counted
+/// before the window is taken, which has no meaning for a claim; and the two windows slice from
+/// opposite ends because their queries order oppositely. Sharing the shape is worth it, sharing
+/// the code is not — at least until a third list command asks the same question.
+#[derive(Debug, Clone, Copy)]
+pub struct Listed<'a> {
+    /// Exactly what will be rendered.
+    pub shown: &'a [Claim],
+    /// How many were left out. `0` when nothing was.
+    pub hidden: usize,
+}
+
+impl Listed<'_> {
+    /// Everything the query returned, shown or not.
+    pub fn total(&self) -> usize {
+        self.shown.len() + self.hidden
+    }
+
+    /// The line that says what was kept back, or `None` when nothing was.
+    ///
+    /// **In the library because it is a rendering decision, not sequencing** (D78). Written first
+    /// as a bare `println!` in `main.rs`, it decided when the line appears, what it says, and
+    /// which remedies it names in which order — and sat where `crate::assert_rendered_shape` can
+    /// never reach it, because that helper is `#[cfg(test)] pub(crate)` and an integration test
+    /// cannot call it. D137 recorded that the missing `!cli.json` guard "could not be seen by any
+    /// unit test: the guard lives in `main.rs`", which is the finding arguing for this move,
+    /// written down and then not acted on until now.
+    ///
+    /// `--live` is named first because it is the answer on a real board: 526 of 528 rows had
+    /// lapsed when this was measured, and `--live` cut the same listing 260-fold. `--limit 0`
+    /// second, and it says *lists all N* rather than "shows every one" — it lifts the count cap
+    /// and keeps nothing else, so a claim it returns everything in full would be a remedy that
+    /// does not answer the reader who follows it.
+    #[must_use]
+    pub fn hidden_notice(&self) -> Option<String> {
+        (self.hidden > 0).then(|| {
+            format!(
+                "  \u{2026}{} older claim(s) not shown \u{2014} `--live` hides lapsed ones \u{00b7} \
+                 `--limit 0` lists all {}.",
+                self.hidden,
+                self.total()
+            )
+        })
     }
 }
 
@@ -1079,26 +1138,64 @@ mod tests {
             .map(|p| claim(p, "alice", "observed", 100.0))
             .collect();
 
-        let (shown, hidden) = visible(&rows, Some(2));
+        let view = visible(&rows, Some(2));
         assert_eq!(
-            shown.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
+            view.shown
+                .iter()
+                .map(|c| c.path.as_str())
+                .collect::<Vec<_>>(),
             vec!["a", "b"],
             "the newest two — taking the tail would give [c, d] and count the same 2 hidden"
         );
-        assert_eq!(hidden, 2);
+        assert_eq!(view.hidden, 2);
+        assert_eq!(view.total(), 4, "total is what existed, not what is shown");
 
         // No cap, and a cap nothing reaches: everything survives and nothing claims otherwise.
         for limit in [None, Some(4), Some(9)] {
-            let (all, none_hidden) = visible(&rows, limit);
-            assert_eq!(all.len(), 4, "limit {limit:?} must not cut");
-            assert_eq!(none_hidden, 0, "and must not claim it did: {limit:?}");
+            let all = visible(&rows, limit);
+            assert_eq!(all.shown.len(), 4, "limit {limit:?} must not cut");
+            assert_eq!(all.hidden, 0, "and must not claim it did: {limit:?}");
         }
 
         // An empty listing is not a cap event either — the guard over `hidden` has to stay
         // false here, or every empty board grows a line telling it what it is missing.
-        let (empty, nothing) = visible(&[], Some(2));
-        assert!(empty.is_empty());
-        assert_eq!(nothing, 0);
+        let empty = visible(&[], Some(2));
+        assert!(empty.shown.is_empty());
+        assert_eq!(empty.hidden, 0);
+    }
+
+    /// **The notice is a rendered artefact now, so it gets the assertions one earns** — a truth
+    /// table rather than a needle list, and `assert_rendered_shape`, neither of which it could
+    /// have while it was a `println!` in `main.rs` (D78).
+    #[test]
+    fn the_hidden_notice_appears_only_when_something_was_hidden() {
+        let rows: Vec<Claim> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|p| claim(p, "alice", "observed", 100.0))
+            .collect();
+
+        for (limit, expected) in [(Some(1), true), (Some(4), false), (None, false)] {
+            assert_eq!(
+                visible(&rows, limit).hidden_notice().is_some(),
+                expected,
+                "limit {limit:?}"
+            );
+        }
+
+        let line = visible(&rows, Some(1))
+            .hidden_notice()
+            .expect("three were hidden");
+        assert!(line.contains("…3 older claim(s) not shown"), "{line}");
+        assert!(
+            line.contains("`--live`"),
+            "the flag that actually answers this is named first: {line}"
+        );
+        assert!(
+            line.contains("`--limit 0` lists all 4"),
+            "and the escape is named for what it returns — it lifts the count cap and keeps the \
+             body preview, so it must not promise every claim in full: {line}"
+        );
+        crate::assert_rendered_shape("claims hidden notice", &line);
     }
 
     #[test]

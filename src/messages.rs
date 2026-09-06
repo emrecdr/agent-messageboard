@@ -669,9 +669,13 @@ fn select(
           m.from_agent <> ?2
           AND (m.to_agent = ?2
                OR (m.to_agent IS NULL AND (m.to_proj IS NULL OR m.to_proj = ?1)))
-          AND (?3 = 0 OR NOT EXISTS (
-                SELECT 1 FROM reads r
-                WHERE r.msg_id = m.id AND r.agent = ?2 AND r.read_at IS NOT NULL))
+          -- The unread filter is the SAME predicate as the `read` column above, negated. It was
+          -- hand-written here while `read_column` was being extracted thirteen lines up to kill
+          -- two other copies of it — fixing one instance and missing its sibling, in the commit
+          -- whose whole subject was that failure. Sharing it means the column and the filter
+          -- cannot disagree: were they to drift, a message would report itself unread in its own
+          -- column and be filtered out as read, silently.
+          AND (?3 = 0 OR NOT {read})
           -- The back-off, applied only on the delivery path (?4 IS NULL for an explicit read).
           -- **The cap is per message, not per query** (D134). A `@@` from another project is
           -- withheld by D130 and reaches this reader as one counted line, so there is no second

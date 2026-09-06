@@ -252,20 +252,6 @@ def records_are_uniquely_numbered():
     return problems
 
 
-def cargo_version() -> str:
-    """The version `Cargo.toml` declares, for [`unreleased_is_honest`].
-
-    Read here rather than passed in because it has exactly one reader; if a second appears, that
-    is the moment to hoist it rather than now (a helper with one caller is a name, not a
-    abstraction). Returns `""` when the line cannot be found, which makes every caller's guard
-    fail closed — an unreadable manifest must not excuse an empty changelog.
-    """
-    for line in (ROOT / "Cargo.toml").read_text().splitlines():
-        if line.startswith("version = "):
-            return line.split('"')[1]
-    return ""
-
-
 def unreleased_is_honest():
     """`[Unreleased]` saying nothing, while commits exist, is the drift itself.
 
@@ -316,12 +302,32 @@ def unreleased_is_honest():
     # by habit rather than by decision, which is the failure this function's own docstring
     # records happening to it once already.
     #
-    # Deliberately narrow: only the version `Cargo.toml` currently declares counts, and only
-    # while no tag for it exists. A stale section for some *other* version does not excuse an
-    # empty `[Unreleased]`.
-    cut_here = CHANGELOG.partition(f"## [{cargo_version()}]")[2].partition("\n## ")[0].strip()
-    if silent and cut_here and tag != f"v{cargo_version()}":
-        return []
+    # **Widening what counts as documented, NOT returning early — and the difference is the
+    # whole point.** An early `return []` would switch the check off for as long as the window
+    # lasts, and nothing bounds that: bump the version, cut a section, then work for three days
+    # without tagging, and every commit passes with no entry required for any of it. That is
+    # this docstring's own 2026-08 failure — "a check that reports nothing and a check that
+    # finds nothing print identically" — reintroduced by the fix for a different problem. Folded
+    # into `silent`, the check keeps evaluating and still fails closed when both sinks are empty.
+    #
+    # **Keyed on the changelog and `git tag`, not on `Cargo.toml`.** The condition is "the
+    # newest version section has no tag yet", which those two say directly; reconstructing it
+    # from the manifest would make a second file authoritative for a property neither owns.
+    newest = re.search(r"^## \[(\d[^\]]*)\]", CHANGELOG, re.M)
+    if newest and silent:
+        # **Past the rest of the heading line first.** `## [0.2.2] — 2026-09-06` matches only as
+        # far as the `]`, so partitioning on the match leaves ` — 2026-09-06` in the section body
+        # and an entirely empty release reads as documented. Found by breaking it, which is the
+        # only way it shows: every other case in this function passed either way.
+        cut = CHANGELOG.partition(newest.group(0))[2].partition("\n")[2]
+        cut = cut.partition("\n## ")[0].strip()
+        tagged = subprocess.run(
+            ["git", "tag", "--list", f"v{newest.group(1)}"],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+        ).stdout.strip()
+        silent = not (cut and not tagged)
     if n.isdigit() and int(n) > 0 and silent:
         since = f"since {tag}" if tag else "in a history with no tag"
         how = "says 'Nothing yet'" if placeholder else "is empty"
