@@ -1962,15 +1962,15 @@ never been mutated, holding `render_all`, the banner every session on this machi
 | `memory/status.rs` | 811 | 92 | 52 | 40 | 57% |
 
 **A renderer scoring 88% is a counterexample to the claim, and the corrected finding is better than
-the one it replaces.** What separates `delivery.rs` from `status.rs` is not what they produce. It
+the one it replaces.** What separates `delivery.rs` from `memory/status.rs` is not what they produce. It
 is that `delivery.rs` already had two empty-case tests — `nothing_to_say_renders_nothing` and
-`no_mail_and_no_conflict_still_renders_nothing` — and `status.rs` had none.
+`no_mail_and_no_conflict_still_renders_nothing` — and `memory/status.rs` had none.
 
 So the rule is **not** "renderers are unguardable". It is:
 
 1. **The recurring defect is a guard over a count, and it now has three instances in three
    renderers.** `n > 0` has a relaxation, `n >= 0`, that a presence-only suite cannot see —
-   `status.rs` (ten of them), `delivery.rs`'s `hidden > 0`, and `inject.rs`'s `render_hidden`,
+   `memory/status.rs` (ten of them), `delivery.rs`'s `hidden > 0`, and `inject.rs`'s `render_hidden`,
    fixed in M23 and its sibling here left standing.
 2. **A boolean guard does not have that relaxation.** `!xs.is_empty()` can only be inverted, which
    changes the answer in *both* directions at once, so any presence test kills it. The spelling of
@@ -2075,7 +2075,7 @@ inform**, and indistinguishable from real signal to the reader it is for.
 **And this is a third way for an instrument to fail.** The catalogue so far asks whether the
 *number* can answer the question put to it — whether its denominator matches, what it records on
 the unhappy path, what can move it at all. M27 adds that a correct number is still **delivered on a
-page**, and the page has its own failure mode. `status.rs`'s arithmetic was fine throughout; every
+page**, and the page has its own failure mode. `memory/status.rs`'s arithmetic was fine throughout; every
 one of the forty survivors is in the rendering.
 
 Six tests cover all forty, because the survivors are structural rather than scattered: an
@@ -2200,7 +2200,7 @@ modules before the change, and against nothing else.
 
 ### After
 
-**`status.rs` and `note.rs` re-run in full: 121 mutants, 114 caught, 5 unviable, 2 missed** — from
+**`memory/status.rs` and `memory/note.rs` re-run in full: 121 mutants, 114 caught, 5 unviable, 2 missed** — from
 75 caught and 41 missed. `redact.rs`'s five targeted mutants were replayed by hand instead, each
 confirmed red.
 
@@ -2238,7 +2238,7 @@ correctly throughout; what was unguarded was what they put on the page — and, 
 which of two paths a guard chose. 473 tests, from 458 — 474 after a later cleanup pass lifted the
 lane-split rule out of the test it was buried in, which is where it should have been written.
 
-Every survivor across the four modules was replayed by hand and confirmed red, and `status.rs`,
+Every survivor across the four modules was replayed by hand and confirmed red, and `memory/status.rs`,
 `note.rs` and `delivery.rs` were then re-run under the tool: **121 mutants at 114/116 viable**, and
 **`delivery.rs` at 34/34**. The one remaining live mutant anywhere is `status.rs:283:49`, kept
 deliberately as an equivalent with its premise asserted.
@@ -4959,6 +4959,30 @@ module M27 predates. The **design** that citation justified is unaffected — re
 unconditionally still avoids the `x > 0` → `x >= 0` relaxation, and that principle is genuinely
 M27's — but it was inherited rather than measured there, and the comment claimed otherwise. All
 three sites now name the file.
+
+### The coverage checker was suspected and cleared, which is the half worth writing down
+
+The obvious next fear was that `check_mutation_coverage.py` had inherited the collision:
+`_normalise` resolves a bare `status.rs` to `src/status.rs`, so a round on `memory/status.rs`
+recorded under the short name would credit the wrong module — a module reading as covered while
+never mutated, inside the gate.
+
+**Checked rather than assumed, and it has not happened.** Both files are credited and both credits
+are real: `src/memory/status.rs` from M27's table row, `src/status.rs` from **M69**, its own first
+round on 2026-09-05. Every record that actually grants credit — form 3's scored table rows and form
+4's `**Modules:**` blocks — spells the full path in every instance on file. The two forms that
+matter were written carefully; the ambiguity lives only in surrounding prose, which grants nothing.
+
+So the hazard is real and has never fired, and the distinction matters: the collision corrupted a
+**comment in shipped code** (verified) and not the **gate** (verified). Recording the negative
+result because an unchecked worry about an instrument is exactly what this file exists to close, and
+because the next person to notice the collision will have the same fear and can stop here.
+
+**Residual, and it is a defect with a comment on it (D135) unless someone acts.** A future
+`**Modules:** \`status.rs\`` or a bare name in a scored row would silently credit `src/status.rs`.
+The fix is one line — refuse a bare name matching more than one file rather than preferring the
+shallower, which is `cfg_phantoms.py`'s "refuses rather than guesses" applied to a second tool —
+and it belongs to whoever owns that script.
 
 **The shape is new to this catalogue.** The prose did not drift and no decision was overturned; the
 *namespace* changed underneath a sentence that was exact when written. `check_docs.py` cannot see it
