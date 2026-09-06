@@ -402,6 +402,28 @@ pub fn vendors_check(problems: &[crate::vendors::Problem], loaded: usize) -> Che
 /// Fires **at** the threshold and not one byte past it. A strict `>` would make the number D83
 /// actually names the last value that does *not* trigger, which reads wrong to everyone who has
 /// only read the decision.
+///
+/// # This guard is on bytes, and for a while the constraint that bound was tokens
+///
+/// **Asked and answered rather than left standing** (D137). On 2026-09-06 this check printed
+/// `ok  2.3 MB of the 50 MB at which D83 builds pruning` — 4.6% of its threshold — beside an
+/// `amb inbox` costing 66,500 tokens and an `amb claims --all --json` costing 41,300. The guard
+/// was not wrong about bytes; it was standing where a reader would look for a guard that did not
+/// exist, which is the shape D95 names: a stated condition that cannot fire on the thing going
+/// wrong.
+///
+/// **A token-aware check was designed and is deliberately not built.** The renderers are now
+/// capped, so the quantity is bounded by construction — `INBOX_MAX_RENDERED` × the body preview,
+/// and `claims::MAX_LISTED` rows — and an instrument watching a bounded quantity is the ceremony
+/// D45 and D51 record this project shipping twice. The cap is the guard; a second number
+/// reporting that the cap held would only ever say yes.
+///
+/// **What is genuinely still unbounded, named rather than implied.** `amb inbox --json` returns
+/// 25 *whole* bodies, because D137 refused to truncate a field a parser reads. A body is bounded
+/// at 100,000 characters by D106, so the tail is 25 × that — reachable only by a board of
+/// 25 near-maximal messages, and `--limit` is the answer if one ever appears. If that becomes a
+/// real board rather than an arithmetic one, the instrument to build watches *bodies*, not the
+/// file, and this paragraph is the record that the question was asked here first.
 pub fn size_check(bytes: u64) -> Check {
     let mb = bytes as f64 / (1024.0 * 1024.0);
     let limit = db::PRUNE_AT_BYTES as f64 / (1024.0 * 1024.0);

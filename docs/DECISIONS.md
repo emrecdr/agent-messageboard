@@ -7622,8 +7622,20 @@ left the documented machine surface as the most expensive one on the board — w
 **`doctor`'s size check as the guard.** It reports `ok  2.3 MB of the 50 MB at which D83 builds
 pruning` on the board measured above. That is not wrong, it is on a different axis: 4.6% of a byte
 threshold, beside a command costing a third of a context window. **A guard on the wrong axis cannot
-fire** (D95), and it is recorded here rather than fixed here — the token-aware check is its own
-change, and this decision should not be read as having closed it.
+fire** (D95).
+
+**And a token-aware check was then designed and deliberately not built** — resolved here rather
+than left as a stated intention, which is the same D95 shape one level up. Once both renderers are
+capped the quantity is bounded by construction (`INBOX_MAX_RENDERED` × the body preview;
+`claims::MAX_LISTED` rows), and an instrument watching a bounded quantity is the ceremony D45 and
+D51 record this project shipping twice: a second number whose only possible answer is that the cap
+held. **The cap is the guard.** `size_check`'s docstring carries the reasoning, so the next reader
+finds it where they would look for the missing check.
+
+What is genuinely still unbounded, named rather than implied: `amb inbox --json` returns 25 *whole*
+bodies, so its tail is 25 × D106's 100,000-character limit. That needs a board of 25 near-maximal
+messages, and `--limit` answers it. The instrument to build, if such a board ever exists, watches
+bodies rather than the file.
 
 ### The contract moved, and the first thing it broke was ours
 
