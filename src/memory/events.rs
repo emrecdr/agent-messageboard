@@ -283,7 +283,7 @@ pub struct Search<'a> {
     pub lane: &'a str,
     /// `session`, `integration` or `probe`. Free text; the receipt prints whatever arrives.
     pub origin: &'a str,
-    /// The text needle, when there was one. `None` on a path lane, `Some("")` for a browse.
+    /// The text query, when there was one. `None` on a path lane, `Some("")` for a browse.
     pub query: Option<&'a str>,
 }
 
@@ -313,7 +313,7 @@ pub fn record_search(
     // `--query` are not mutually exclusive on the CLI, and when both are given the path lane wins
     // and the text is never matched against anything. Recording that ignored string's term count
     // would describe a search that did not run — M17's shape, where the fixture reaches a branch
-    // the rule was never about. Only `LANE_TEXT` compares a needle, so only `LANE_TEXT` has a
+    // the rule was never about. Only `LANE_TEXT` matches terms, so only `LANE_TEXT` has a
     // term count; the other lanes store NULL because they have no query, not because it is
     // unknown.
     let terms = (lane == LANE_TEXT).then(|| term_count(query.unwrap_or("")));
@@ -364,17 +364,18 @@ pub struct Searches {
     pub by_origin: Vec<(String, usize, usize)>,
     /// **Human** text searches carrying exactly one term: `(ran, answered)`.
     ///
-    /// **The baseline.** A single-term query is the only kind the contiguous-needle matcher
-    /// cannot fail on for structural reasons, so its miss rate is what "the vault genuinely does
-    /// not have it" looks like. Browses (0 terms) are excluded — they always answer, and folding
-    /// them in would flatter exactly this number.
+    /// **The baseline.** A one-term query is the only kind that cannot be narrowed by a term it
+    /// carries, so its miss rate is what "the vault genuinely does not have it" looks like.
+    /// Browses (0 terms) are excluded — they always answer, and folding them in would flatter
+    /// exactly this number.
     pub one_term: (usize, usize),
     /// **Human** text searches carrying two or more terms: `(ran, answered)`.
     ///
-    /// **The population under test.** Every one of these is exposed to `search`'s single-needle
-    /// match; none of the `one_term` ones are. If this ratio sits well below that one, the miss
-    /// is the matcher rather than the corpus — which is the reading `query.rs` says must come
-    /// from the ledger before FTS5 is adopted.
+    /// **The population under test.** Before D136 every one of these was additionally exposed to
+    /// a contiguous match and none of the `one_term` ones were, so a gap meant the matcher. D136
+    /// removed that, and every term is now merely required somewhere — so a gap that *survives*
+    /// means strict conjunction is too strict, which is the ranked-retrieval reading `query.rs`
+    /// says must come from the ledger before FTS5 is adopted.
     pub multi_term: (usize, usize),
     /// Human text searches from before the column existed, which cannot be placed in either
     /// bucket.
@@ -444,10 +445,23 @@ impl Searches {
     /// Whether a multi-term query misses more often than a single-term one, or nothing.
     ///
     /// **This is the line the FTS5 decision is supposed to be read off, so it refuses to print a
-    /// comparison it cannot make.** `search` lowercases the whole query into ONE needle: a
-    /// one-term query fails only when the corpus lacks the word, a multi-term query fails
-    /// *additionally* whenever the words are present but not adjacent. Two ratios, one
-    /// difference, and the difference is the matcher.
+    /// comparison it cannot make** — and what the difference *means* changed under it. Until D136
+    /// `search` folded the query into ONE needle, so a several-term query failed additionally
+    /// whenever its words were present but not adjacent, and this line named adjacency as the
+    /// difference. D136 removed that failure. A several-term query now fails only when the vault
+    /// lacks the *combination*, which is a claim about the corpus rather than about the matcher.
+    ///
+    /// **So a gap that survives D136 is the FTS5 trigger rather than a matcher bug.** If several
+    /// still answers far less often than one now that every term is merely required somewhere,
+    /// strict conjunction is what is too strict — and the answer is ranked retrieval, which is
+    /// exactly what D88 defers FTS5 pending this line saying so.
+    ///
+    /// **The two populations are separated by the column itself, and that was checked rather than
+    /// assumed.** Every row written before D136 carries `terms IS NULL` — 163 of 163 at the
+    /// moment it shipped — so no pre-D136 search can enter either bucket, and `terms_unrecorded`
+    /// publishes how many were excluded. Mixing them would be question 1 of the ratio rule: one
+    /// unit of the old denominator is a query exposed to adjacency, one unit of the new is a
+    /// query exposed only to conjunction.
     ///
     /// **Silent unless both buckets have a row**, and spelled as a pattern rather than
     /// `ran > 0` on purpose. `status.rs` scored 52/92 under mutation and thirty-seven of its
@@ -470,8 +484,9 @@ impl Searches {
                 };
                 Some(format!(
                     "  by terms (asked by a person): one {one_ans}/{one_ran} · several \
-                     {many_ans}/{many_ran} — a several-term query is matched as one contiguous \
-                     string, so only it can miss on words the vault has{unseen}"
+                     {many_ans}/{many_ran} — every term must appear somewhere, so a several-term \
+                     miss is now the vault lacking the combination, not the words being \
+                     apart{unseen}"
                 ))
             }
         }

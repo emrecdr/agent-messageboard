@@ -828,6 +828,12 @@ const MIGRATIONS: &[&str] = &[
     // loud: fix the defect (D88), fix the instrument (D89), then let the instrument choose. This
     // is the instrument still being unable to answer the question it is now being asked.
     //
+    // **The contiguous match described above is gone (D136), and this paragraph is kept as the
+    // reason the column is nullable rather than as a description of the matcher.** A shipped
+    // migration is history and is not rewritten; what the column now separates is stated at
+    // `Searches::terms_note`. The two populations do not mix: every row written before D136
+    // carries NULL here — 163 of 163 when it shipped — so the first non-NULL row is the boundary.
+    //
     // The `origin` migration above took a DEFAULT because `'session'` is the conservative reading
     // of a historical row: an unlabelled caller counted as a person inflates the human number
     // rather than hiding behind a machine one. **There is no conservative default here.** 0 does

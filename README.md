@@ -43,7 +43,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 712 tests (714 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 714 tests (716 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -375,12 +375,16 @@ split, so a caller that forgets to label itself is visible rather than silent.
 
 `amb memory status` also splits **a person's** searches by how many terms they carried — machine
 origins are excluded, because a caller that issues one search per task token is single-term by
-construction and would fill one side of the comparison with traffic of its own shape. `search` builds one
-needle from the whole query and asks whether a body contains it contiguously, so `recall "glob"`
-and `recall "glob anchors"` are not the same kind of question — only the second can miss on words
-the vault actually has. A one-term query fails only when the corpus lacks the word; comparing the
-two ratios is what separates "the vault does not have it" from "the matcher could not reach it",
-and the second is the only one FTS5 would fix.
+construction and would fill one side of the comparison with traffic of its own shape. A query is
+split on whitespace and **every term must appear somewhere in the note's title or body**, in any
+order; `recall "glob anchors"` finds a note whose title says `glob` and whose body says `anchors`.
+Until D136 the whole query was one string the body had to reproduce *contiguously*, so that search
+returned nothing with both words in the vault — measured against this vault, two words taken from
+a note's own title found that note 0 times in 73, and requiring each term separately found it 73
+times in 73. Comparing the two ratios still separates "the vault does not have it" from "the
+matcher could not reach it"; what a several-term miss now means is that the vault lacks the
+*combination*, and a gap that survives is the case for ranked retrieval rather than another
+matcher change.
 
 A note earns its place rather than being declared important. Something noticed once is an
 observation; the same thing arrived at again by a session that had not been shown the first one is
@@ -907,7 +911,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 712 tests (714 on Linux)
+cargo test                       # all 714 tests (716 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -1054,7 +1058,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D135, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D136, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

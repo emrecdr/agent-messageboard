@@ -11,6 +11,25 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **`amb memory recall` could not find a note by two words from its own title** (D136). The query
+  was folded into one lowercased string the body had to reproduce *contiguously*, so `recall "glob
+  anchors"` returned nothing with both words in the vault. It now splits on whitespace and requires
+  **every** term to appear somewhere in the note's title or body, in any order.
+
+  Measured against the real 163-note vault before the change, with queries built from each note's
+  own title: the first and last content word of a note's own title found that note **0 times in
+  73**; requiring each term separately found it 73 times in 73. A three-word query from the title
+  went from 21/73 to 73/73.
+
+  It is a strict widening — anything containing `"glob anchors"` contiguously contains each word
+  separately — verified across 328 generated queries with 0 losses and pinned as a property, not a
+  sample. Precision was measured rather than assumed: median result set 2, p90 10, and 3 of 73
+  queries exceeding the default limit of 20.
+
+  No schema change, so no board migration. FTS5 stays deferred exactly where D88 left it; what
+  changes is that a several-term miss now means the vault lacks the *combination* rather than that
+  the words were apart, which is the reading the `terms` ledger exists to produce.
+
 - **Both delivery pointers named a 61,000-token command** (M72). The withheld-broadcast notice and
   D24's over-cap line both said `run \`amb inbox\``, measured at 244,629 characters on the real
   board. Every message either line refers to is unread by construction — both delivery paths select

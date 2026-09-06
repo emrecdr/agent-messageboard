@@ -274,45 +274,58 @@ pub fn unsupported_glob(declared: &str) -> Option<char> {
         .find(|c| matches!(c, '?' | '[' | ']' | '{' | '}'))
 }
 
-/// The single string [`super::search`] asks a note body to contain, contiguously.
+/// The terms [`super::search`] requires a note to carry — **all of them, in any order** (D136).
 ///
-/// Named `search_needle` rather than `needle` because `search` calls its own local binding
-/// `needle`; the collision made `find_unread_fields.py` report eleven phantom by-reference uses,
-/// and a standing false positive in that advisory is how D84 nearly lost a real finding.
+/// Named `search_terms` rather than `terms` because `search` and `record_search` both bind a
+/// local of that name; the earlier collision on the bare word `needle` made
+/// `find_unread_fields.py` report eleven phantom by-reference uses, and a standing false positive
+/// in that advisory is how D84 nearly lost a real finding.
 ///
-/// **Extracted so the ledger's premise is a call rather than a copy.** `term_count` exists to
-/// predict one failure — a several-term query missing on words the vault has — and that
-/// prediction is only true while `search` matches ONE needle. Spelling the construction out a
-/// second time inside a test asserts nothing about `search`: it is a comment naming a mechanism
-/// the code beneath it does not exercise, which is the shape D88 and M17 both record, and it
-/// would stay green through exactly the change this instrument exists to authorise. Token-AND or
-/// FTS5 lands, the receipt keeps printing a comparison whose premise has evaporated, and nothing
-/// reddens.
+/// **This returned one contiguous string until D136, and that was the defect.** A note could not
+/// be found by two words taken from its own title unless those words happened to be adjacent —
+/// measured 0 of 73 against the real vault, while requiring both terms separately found 73 of 73.
+/// `term_count` was built to detect exactly that, and its own predecessor's docstring named this
+/// change as the one it existed to authorise.
 ///
-/// Trimming and lowercasing, and nothing else: the caller decides what an empty needle means.
-pub fn search_needle(query: &str) -> String {
-    query.trim().to_lowercase()
+/// **Extracted so the ledger's premise is a call rather than a copy.** [`term_count`] describes
+/// what the matcher did with a query, and that description is only true while it counts the same
+/// separator this splits on. Spelling the split out a second time inside a test would assert
+/// nothing about `search`: a comment naming a mechanism the code beneath it does not exercise,
+/// which is the shape D88 and M17 both record.
+///
+/// Splitting and lowercasing, and nothing else: the caller decides what an empty query means.
+pub fn search_terms(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
 }
 
 /// How many whitespace-separated terms a recall query carries.
 ///
 /// **The one thing that separates "the vault does not have it" from "the matcher could not reach
-/// it".** [`super::search`] lowercases and trims the query into a *single* needle and asks whether
-/// the body contains it contiguously, so `glob` returns 7 notes on this board and `glob anchors`
-/// returns 0 with both words present. Every multi-term query is exposed to that failure and no
-/// single-term query is — which is why the count is recorded rather than the query text, and why
-/// the bucket boundary is 1-versus-more rather than a tuned threshold. A 2-term and a 5-term
-/// query fail for the identical reason, so splitting them further would invent a distinction the
-/// mechanism does not have.
+/// it" — and what that sentence means changed under it.** Until D136 `search` folded the query
+/// into ONE needle and asked for it contiguously, so `glob` returned 7 notes on this board and
+/// `glob anchors` returned 0 with both words present; every several-term query was exposed to
+/// that and no one-term query was. That failure is gone. The count now measures the question
+/// underneath it: [`search_terms`] requires **every** term, so a query gets strictly more
+/// selective as it grows, and a several-term miss is now a claim about the *vault* rather than
+/// about adjacency.
+///
+/// **So the instrument survives the fix and points at the same next decision.** If several-term
+/// queries still answer far less often than one-term ones now that adjacency cannot be the
+/// reason, strict conjunction is what is too strict — and ranked retrieval, not another matcher
+/// tweak, is the answer. That is precisely the trigger D88 defers FTS5 on.
+///
+/// The bucket boundary stays 1-versus-more rather than a tuned threshold, because that is still
+/// the mechanism's own boundary: one term is the only query that cannot be narrowed by a term it
+/// carries.
 ///
 /// **Zero is a real answer, not a missing one.** `amb memory recall` with no query lists the most
 /// recent notes; that is a browse, it always "answers", and folding it in with genuine one-term
 /// queries would inflate exactly the bucket used as the healthy baseline. The ledger stores 0 for
 /// it and the reader excludes it by name.
 ///
-/// Whitespace is the only separator, deliberately. Punctuation is left inside the term because
-/// the needle it is compared against is not tokenised either — counting `foo-bar` as two terms
-/// would describe a query the matcher never sees.
+/// Whitespace is the only separator, deliberately, and [`search_terms`] splits on the same one.
+/// Punctuation stays inside the term because the matcher does not break on it either — counting
+/// `foo-bar` as two terms would describe a query nobody ran.
 pub fn term_count(query: &str) -> usize {
     query.split_whitespace().count()
 }
@@ -322,33 +335,42 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    /// **The count exists to predict one failure, so it is tested against that failure.**
+    /// **The ledger counts what the matcher requires, so the two are asserted against each
+    /// other rather than each against a re-spelling of itself.**
     ///
-    /// `search` builds ONE needle from the whole query. Anything above 1 term is exposed to the
-    /// contiguous-match miss and 1 term never is — that is the entire contract, and a test of the
-    /// arithmetic alone would not say so.
+    /// This is the same guard as before D136 pointed at the opposite premise: it used to assert
+    /// that a >1-term query became one needle *carrying a separator*, because `search` matched
+    /// contiguously. It stopped compiling the moment [`search_terms`] started returning terms,
+    /// which is what a real guard on a premise does when the premise changes — and is why it was
+    /// written against the function rather than against an inline `trim().to_lowercase()`.
+    ///
+    /// What it holds now: `term_count` is the number the `searches` ledger stores, and it must
+    /// stay the number of things the matcher actually demands. Split on anything but whitespace
+    /// in one and not the other and the receipt starts describing a query nobody ran.
     #[test]
-    fn a_multi_term_query_is_the_one_exposed_to_a_contiguous_match() {
-        assert_eq!(term_count("glob"), 1, "single term: never exposed");
-        assert_eq!(term_count("glob anchors"), 2, "two terms: exposed");
+    fn the_ledger_counts_exactly_the_terms_the_matcher_requires() {
+        assert_eq!(term_count("glob"), 1, "one term: the baseline");
+        assert_eq!(term_count("glob anchors"), 2);
         assert_eq!(term_count("how do claims lapse"), 4);
 
-        // **The needle `search` actually builds — called, not re-spelled.** The previous version
-        // of this assertion wrote `q.trim().to_lowercase()` inline, which is true of any string
-        // with a space in it and never touched `query.rs`. `needle` is the function `search`
-        // itself uses, so if the matcher stops building one contiguous string this reddens.
-        for q in ["glob anchors", "how do claims lapse"] {
-            assert!(term_count(q) > 1);
-            assert!(
-                search_needle(q).contains(' '),
-                "a >1-term query becomes one needle carrying a separator the body must \
-                 reproduce contiguously: {q:?}"
+        for q in [
+            "glob",
+            "glob anchors",
+            "how do claims lapse",
+            "  a  b  ",
+            "",
+            "   ",
+        ] {
+            assert_eq!(
+                term_count(q),
+                search_terms(q).len(),
+                "the ledger's count and the matcher's demand are the same number: {q:?}"
             );
         }
-        assert!(
-            !search_needle("glob").contains(' '),
-            "and a single term never can, which is why it is the baseline"
-        );
+
+        // Lowercased on the way out, so `note_matches` never has to fold a term again — and
+        // every term stands alone, which is the whole of D136.
+        assert_eq!(search_terms("Glob ANCHORS"), vec!["glob", "anchors"]);
     }
 
     /// **A browse is not a failed query, and 0 must not land in the 1-term bucket.**
@@ -363,7 +385,7 @@ mod tests {
         assert_eq!(term_count("\t\n"), 0);
     }
 
-    /// Runs of whitespace are one separator, because the needle collapses nothing.
+    /// Runs of whitespace are one separator, in the count and in the split alike.
     #[test]
     fn repeated_whitespace_does_not_invent_terms() {
         assert_eq!(term_count("a  b"), 2);
@@ -371,7 +393,8 @@ mod tests {
         assert_eq!(
             term_count("foo-bar"),
             1,
-            "punctuation stays inside the term: the matcher does not tokenise either"
+            "whitespace is the only separator, and `search_terms` splits on the same one — \
+             punctuation stays inside the term in both, so `foo-bar` is one demand not two"
         );
     }
 

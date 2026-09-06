@@ -7423,3 +7423,116 @@ is a weaker guarantee than a property and it is what the artefact supports.
 
 Verified by restoring the shipped line: the test reddens on it, naming the renderer and printing
 the ambiguous header.
+
+## D136 · Every term must be present; adjacency is not a retrieval rule
+
+**Decided.** `amb memory recall` splits its query on whitespace and requires **every** term to
+appear somewhere in a note's title or body, in any order. No schema change, no new dependency,
+and the FTS5 question stays exactly where D88 left it.
+
+### The defect was structural, and it was measured before it was fixed
+
+`search` folded the whole query into one lowercased string and asked a note to contain it
+*contiguously*. Replayed against the real 163-note vault, with queries built from each note's own
+title — the friendliest query anyone can type:
+
+| query = words from the note's own title | contiguous | every term present |
+|---|---|---|
+| first 2 content words (n=163) | 0.82 | 1.00 |
+| first 3 content words (n=72) | 0.29 | 1.00 |
+| first + last content word (n=72) | **0.00** | 1.00 |
+
+**A note could not be found by two words taken from its own title unless those words happened to
+be adjacent.** Zero of seventy-two. D131 already carried a worked instance — `recall "glob"`
+returns 7 notes here and `recall "glob anchors"` returns 0 with both words in the vault — so the
+defect was on record; what was missing was its size.
+
+### Why now, and not "wait for the instrument"
+
+D88 states the sequence: *fix the defect, fix the instrument, then let the instrument choose.*
+Reading that as "wait" would be a misreading of which clause this falls under. D88 defers **FTS5**,
+pending a ledger that shows what recall is missing. It does not defer the matcher, and D131 names
+the contiguous fold as a defect in the same breath as building the column. This is the first
+clause, not the third.
+
+The instrument could not have authorised it anyway, and that was checked rather than assumed:
+`terms` read NULL on all 163 rows, because no search had run since the binary that writes it was
+installed. **A structural proof does not need the rate.** What the ledger will decide is whether
+ranking is also needed, which is a different question and still D88's.
+
+### The precision cost was measured too, because widening is not free
+
+Over the same title-derived queries, result-set size on a 164-note vault: **median 2, p90 10**,
+3 of 73 queries exceeding the default limit of 20, and **none** returning more than half the
+vault. The degenerate case is real and was measured rather than waved at — `recall "a b"` returns
+all 164 notes where the old matcher returned 25 — but the old answer was equally useless and
+nobody types it. No stopword list and no minimum term length: both would invent a distinction the
+mechanism does not have, which is the argument D131 already made for its own bucket boundary.
+
+### It is a strict widening, and that direction is asserted rather than hoped
+
+Anything containing `"glob anchors"` contiguously contains `glob` and `anchors` separately, so
+every note findable before is findable now — verified across 328 generated queries against the
+real vault, 0 losses, and pinned as a property by
+`a_widening_can_never_lose_a_note_the_old_matcher_found`. A retrieval "fix" that silently drops
+results is this project's worst shape, and a test that only checked new hits would stay green
+through exactly that.
+
+**That test was written wrong first, and the way it was wrong is the reusable part.** Dropping the
+title from the haystack — a real regression, half the rule gone — left it **green**, because every
+body in its fixture happened to contain the title's words. M17's shape, in a test written by
+someone who had just re-read M17. Two other tests in the module caught the mutant, so the rule was
+never unguarded; the test *named for the property* did not hold it. It now carries a term that
+appears only in the title and counts how many cases were answered by the title alone, failing if
+that count is zero — an absence-style premise made to prove itself, which is M27's rule applied to
+a superset assertion.
+
+### Title and body became one haystack
+
+They were `title.contains(q) || body.contains(q)` — two separate tests. Under a per-term rule that
+would refuse the commonest phrasing there is: a term from the title and a term from the body, which
+is how a note is actually written. Frontmatter stays excluded and that half is untouched (D88): the
+title is passed in from the index row, never read back out of the header, so `recall nest` still
+does not return every note in the project.
+
+### What this does to the instrument it was measured by
+
+`term_count` survives, and what it measures changes. Before, a several-term query failed
+*additionally* whenever its words were apart, so a gap between the buckets meant the matcher. Now
+every term is merely required somewhere, so a gap means the vault lacks the **combination** —
+and a gap that *survives* D136 is the case for ranked retrieval, which is precisely what D88 defers
+FTS5 pending. The instrument was built to detect the defect and now verifies the fix.
+
+**The two populations cannot mix, and that was checked rather than declared.** Every row written
+before D136 carries `terms IS NULL` — 163 of 163 at the moment it shipped — so no pre-D136 search
+can enter either bucket, and the first non-NULL row is the boundary. Publishing them together
+would be question 1 of the ratio rule: one unit of the old denominator is a query exposed to
+adjacency, one unit of the new is a query exposed only to conjunction.
+
+### The guard was written against the function, and that is why it fired
+
+`search_needle` existed because `term_count`'s premise had to be a *call* rather than a copy, and
+its docstring named this change as the one it existed to authorise: *"Token-AND or FTS5 lands, the
+receipt keeps printing a comparison whose premise has evaporated, and nothing reddens."* Replacing
+it with `search_terms` broke that test's compilation immediately. Adding a second function beside
+it would have left the guard green while `search` stopped using it — the fake-guard shape D51
+records — which is the reason the old name does not survive anywhere in the tree.
+
+### Rejected
+
+**FTS5, still.** D88's objection is not feasibility — a contentless table (`content=''`, with
+`contentless_delete=1` available since SQLite 3.43 and this build on 3.53.2) satisfies D34
+completely. It is that nothing has yet said ranking is what is missing. Current practice agrees on
+direction rather than urgency: BM25 outperforms dense retrieval on code corpora at scale and is
+the stronger baseline for sparse factual recall, which is this vault's shape — so FTS5 remains the
+likely endpoint and the trigger remains the ledger.
+
+**Word-boundary matching.** `glob` still matches `globalise`, as it did before. Narrowing the
+per-term rule in the same change would move two variables at once, and it can only *lose* results
+— the one direction this change promises not to.
+
+**Storing the query text.** Unchanged from D131: it is the right instrument for tuning relevance
+and the wrong one for a binary architectural question, and it puts user-typed strings on a path
+`redact.rs` does not cover.
+
+---
