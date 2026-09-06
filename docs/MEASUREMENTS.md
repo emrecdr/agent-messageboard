@@ -5179,3 +5179,75 @@ mutants for a function whose body holds three decisions is visible in one comman
 seconds.
 
 ---
+
+## M75 · `sent.rs` scored 4/4, the advisory said it would mean nothing, and it was right
+
+**2026-09-06, `cargo mutants --file src/sent.rs --jobs 1 --copy-vcs true`**, in a private
+`CARGO_TARGET_DIR`, with nothing else building. Run the day `amb sent` landed (D139).
+
+| module | mutants | caught | missed | unviable | score |
+|---|---|---|---|---|---|
+| `sent.rs` | 4 | 4 | 0 | 0 | 100% |
+
+### The novel part is that the score was predicted worthless *before* the round
+
+`check_mutation_coverage.py` prints three advisories beside every uncovered module. The second
+says logic inside a SQL string is invisible to mutation and names `messages::select` — 109 lines,
+four mutants, none in the predicate. The third says to run `--list` before trusting a score when a
+function's decision is a call rather than an operator, and puts the cost at ten seconds.
+
+Both were followed, in that order, and the list settled it before any round ran:
+
+```
+src/sent.rs:116:5: replace gather -> Result<Sent> with Ok(Default::default())
+src/sent.rs:168:5: replace render -> String with String::new()
+src/sent.rs:168:5: replace render -> String with "xyzzy".into()
+src/sent.rs:231:5: replace render_json -> serde_json::Value with Default::default()
+```
+
+**Four mutants, all "replace the whole function", none touching a state boundary.** Every decision
+this module makes is a SQL predicate:
+
+| the decision | how it is spelled | why no mutant exists |
+|---|---|---|
+| handed | `r.delivered_at IS NOT NULL` | inside a `&str` |
+| fetched | `r.delivered_at IS NULL AND r.read_at IS NOT NULL` | inside a `&str` |
+| unoffered | `NOT EXISTS (SELECT 1 FROM reads …)` | inside a `&str` |
+| one intended recipient | `r.agent = m.to_agent` in the JOIN | inside a `&str` |
+
+Swap `IS NULL` for `IS NOT NULL` in the `fetched` clause and the receipt reports the opposite of
+what happened, on every board, forever. No mutant expresses that edit. **The score is 100% and it
+certifies that four functions are called, nothing more.**
+
+### So the guards are hand-mutation, and each was confirmed red
+
+Written against the predicates directly, by editing the source, running, and restoring from a file
+copy — never `git checkout`, which destroyed uncommitted work in this repository earlier the same
+day:
+
+| the edit | what went red |
+|---|---|
+| `fetched` drops `delivered_at IS NULL` | `the_three_states_partition_the_direct_total` — 1+2+1 ≠ 3 |
+| the broadcast line grows a rate | `the_broadcast_block_reports_reach_and_refuses_a_rate` |
+| `unoffered` line wrapped in `if s.unoffered > 0` | `an_empty_receipt_still_renders_every_line` |
+| a `%` appended to the broadcast line | the reach-line absence check |
+
+The partition assertion is the load-bearing one, and it is written as an **identity over `gather`'s
+own output** — `handed + fetched + unoffered == direct` — rather than against expected constants.
+That is what makes it survive a fixture change: any predicate edit that double-counts or drops a
+message breaks the identity without anyone having to predict which one.
+
+### What this adds to M71 and M74
+
+Nothing about the mechanism — it is the same lid, third material. What is new is that **the
+advisory was read rather than scrolled past, and it paid.** D84 records the opposite: an advisory
+printed the same three names for days while one of them was a real defect. Here the cost of
+compliance was one `--list` invocation, and the return was knowing not to trust a 4/4 before
+spending twenty-eight seconds earning it.
+
+The round is recorded anyway, because `check_mutation_coverage.py` reads this file and an
+unrecorded round is indistinguishable from one never run. **The row above is honest and the score
+is meaningless; both statements are in the table, which is the only way a ledger can carry a number
+that must not be read as a verdict.**
+
+---
