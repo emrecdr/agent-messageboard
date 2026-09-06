@@ -1,5 +1,33 @@
 # `amb` memory — scope, force and project identity
 
+> **Status: executed, and Phase A shipped in a form this document does not describe.** Kept because
+> Phases B and C are the reasoning behind live behaviour, and annotated rather than rewritten so the
+> divergence stays visible as a divergence.
+>
+> - **Phase A · Declared project identity — solved differently, and the form proposed here was
+>   rejected.** `DECISIONS.md`'s "What was rejected" names *"a declared-identity file (`.amb.toml`
+>   or similar)"* and records the reason: `.claude/settings.json` takes an `env` block, is committed
+>   here by explicit `.gitignore` policy, and applies to every session and its subprocesses — so
+>   committed, rename-proof identity exists with no new file format, no parser, and no interaction
+>   with D15's synced-volume guard. **This repository declares its own name that way today**
+>   (`env: {"AMB_PROJECT": "agent-messageboard"}`), verified 2026-09-06. Implementing Phase A as
+>   written would build the rejected alternative.
+> - **Phase B · Scope as an axis — shipped.** `Scope::Topic` is live in `memory/id.rs`,
+>   `memory/inject.rs` and `memory/promote.rs`, and D81 supersedes D50's particulars.
+> - **Phase C · Force levels — shipped.** `--force decision|rule` is on `amb memory observe` and is
+>   taught in the memory primer every session receives.
+> - **Phase D · Promotion router and force upgrade — partial.** `amb memory promote` ships with
+>   `--scope`, `--decline`, `--reject`, `--phrases` and `--yes` (D49, D124). Whether the *router* in
+>   the sense this document means it is what shipped has not been re-derived here; treat Phase D as
+>   unverified rather than as pending work.
+>
+> **Why this banner exists.** Every other planning document here carries one — `KICKOFF.md` says
+> historical, `amb-gap-closing-prompts.md` says "historical, and wrong in three places",
+> `MEMORY-DESIGN.md` says all of it is built. This one did not, and it opens in the future tense
+> with a rejected proposal as its first phase. `CLAUDE.md`'s standing warning is that negative
+> decisions leave no trace in the code and get helpfully fixed; a plan that still asks for one is
+> the strongest version of that trap, because it reads as an instruction rather than an omission.
+
 Implementation plan for three additions: a declared project identity with enforced uniqueness,
 a topic axis alongside global and project scope, and force levels for notes.
 
