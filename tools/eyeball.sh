@@ -182,6 +182,12 @@ show "amb inbox   (the command the banner tells every agent to run first — D90
 show "amb claims   (grouped — what a session actually reads)" "$(run claims)"
 show "amb claims --raw --live   (one row per claim — does every group above agree with these?)" \
      "$(run claims --raw --live)"
+# **Both receipts, because only one of them was ever eyeballed.** `amb memory status` has been
+# here since the memory layer shipped; `amb status` (D123) is the same kind of artefact for
+# messaging, claims and delivery — a page of counts a person reads to decide something — and it
+# went four fields behind its own `--json` for two days without anyone seeing the page (D132).
+# A number is checked by its tests; a page is only ever checked by being looked at (M24, M32).
+show "amb status   (the board's own receipt — D123)" "$(run status)"
 [ -n "$VAULT" ] && show "amb memory status   (the receipt D59 is read off)" "$(run memory status)"
 
 rule

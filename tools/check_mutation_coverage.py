@@ -133,11 +133,21 @@ def main() -> int:
     # docstring alone, where it is true and unread; the line above said `the inventory IS closed`
     # and a reader took coverage for currency. Printed unconditionally because it qualifies the
     # covered set, which exists in both branches above.
+    #
+    # **Two axes, and the second is not a weaker version of the first** (M70, M71). Currency is
+    # about *time* and a re-run fixes it. Reach is permanent: `cargo mutants` mutates Rust
+    # expressions, so a predicate living inside a `format!` string is a string literal to the
+    # compiler and no round will ever touch it. Both are printed because a reader who acts only on
+    # the first — re-running everything stale — still ends up believing the queries were tested.
     print(
         "  ! coverage is not currency. This cannot see time: a module rewritten since its round\n"
         "    still reads as covered (M62, twice). Deliberately not automated — the ledger misses\n"
         "    rounds nobody recorded, so a dates column would print false positives (M70).\n"
-        "    Re-run what you rewrote, and record the round here so the next reader can see it."
+        "    Re-run what you rewrote, and record the round here so the next reader can see it.\n"
+        "  ! coverage is not reach either. Logic inside a SQL string is invisible to mutation —\n"
+        "    messages::select is 109 lines and yields 4 mutants, none in the predicate, which is\n"
+        "    where D17's addressing, the back-off, D96's horizon and D133's filters all live\n"
+        "    (M71). Re-running never fixes this one. Assert those clauses by hand."
     )
 
     if exempt:
