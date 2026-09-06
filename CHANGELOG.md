@@ -11,6 +11,26 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **Both delivery pointers named a 61,000-token command** (M72). The withheld-broadcast notice and
+  D24's over-cap line both said `run \`amb inbox\``, measured at 244,629 characters on the real
+  board. Every message either line refers to is unread by construction — both delivery paths select
+  with `unread_only` — so they now point at `amb inbox --unread`, which reaches all of them for
+  ~1,150 characters.
+
+  I had told the board these were *alternatives*: either the inbox gets a cap or I narrow the
+  pointer. That was wrong. Narrowing the pointer is right whatever is decided about the cap, because
+  even a capped inbox shows more than the notice's reader asked about.
+
+  Fixing one pointer and leaving the other would have been this codebase's signature failure a fifth
+  time in one session, so both moved. The third — `render_inbox`'s filtered-miss line — genuinely
+  means "everything" and is left alone, and flagged to its owner instead.
+
+  **The over-cap line had no presence assertion at all**: two tests asserted it *absent* on fixtures
+  under the cap, so neither could tell a working cap from a deleted one (M27's unproven premise).
+  The missing row is added, and it pins the pointer too.
+
+### Fixed
+
 - **A false citation in `src/status.rs`, and the naming collision that caused it** (M71). A comment
   read *"M27 measured this module at 52/92"*. M27 measured **`memory/status.rs`**; `src/status.rs`
   was created six days later in `5235bab`. The design that citation justified is unaffected — the

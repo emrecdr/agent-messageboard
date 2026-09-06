@@ -385,7 +385,7 @@ fn render_elsewhere(elsewhere: &[&Message], out: &mut String) {
     let _ = writeln!(
         out,
         "  {} broadcast(s) to every project, from {} \u{2014} not shown here; \
-         run `amb inbox` if that concerns you.",
+         run `amb inbox --unread` if that concerns you.",
         elsewhere.len(),
         named.join(", ")
     );
@@ -488,7 +488,7 @@ pub fn render_all(
             // difference between "ten messages" and "ten of sixty" is being misled by the cap.
             let _ = writeln!(
                 out,
-                "  \u{2026}and {hidden} more \u{2014} run `amb inbox` to see them all."
+                "  \u{2026}and {hidden} more \u{2014} run `amb inbox --unread` to see them all."
             );
         }
         // Recorded, so the cap can bite (D134). Without this nothing increments `attempts` and
@@ -1018,6 +1018,40 @@ mod tests {
         }
     }
 
+    /// The over-cap line renders, says how many, and points somewhere affordable (D24, M72).
+    ///
+    /// **Written because nothing asserted this line was ever produced.** Two tests assert it is
+    /// *absent* — correctly, on fixtures under the cap — and neither could tell a working cap from
+    /// a deleted one, because an absence assertion whose premise never fires proves nothing (M27).
+    /// This is the presence row they were missing.
+    ///
+    /// It also pins the pointer. M72 measured bare `amb inbox` at 244,629 characters (~61,000
+    /// tokens) on the real board; every message in this list is unread by construction, since both
+    /// delivery paths select with `unread_only`, so `--unread` reaches all of them for ~1,150.
+    #[test]
+    fn the_over_cap_line_says_how_many_and_points_somewhere_affordable() {
+        let many: Vec<Message> = (1..=MAX_RENDERED as i64 + 3)
+            .map(|i| msg(i, Some("uuid-bob"), None))
+            .collect();
+        let out = render_all(&many, &[], 0.0, false, "nest")
+            .expect("renders")
+            .text;
+
+        assert!(
+            out.contains("and 3 more"),
+            "the cap must say how much it hid, not truncate silently: {out}"
+        );
+        assert!(
+            out.contains("`amb inbox --unread`"),
+            "and must point at the affordable form (M72): {out}"
+        );
+        assert!(
+            !out.contains("run `amb inbox` to"),
+            "the bare form is 53x larger on a real board and must not be recommended: {out}"
+        );
+        crate::assert_rendered_shape("render_all over cap", &out);
+    }
+
     /// **The over-cap count is computed over what can be shown, not over everything selected.**
     ///
     /// `hidden` is `ordered.len() - shown`, and `ordered` is now the *filtered* set. Mutating it to
@@ -1050,7 +1084,7 @@ mod tests {
 
         // Three direct messages, well under MAX_RENDERED, so nothing was capped.
         assert!(
-            !out.contains("more \u{2014} run `amb inbox`"),
+            !out.contains("more \u{2014} run `amb inbox --unread`"),
             "nothing was over the cap, so the cap line must not appear: {out}"
         );
         // The presence row that proves the absence above is not vacuous (M27): the four withheld
@@ -1731,7 +1765,7 @@ mod tests {
             "the premise: every message is spelled out, so nothing is hidden:\n{out}"
         );
         assert!(
-            !out.contains("more \u{2014} run `amb inbox`"),
+            !out.contains("more \u{2014} run `amb inbox --unread`"),
             "a complete list claimed a remainder:\n{out}"
         );
     }
