@@ -107,10 +107,18 @@ pub struct Board {
     /// Injections spent delivering those globals — `sum(attempts)`, the unit that rises every time
     /// the cost is paid, never the row count.
     pub global_cost: i64,
-    /// Projects other than the sender's that a global has actually been injected into. **The
-    /// number D126's withdrawal condition is read off**, and the reason this exists: that
-    /// condition shipped naming a query to run by hand, which is a stated condition nothing can
-    /// evaluate — D95's defect, and it was written into the decision that documents it.
+    /// Projects other than the sender's that a global has actually been injected into.
+    ///
+    /// **Board-wide and all-time, which is *not* the shape D126's condition needs — and an earlier
+    /// version of this doc claimed it was.** D126 asks whether `@@` sends *out of one project* stay
+    /// flat *per week* either side of a date. A monotonically-rising all-time counter over every
+    /// project cannot answer that, so this narrows the gap without closing it: it makes the volume
+    /// visible without copying the board, and the condition still needs D126's windowed
+    /// per-project query. Closing it properly means what D87 did for the other instrument — a
+    /// `measurement_window` row — or at least a `WHERE from_proj = ?` split.
+    ///
+    /// Saying otherwise was a D95-shaped claim inside the field added to answer D95: a reader sees
+    /// a standard and assumes something is watching.
     pub global_reach: i64,
 
     /// Claims taken by `amb claim` — the proactive half of D5.
