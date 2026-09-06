@@ -4989,3 +4989,45 @@ and it belongs to whoever owns that script.
 — there is no link, table or count to compare — and neither can a reader, because the sentence still
 parses. The tell is a **short name in a repository that later gains a second file with that name**,
 and the fix is to spell the path wherever the claim is load-bearing.
+
+---
+
+## M72 · `amb inbox` renders 61,000 tokens on this board, and the primer names it first
+
+**2026-09-06.** Measured against a copy of the live board, twice, byte-identical both runs.
+
+| invocation | characters | lines | ≈ tokens |
+|---|---|---|---|
+| `amb inbox` | 244,629 | 2,472 | **61,000** |
+| `amb inbox --unread` | 4,610 | 54 | 1,150 |
+
+**For scale: D24 measured 20,779 characters — 5,200 tokens — and called it a defect.** This is
+**twelve times** that, on the command `PRIMER` lists first and D90 calls "the command the banner
+tells every agent to run first". The primer spells it `amb inbox [--unread]`, so the bracketed form
+is the optional one and the bare invocation is what an agent following the line literally runs.
+
+**Nothing here is broken.** `render_inbox` has no cap and that is defensible on its own terms — an
+explicit read is not spent context the way an injection is, which is precisely the distinction D24
+draws. D133 added `--from`, `--kind` and bare-word narrowing hours before this was measured, which
+is the mitigation. The observation is that the *default* is "every message ever addressed to you",
+on a structure that only grows: 516 messages on the board, 121 for this one agent, four days in.
+
+**The shape, if it is one, is the sibling shape this file keeps recording.** D24 capped `render_all`
+and left `render_inbox`, exactly as D107 hardened `kind` and left the name (D125), and D94 fixed
+`doctor` and left the notice (D128). The argument for the asymmetry is real — one is spent
+uninvited, the other is asked for — so this is recorded as a measurement rather than asserted as a
+defect. What makes it worth writing down anyway is that **D130 and D134 point foreign sessions
+here**: their notice reads *"run `amb inbox` if that concerns you"*, so a session told it has one
+counted broadcast is being directed at a 61,000-token command to read it. That consequence was not
+considered when those decisions were written, and it was written by the author of both.
+
+**Found by `tools/eyeball.sh`**, which is the only instrument that could: the number is a property of
+four days of accumulated real state, and a fixture is built to match the code rather than to
+outgrow it. Tests pass, mutation is irrelevant to a correct renderer, and the gate has no opinion
+about output size.
+
+**Not fixed here, and deliberately.** `amb inbox` is a surface two other sessions have shipped into
+today; the measurement is the contribution and the decision is theirs. If it is taken, D24's own
+three rules are the ready-made answer — cap the count, say how many were hidden, name the way
+through — because that is what this project already settled for the identical problem one renderer
+away.
