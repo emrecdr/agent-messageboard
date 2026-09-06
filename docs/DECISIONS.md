@@ -7447,6 +7447,13 @@ be adjacent.** Zero of seventy-two. D131 already carried a worked instance — `
 returns 7 notes here and `recall "glob anchors"` returns 0 with both words in the vault — so the
 defect was on record; what was missing was its size.
 
+**Measured twice, and the denominators differ because the vault grew between runs.** A note landed
+between them, so the second pass ran over 164 notes and 73 qualifying titles rather than 163 and
+72; every figure held — 0/73 contiguous against 73/73, and 21/73 for the three-word query against
+the first run's 21/72. `MEASUREMENTS.md` M73 carries the method and both runs. This paragraph
+exists because quoting one run is how `MEASUREMENTS.md` came to record two wrong sub-claims, and
+because a reader meeting 72 in one section and 73 in the next is owed the reason.
+
 ### Why now, and not "wait for the instrument"
 
 D88 states the sequence: *fix the defect, fix the instrument, then let the instrument choose.*

@@ -16,10 +16,11 @@ and why the on-disk schema is deliberately not one of them.
   anchors"` returned nothing with both words in the vault. It now splits on whitespace and requires
   **every** term to appear somewhere in the note's title or body, in any order.
 
-  Measured against the real 163-note vault before the change, with queries built from each note's
-  own title: the first and last content word of a note's own title found that note **0 times in
-  73**; requiring each term separately found it 73 times in 73. A three-word query from the title
-  went from 21/73 to 73/73.
+  Measured against the real vault before the change, with queries built from each note's own
+  title: the first and last content word of a note's own title found that note **0 times in 72**;
+  requiring each term separately found it 72 of 72. A three-word query from the title went from
+  21/72 to 72/72. Repeated after a note landed (164 notes, 73 qualifying titles): 0/73 and 73/73,
+  same result. Method and both runs are in `MEASUREMENTS.md` M73.
 
   It is a strict widening — anything containing `"glob anchors"` contiguously contains each word
   separately — verified across 328 generated queries with 0 losses and pinned as a property, not a

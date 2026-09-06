@@ -5031,3 +5031,84 @@ today; the measurement is the contribution and the decision is theirs. If it is 
 three rules are the ready-made answer — cap the count, say how many were hidden, name the way
 through — because that is what this project already settled for the identical problem one renderer
 away.
+
+## M73 · `recall` could not find a note by two words from its own title, and the ceiling was the proof
+
+**2026-09-06, twice, against the real vault.** Not a rate — a structural property, which is why it
+could authorise D136 without the `searches` ledger having a single row to offer.
+
+### Method
+
+`recall` is a substring match, so the matcher is replayable outside the binary: read every note in
+`$AMB_VAULT`, split frontmatter exactly as `query.rs::split_frontmatter` does, and reproduce
+`note_matches` — `title.contains(q) || body.contains(q)`, both lowercased. Queries are built from
+each note's **own title**: content words, stop-words dropped. That is deliberately the friendliest
+query anyone could type, so a failure here is a ceiling rather than a sample.
+
+Compared against two candidate rules: AND-of-substring-terms (what shipped) and FTS5 with the
+`porter unicode61` tokenizer over an in-memory index of the same corpus.
+
+Scripts are throwaway and were not kept; the method above is the artefact, and it is short enough
+to rebuild. `bench/` holds harnesses that must keep working — this is not one.
+
+### Run 1 — 163 notes (91 captures, 72 observations)
+
+| query = words from the note's own title | contiguous | AND of terms | FTS5 porter |
+|---|---|---|---|
+| first 2 content words (n=163) | 134 · 0.82 | 163 · 1.00 | 163 · 1.00 |
+| first 3 content words (n=72) | 21 · 0.29 | 72 · 1.00 | 72 · 1.00 |
+| first 4 content words (n=72) | 10 · 0.14 | 72 · 1.00 | 72 · 1.00 |
+| **first + last content word (n=72)** | **0 · 0.00** | 72 · 1.00 | 72 · 1.00 |
+
+n is 163 for the two-word row and 72 for the rest because only the 72 observations have three or
+more content words in their titles — a capture is titled `Bash failed`.
+
+### Run 2 — 164 notes, after one landed between passes
+
+0/73 contiguous against 73/73; the three-word query 21/73 against 73/73. Same result, and the
+reason the denominators differ across `DECISIONS.md` D136.
+
+### Precision, because a widening is not free
+
+Same title-derived queries, result-set size over 164 notes:
+
+| | median | p90 | max | >20 (the default limit) | >half the vault |
+|---|---|---|---|---|---|
+| first + last (n=73) | 2 | 10 | 58 | 3/73 | 0/73 |
+| first 3 (n=73) | 2 | 2 | 6 | 0/73 | 0/73 |
+
+The degenerate case was measured rather than waved at: `recall "a b"` returns all 164 notes where
+the old matcher returned 25. Both answers are useless and nobody types it, which is why no
+stop-word list and no minimum term length shipped.
+
+### The superset property, checked rather than argued
+
+328 generated queries, **0** where the old matcher's result was not a subset of the new one. That
+is the direction that matters: a retrieval change that silently loses results is worse than the
+defect it fixes.
+
+### Before and after on the live vault, through the real binaries
+
+Old binary and new, same 164-note vault, against a **copy** of the board and `--origin probe` so
+the ledger D136 is measured by is not moved by measuring it:
+
+| query | before | after |
+|---|---|---|
+| `glob anchors` | 2 | 2 |
+| `measurement window` | 1 | 2 |
+| `mutation testing` | 4 | 5 |
+| `false comment` | 2 | 4 |
+| `denominator ratio` | **0** | **3** |
+
+Nothing went down, which is the superset property surviving contact with real data. `glob anchors`
+is unchanged at 2 and D131 recorded it at 0 — the vault has since gained notes that carry the
+phrase contiguously, which is worth knowing before anyone re-quotes D131's example as live.
+
+### What this does not measure
+
+**Not the observed miss rate, and not its cause.** The ledger says 163 searches, 75 answered; what
+those queries *were* is not stored and D131 rejected storing it. This measures what the matcher
+can reach, not what people asked. The two are different instruments and only the first was needed
+to authorise a fix to the matcher.
+
+---
