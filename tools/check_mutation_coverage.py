@@ -147,7 +147,15 @@ def main() -> int:
         "  ! coverage is not reach either. Logic inside a SQL string is invisible to mutation —\n"
         "    messages::select is 109 lines and yields 4 mutants, none in the predicate, which is\n"
         "    where D17's addressing, the back-off, D96's horizon and D133's filters all live\n"
-        "    (M71). Re-running never fixes this one. Assert those clauses by hand."
+        "    (M71). Re-running never fixes this one. Assert those clauses by hand.\n"
+        "  ! and a SQL string is not the only lid. A method call and a macro are just as opaque:\n"
+        "    memory::query::text_matches decides D136 with `.all(..)`, a `format!` join and a\n"
+        "    `map_or`, and yields exactly two mutants — the whole function to true and to false,\n"
+        "    nothing inside it. That module scored 44/44 with 0 missed while every decision the\n"
+        "    round was run for went untouched (M74). `all`/`any` is a call, not an operator.\n"
+        "    When a function's decision is a call or a macro rather than an operator, run\n"
+        "    `cargo mutants --list --file <it>` before trusting the score — two mutants for a\n"
+        "    body holding three decisions is one command and ten seconds away."
     )
 
     if exempt:

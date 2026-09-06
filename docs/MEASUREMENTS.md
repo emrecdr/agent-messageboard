@@ -5112,3 +5112,70 @@ can reach, not what people asked. The two are different instruments and only the
 to authorise a fix to the matcher.
 
 ---
+
+## M74 · `query.rs` came back 44/44 with 0 missed, and the three decisions D136 rests on were never mutated
+
+**2026-09-06, `tools/mutants.sh src/memory/query.rs`**, after D136 rewrote the module's matcher.
+Nothing else was building; the run before this one was killed rather than allowed to overlap a
+commit, because a result produced beside another cargo is void rather than weak.
+
+| module | mutants | caught | missed | unviable | score |
+|---|---|---|---|---|---|
+| `memory/query.rs` | 49 | 44 | 0 | 5 | 100% of viable |
+
+`cfg_phantoms.py` self-test passed, 9 cfg shapes classified on darwin, 0 missed rows to split.
+
+### The score is real and it is not evidence for the thing I ran it for
+
+`cargo mutants --list` over the same file returns **two** mutants for `text_matches` — `-> true`
+and `-> false`, the whole function replaced — and nothing inside it. D136's decision is three
+things, and the round could not touch any of them:
+
+| the decision | how it is spelled | why no mutant exists |
+|---|---|---|
+| every term, not any | `terms.iter().all(..)` | `all`/`any` is a method call, not an operator |
+| title and body are one haystack | `format!("{title}\n{body}")` | inside a macro |
+| frontmatter is excluded | `split_frontmatter(..).map_or(..)` | a call, not an operator |
+
+Replacing the whole function with `false` is caught by any presence test; it says nothing about
+whether the *rule inside* is the intended one. **A 100% score over mutants that do not reach the
+decision is `MEASUREMENTS.md`'s own recurring shape**, and CLAUDE.md already names its sibling —
+*"logic inside a SQL string is invisible to mutation"*. This is the same blindness with a
+different lid: **a method call and a macro are as opaque to `cargo mutants` as a SQL string is.**
+
+### The guards are real; the evidence is hand-mutation, not the round
+
+Written before the code and each confirmed red by editing the source, running, and restoring from
+a file copy:
+
+| mutation | result |
+|---|---|
+| `search_terms` stops splitting (whole query as one term) | red — `the_ledger_counts_exactly_the_terms_the_matcher_requires` |
+| `all` -> `any` | red — `every_term_must_be_present_and_adjacency_is_no_longer_required` |
+| title dropped from the haystack | red — *only after the fixture was fixed*, see below |
+| back to contiguous (`hay.contains(&terms.join(" "))`) | red — the same test |
+
+### The one that survived first, which is the finding worth keeping
+
+Dropping the title from the haystack **passed**
+`a_widening_can_never_lose_a_note_the_old_matcher_found` — the test named for the property it
+breaks. Every body in that fixture happened to contain the title's words, so no case was ever
+answered by the title alone and half the rule was never reached. M17's shape, in a test written
+by someone who had just re-read M17.
+
+Two other tests in the module caught the mutant, so the rule was never unguarded — but the test
+carrying its name did not hold it, and a future reader trusting that name would have been wrong.
+The fixture now carries a term appearing **only** in the title, and counts how many cases the
+title alone answered, failing when that count is zero: an absence-style premise made to prove
+itself, which is M27's rule applied to a superset assertion.
+
+### What to do about the blind spot, since a score cannot see it
+
+Nothing automatic, and deliberately. `cargo mutants` cannot be taught to swap `all` for `any`
+without a plugin, and a rule saying "hand-mutate every method call" is unfollowable. What is
+checkable is narrower and worth saying at the point of use: **when a function's decision is a
+method call or a macro rather than an operator, `--list` it before trusting the score.** Two
+mutants for a function whose body holds three decisions is visible in one command and takes ten
+seconds.
+
+---
