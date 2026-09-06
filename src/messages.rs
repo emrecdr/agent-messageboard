@@ -211,6 +211,35 @@ impl Message {
 const MESSAGE_COLUMNS: &str = "m.id, m.ts, m.from_agent, a.name, m.from_proj, m.to_agent, \
                                m.to_proj, m.kind, m.subject, m.body, m.thread_id";
 
+/// The twelfth column: has *this reader* acknowledged this message.
+///
+/// **`MESSAGE_COLUMNS`'s promise stopped at column eleven, and two functions had already walked
+/// past it.** That constant says adding a column without adding it to [`row_to_message`] is a
+/// compile error rather than a silently shifted index — true of the eleven it names, and both
+/// `select` and `thread` then appended this `EXISTS` by hand and read it back with a literal
+/// `r.get(11)`. Two hand-written copies of one index, each failing at *runtime* rather than at
+/// compile time, in the file whose column contract exists to make that impossible.
+///
+/// Takes the agent placeholder because the two callers number their parameters differently —
+/// `?2` in `select`, `?3` in `thread`. That is the only thing that ever differed between them.
+fn read_column(agent_param: &str) -> String {
+    format!(
+        "EXISTS(SELECT 1 FROM reads r
+                        WHERE r.msg_id = m.id AND r.agent = {agent_param} \
+                          AND r.read_at IS NOT NULL)"
+    )
+}
+
+/// [`row_to_message`] plus [`read_column`], for a query that selected both.
+///
+/// The index lives here rather than at each call site, so it is one number in one place — which
+/// is what `MESSAGE_COLUMNS` already promised for the other eleven.
+fn row_to_message_read(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+    let mut m = row_to_message(r)?;
+    m.read = Some(r.get(11)?);
+    Ok(m)
+}
+
 /// Build a [`Message`] from a row selecting [`MESSAGE_COLUMNS`].
 fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     Ok(Message {
@@ -429,12 +458,25 @@ pub struct Filter {
 impl Filter {
     /// Split a free-text query into terms — the whole difference between this and D131's defect.
     ///
-    /// **`memory::search` lowercases the entire query into one needle** and asks whether a body
-    /// contains it contiguously, so `recall "glob anchors"` returns nothing with both words in the
-    /// vault. D131 shipped a `terms` column hours ago to measure how often that costs a search;
-    /// it answered 65 of 146. Writing a second surface with the same semantics would be this
-    /// project's most-repeated mistake — fixing one instance trains attention on the thing fixed
-    /// rather than on its siblings (D86, D88, D90) — so this one splits, and every term must match.
+    /// **Until D136, `memory::search` folded the entire query into one needle** and asked whether
+    /// a body contained it contiguously, so `recall "glob anchors"` returned nothing with both
+    /// words in the vault. D131 shipped a `terms` column to measure how often that cost a search
+    /// and it answered 65 of 146. Writing a second surface with the same semantics would have
+    /// been this project's most-repeated mistake — fixing one instance trains attention on the
+    /// thing fixed rather than on its siblings (D86, D88, D90) — so this one split from the
+    /// start, and every term must match.
+    ///
+    /// **The contrast is now historical: `memory::search` was fixed the same way** (D136,
+    /// `7cd81a6`), on stronger evidence than D131's — replaying the real matcher over the real
+    /// 163-note vault, a note's own first and last title words found it **0 times in 73**, and
+    /// requiring each term separately found it 73 of 73.
+    ///
+    /// **The two functions stay separate anyway, and that is a decision rather than an
+    /// oversight.** `text::term_count` tokenises identically today, so `terms_of(q).len()`
+    /// equals it for every input. Merging them would couple an inbox filter to a vault matcher
+    /// documented to be free to diverge — D51's "correct by accident", where a later change to
+    /// one silently changes the other. Named here so the next reader who notices they agree
+    /// finds the reason before helpfully consolidating them.
     #[must_use]
     pub fn terms_of(query: &str) -> Vec<String> {
         query
@@ -482,10 +524,24 @@ impl Filter {
 /// silently, returning *more* than was asked for, which is the direction a searcher is least
 /// likely to notice. Escaped with `\`, and every clause using this carries `ESCAPE '\'`.
 ///
-/// Lowercased to pair with `lower()` on the column rather than relying on `LIKE`'s own folding,
-/// which SQLite applies to ASCII only: a term containing any non-ASCII would otherwise match
-/// case-*sensitively* while the term beside it did not, and a rule that holds for some words in a
-/// query is worse than one that holds for none.
+/// **This used to wrap the column in `lower()` and the argument for doing so was false.** The
+/// docstring here claimed the pairing bought non-ASCII case folding that `LIKE` alone would not
+/// give — but SQLite's own `lower()` is *also* ASCII-only unless the ICU extension is compiled
+/// in, and `rusqlite`'s `bundled` feature does not compile it in. Both forms fold exactly the
+/// ASCII set, which `sqlite_folds_ascii_only_which_is_what_made_the_lower_wrapper_removable`
+/// pins as a property of the engine.
+///
+/// So the wrapper bought nothing and cost a function call per row per term. Measured by
+/// `amb-hardening` over 519 messages and 1.09 MB of subject+body, best of three, identical
+/// 80-row result: **2.33 ms with `lower(col)` against 1.63 ms without — 43% of the clause.**
+///
+/// This is the shape `CLAUDE.md` calls the hardest to disbelieve: *a comment that argues for the
+/// design it sits on*. It read as a considered trade between two folding strategies, and the
+/// premise — that the two fold differently — was never true.
+///
+/// The term is still lowered because `Filter::terms_of` lowers it anyway; keeping it here makes
+/// the function total rather than dependent on its caller. `LIKE`'s own ASCII folding is what
+/// does the matching work, and neither form has ever folded anything else.
 fn like_contains(term: &str) -> String {
     let mut out = String::with_capacity(term.len() + 2);
     out.push('%');
@@ -566,8 +622,8 @@ fn select(
     let mut binds: Vec<rusqlite::types::Value> = vec![
         me.project.clone().into(),
         me.id.clone().into(),
-        i64::from(unread_only).into(),
-        max_offers.map_or(rusqlite::types::Value::Null, Into::into),
+        unread_only.into(),
+        max_offers.into(),
         cutoff.into(),
     ];
     let mut narrowing = String::new();
@@ -589,20 +645,21 @@ fn select(
     for term in &filter.terms {
         binds.push(like_contains(term).into());
         let n = binds.len();
-        // **One clause per term, ANDed** — D131's defect is a single needle for the whole query,
-        // and the fix is structural rather than a better needle. Each term may land in either
+        // **One clause per term, ANDed** — D131's defect was a single needle for the whole query,
+        // and the fix was structural rather than a better needle. (Past tense since D136 applied
+        // the same fix to `memory::search`; this surface never had the defect.) Each term may land in either
         // field, so `disk cargo` finds a message whose subject says one and whose body says the
         // other; requiring both in the same column would be a narrower rule nobody asked for.
         let _ = write!(
             narrowing,
-            "\n          AND (lower(m.subject) LIKE ?{n} ESCAPE '\\' \
-             OR lower(m.body) LIKE ?{n} ESCAPE '\\')"
+            "\n          AND (m.subject LIKE ?{n} ESCAPE '\\' \
+             OR m.body LIKE ?{n} ESCAPE '\\')"
         );
     }
+    let read = read_column("?2");
     let sql_text = format!(
         "SELECT {MESSAGE_COLUMNS},
-                EXISTS(SELECT 1 FROM reads r
-                        WHERE r.msg_id = m.id AND r.agent = ?2 AND r.read_at IS NOT NULL)
+                {read}
         FROM messages m
         LEFT JOIN agents a ON a.id = m.from_agent
         WHERE
@@ -639,11 +696,7 @@ fn select(
         .prepare(&sql_text)
         .map_err(sql("preparing the inbox query"))?;
     let rows = stmt
-        .query_map(rusqlite::params_from_iter(binds), |r| {
-            let mut m = row_to_message(r)?;
-            m.read = Some(r.get(11)?);
-            Ok(m)
-        })
+        .query_map(rusqlite::params_from_iter(binds), row_to_message_read)
         .map_err(sql("running the inbox query"))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(sql("reading an inbox row"))
@@ -1085,10 +1138,10 @@ pub fn thread(conn: &Connection, me: &Identity, msg_id: i64) -> Result<Vec<Messa
     // match message id 0, which is a different conversation. `-1` matches no row, since `id` is
     // `INTEGER PRIMARY KEY AUTOINCREMENT` and starts at 1.
     let root_id: i64 = root.parse().unwrap_or(-1);
+    let read = read_column("?3");
     let sql_text = format!(
         "SELECT {MESSAGE_COLUMNS},
-                EXISTS(SELECT 1 FROM reads r
-                        WHERE r.msg_id = m.id AND r.agent = ?3 AND r.read_at IS NOT NULL)
+                {read}
          FROM messages m
          LEFT JOIN agents a ON a.id = m.from_agent
          WHERE m.id = ?1 OR m.thread_id = ?2
@@ -1098,11 +1151,7 @@ pub fn thread(conn: &Connection, me: &Identity, msg_id: i64) -> Result<Vec<Messa
         .prepare(&sql_text)
         .map_err(sql("preparing the thread query"))?;
     let rows = stmt
-        .query_map(params![root_id, root, me.id], |r| {
-            let mut m = row_to_message(r)?;
-            m.read = Some(r.get(11)?);
-            Ok(m)
-        })
+        .query_map(params![root_id, root, me.id], row_to_message_read)
         .map_err(sql("running the thread query"))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(sql("reading a thread row"))
@@ -2324,11 +2373,14 @@ mod tests {
 
     /// **The whole of F6's difference from D131's defect, in one assertion.**
     ///
-    /// `memory::search` lowercases a query into a single needle and asks for a contiguous match,
-    /// so `recall "glob anchors"` returns nothing while both words sit in the vault. That is a
-    /// *measured* failure — D131 shipped a column to count it and it answered 65 of 146. This
-    /// splits instead, and the test states the contrast rather than only the behaviour, because
-    /// the next reader's temptation is to "simplify" this back into one `contains`.
+    /// Until D136, `memory::search` folded a query into a single needle and asked for a
+    /// contiguous match, so `recall "glob anchors"` returned nothing while both words sat in the
+    /// vault — a *measured* failure, at 65 of 146 searches. This surface split from the start.
+    ///
+    /// **The name still describes what `terms_of` does, so it stays.** The contrast it draws is
+    /// historical now that `memory::search` splits too, but the property under test is unchanged
+    /// and the next reader's temptation is the same one: to "simplify" this back into a single
+    /// `contains`.
     #[test]
     fn a_query_becomes_one_term_per_word_rather_than_one_needle() {
         assert_eq!(Filter::terms_of("glob anchors"), vec!["glob", "anchors"]);
@@ -2535,6 +2587,51 @@ mod tests {
             1,
             "the presence row: `the` really is in one body, so the absence above is not vacuous"
         );
+    }
+
+    /// **The premise of dropping `lower(col)` from the term clauses, pinned as a property of the
+    /// engine — because no result-shaped assertion can see this change.**
+    ///
+    /// Removing the wrapper is behaviour-identical, so every test above stays green either way and
+    /// re-adding it would redden nothing. What *can* be asserted is the claim the removal rests
+    /// on: that SQLite's `lower()` and `LIKE`'s own folding cover exactly the same set, so the
+    /// pairing bought nothing and cost a call per row per term (43% of the clause, measured).
+    ///
+    /// It rests on `rusqlite`'s `bundled` feature not compiling in ICU. If that ever changes, this
+    /// reddens — which is the notice that `like_contains`'s docstring has stopped being true.
+    #[test]
+    fn sqlite_folds_ascii_only_which_is_what_made_the_lower_wrapper_removable() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory board");
+        let one = |sql: &str| -> i64 {
+            conn.query_row(&format!("SELECT {sql}"), [], |r| r.get(0))
+                .expect(sql)
+        };
+        let text = |sql: &str| -> String {
+            conn.query_row(&format!("SELECT {sql}"), [], |r| r.get(0))
+                .expect(sql)
+        };
+
+        // `lower()` leaves a non-ASCII capital exactly where it found it.
+        assert_eq!(
+            text("lower('ÉCOLE')"),
+            "École",
+            "bundled SQLite folded a non-ASCII capital — ICU is compiled in, and the wrapper is \
+             no longer equivalent to LIKE's own folding"
+        );
+
+        // The two forms agree on every case that matters, which is the whole claim.
+        for (with, without) in [
+            ("lower('ÉCOLE') LIKE '%école%'", "'ÉCOLE' LIKE '%école%'"),
+            ("lower('TEST') LIKE '%test%'", "'TEST' LIKE '%test%'"),
+            ("lower('test') LIKE '%TEST%'", "'test' LIKE '%TEST%'"),
+        ] {
+            assert_eq!(one(with), one(without), "{with} vs {without}");
+        }
+
+        // Presence and absence, so neither side of the comparison above is vacuously equal
+        // because both are always 0.
+        assert_eq!(one("'TEST' LIKE '%test%'"), 1, "ASCII folds");
+        assert_eq!(one("'ÉCOLE' LIKE '%école%'"), 0, "non-ASCII does not");
     }
 
     /// **The unfiltered query is the one the hooks run, and F6 must not have moved it.**

@@ -90,6 +90,35 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Fixed
 
+- **A comment that argued for the design it sat on, and was never true** (peer findings #523/#524).
+  `messages::select` wrapped both term clauses in `lower(col)`, and `like_contains`'s docstring
+  explained the pairing as buying non-ASCII case folding that `LIKE` alone would not give. SQLite's
+  `lower()` is *also* ASCII-only unless ICU is compiled in, and `rusqlite`'s `bundled` feature does
+  not compile it in — verified: `lower('ÉCOLE')` returns `'École'`, and both forms return 0 on the
+  non-ASCII case. The wrapper bought nothing and cost a call per row per term: **2.33 ms → 1.63 ms,
+  43% of the clause**, measured by `amb-hardening` over 519 messages and 1.09 MB of text.
+
+  The removal is behaviour-identical, so no result-shaped assertion can see it and re-adding the
+  wrapper would redden nothing. A new test pins the *premise* instead — that the two fold the same
+  set — so if ICU ever arrives, the docstring's claim fails loudly rather than quietly becoming
+  true again.
+
+- **`MESSAGE_COLUMNS` promised a compile error and the promise stopped at column eleven.** Its
+  docstring says adding a column without adding it to `row_to_message` is a compile error rather
+  than a silently shifted index — true of the eleven it names, while `select` and `thread` each
+  appended the read-state `EXISTS` by hand and read it back with a literal `r.get(11)`. Two
+  hand-written copies of one index, both failing at runtime, in the file whose column contract
+  exists to make that impossible. Now `read_column()` and `row_to_message_read()`, one each.
+
+- **Three docstrings described a `memory::search` that no longer exists** (D136, routed by
+  `amb-hardening` in #524). They argued — correctly, when written — that F6 split query terms
+  where `memory::search` folded them into one contiguous needle. D136 fixed `memory::search` the
+  same way, so the contrast is historical rather than current; the argument for the two functions
+  staying separate is unchanged and now says why explicitly, so the next reader who notices they
+  agree finds the reason before consolidating them (D51).
+
+
+
 - **`amb memory recall` could not find a note by two words from its own title** (D136). The query
   was folded into one lowercased string the body had to reproduce *contiguously*, so `recall "glob
   anchors"` returned nothing with both words in the vault. It now splits on whitespace and requires
