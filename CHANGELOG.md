@@ -9,6 +9,33 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The foreign-broadcast notice repeated at every turn boundary; it is now offered once** (D134).
+  D130 replaced spelled-out `@@` traffic from other repositories with a single counted line, then
+  deliberately kept those ids out of `Rendered::shown` so the back-off could not reach them. Result:
+  the identical line injected every turn until D96's 24-hour horizon — D24's measured defect in
+  miniature, reintroduced hours after D130 cited D24.
+
+  The reasoning was that recording a counted line as an offer would burn the back-off on content
+  nobody was shown. Wrong: **there is no further content coming.** The whole offer is *that these
+  exist and where they are*, so the first mention is the thing rather than a down-payment, and
+  stopping after it is the intended terminal state.
+
+  A session in an unrelated repo spent a turn explaining the notice to its user and then muted it —
+  *"I've left them unread"* — which is precisely the signal the notification literature names for
+  retiring or downgrading a channel, alongside the rule that an unread badge only works when
+  arrivals are infrequent. For a foreign repo, they are not.
+
+  `FOREIGN_GLOBAL_OFFERS = 1`, applied **per message**, so a genuinely new global still earns one
+  mention: four produce a notice on turn 1 and silence on 2–5; a fifth arriving on turn 6 produces
+  exactly one more. `amb inbox` is untouched and still returns everything — the notice points there,
+  so a fix that quietened the hook by hiding the mail would be worse than the defect.
+
+  D130's `a_withheld_global_is_never_recorded_as_an_offer` asserted the behaviour that caused this,
+  so the fix turns it red — D128's shape, in a test, written by whoever documented D128 the day
+  before. Inverted rather than deleted, with the old reasoning kept in the new one's docstring.
+
 ### Added
 
 - **`amb inbox` can be narrowed** (D133, F6): `--from alice`, `--kind findings`, and free words —

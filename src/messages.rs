@@ -368,6 +368,28 @@ pub fn send(conn: &mut Connection, me: &Identity, out: &Outgoing<'_>) -> Result<
 /// `amb inbox` still shows it, because a log you cannot re-read is not a log.
 pub const MAX_OFFERS: i64 = 10;
 
+/// How many times a `@@` from *another* project is mentioned to a session before it stops (D134).
+///
+/// **One. It is a notice, not a message, and a notice repeated is D24's defect.** D130 withholds
+/// the content of a foreign global and renders a single counted line instead; that line was then
+/// injected at *every* turn boundary, byte-identical, because nothing drained it. D24 measured
+/// exactly this shape at 20,779 characters a turn and the fix was a cap — reintroduced here in
+/// miniature by the author of D130, hours after citing D24.
+///
+/// **The industry framing is a badge, and the rule is explicit**: report an unread state only when
+/// arriving notifications are relatively infrequent, "because if unread notifications will be
+/// present most of the time, alerting the user in this way loses its effect and is potentially
+/// distracting". For a session in an unrelated repository, foreign globals are present *most of
+/// the time* — that is the steady state, not an edge case. A session shown the line and given no
+/// way to drain it does the only thing left: it mutes. One did, in as many words — *"I've left
+/// them unread rather than acknowledging mail on your behalf."*
+///
+/// **Why one rather than a smaller [`MAX_OFFERS`].** There is no further content to offer. The
+/// whole of what this reader will ever be given is *that these exist and where they are*, so a
+/// second telling adds nothing a first did not. That is what makes 1 principled rather than
+/// merely small.
+pub const FOREIGN_GLOBAL_OFFERS: i64 = 1;
+
 /// What narrows an inbox. Every field empty means "everything", which is what the hooks pass.
 ///
 /// **A filter is not an addressing mode, and that distinction is what keeps D17 intact.** The 2×2
@@ -578,9 +600,18 @@ fn select(
                 SELECT 1 FROM reads r
                 WHERE r.msg_id = m.id AND r.agent = ?2 AND r.read_at IS NOT NULL))
           -- The back-off, applied only on the delivery path (?4 IS NULL for an explicit read).
+          -- **The cap is per message, not per query** (D134). A `@@` from another project is
+          -- withheld by D130 and reaches this reader as one counted line, so there is no second
+          -- thing to offer and it stops after `FOREIGN_GLOBAL_OFFERS`. Everything else keeps the
+          -- caller's own cap. `?4 IS NULL` is an explicit `amb inbox`, which is the escape hatch
+          -- the notice points at and must therefore never be narrowed by this.
           AND (?4 IS NULL OR NOT EXISTS (
                 SELECT 1 FROM reads r
-                WHERE r.msg_id = m.id AND r.agent = ?2 AND r.attempts >= ?4))
+                WHERE r.msg_id = m.id AND r.agent = ?2
+                  AND r.attempts >= (CASE
+                        WHEN m.to_agent IS NULL AND m.to_proj IS NULL AND m.from_proj <> ?1
+                        THEN MIN(?4, {FOREIGN_GLOBAL_OFFERS})
+                        ELSE ?4 END)))
           -- D96's horizon, on the same delivery-only condition and for the same reason. A
           -- **broadcast** past it stops being injected; a message addressed to this agent never
           -- expires, because a question asked of you personally does not stop mattering because
@@ -1278,6 +1309,88 @@ mod tests {
             crate::identity::touch(&conn, me, Some(&me.name)).expect("register");
         }
         (dir, conn, alice, bob, carol)
+    }
+
+    /// **A `@@` from elsewhere is offered once and then stops; `amb inbox` still has it** (D134).
+    ///
+    /// The defect this guards was measured, not imagined: five consecutive `Stop` hooks against a
+    /// board with four foreign globals produced the identical notice five times, because D130 kept
+    /// those ids out of `Rendered::shown` so nothing ever incremented `attempts`. A session that
+    /// received it muted it, which the notification literature names as the signal to retire or
+    /// downgrade a channel rather than repeat it.
+    ///
+    /// Three assertions, and the third is the one that keeps the design honest: the notice points
+    /// at `amb inbox`, so `amb inbox` must never inherit this cap. A fix that quietened the hook by
+    /// also hiding the mail would be strictly worse than the defect.
+    #[test]
+    fn a_foreign_global_is_offered_once_and_stays_readable_forever() {
+        // Carol is in `other`; the broadcast comes from `nest`, so it is foreign to her.
+        let (_d, mut conn, alice, _bob, carol) = board();
+        let everywhere = Recipient {
+            agent_id: None,
+            project: None,
+        };
+        let id = send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &everywhere,
+                subject: "cargo HOLD",
+                body: "b",
+                kind: "note",
+                thread: None,
+                ext_id: None,
+            },
+        )
+        .expect("send");
+
+        // First delivery offers it.
+        let first = deliverable(&conn, &carol).expect("deliverable");
+        assert_eq!(first.len(), 1, "the first turn must learn it exists");
+        mark_delivered_all(&mut conn, &carol, &[id]).expect("record");
+
+        // Every turn after that: silence on the delivery path.
+        for turn in 2..=5 {
+            let again = deliverable(&conn, &carol).expect("deliverable");
+            assert!(
+                again.is_empty(),
+                "turn {turn}: a foreign global must be offered once, not every turn"
+            );
+        }
+
+        // **And it is still there for anyone who asks.** `amb inbox` passes no cap, and the notice
+        // it printed said to run exactly this.
+        let inbox = inbox(&conn, &carol, false).expect("inbox");
+        assert_eq!(
+            inbox.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![id],
+            "the escape hatch the notice points at must never inherit the cap"
+        );
+
+        // The presence row: mail addressed to this reader is NOT capped at one.
+        let to_carol = Recipient {
+            agent_id: Some(carol.id.clone()),
+            project: Some("other".into()),
+        };
+        let direct = send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &to_carol,
+                subject: "for you",
+                body: "b",
+                kind: "note",
+                thread: None,
+                ext_id: None,
+            },
+        )
+        .expect("send");
+        mark_delivered_all(&mut conn, &carol, &[direct]).expect("record");
+        let after = deliverable(&conn, &carol).expect("deliverable");
+        assert!(
+            after.iter().any(|m| m.id == direct),
+            "a message addressed to this agent keeps the ordinary back-off, not the notice cap"
+        );
     }
 
     /// **The root of a thread is not a member of its own thread, and the count is the assertion.**

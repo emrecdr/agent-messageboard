@@ -353,12 +353,25 @@ fn addressed_elsewhere(m: &Message, me_project: &str) -> bool {
 /// tells a reader nothing about whether to look; "from agent-messageboard, studygo" lets them
 /// decide in the width of one line, which is the whole budget this is allowed to spend.
 ///
-/// **These messages are deliberately absent from [`Rendered::shown`].** That field is documented as
-/// the set an offer is recorded against, and it drives `mark_delivered_all`, which increments
-/// `attempts`. Counting a line as an offer would burn the back-off on content nobody was shown, so
-/// after `MAX_OFFERS` turn boundaries the message would stop being injected and vanish having never
-/// been read — a disk emergency expiring unseen, which is D89's shape exactly. Nothing is recorded,
-/// so nothing expires early; D96's 24-hour horizon is what bounds this line, and it already exists.
+/// **These messages ARE recorded in [`Rendered::shown`], and D130 argued the opposite** (D134).
+///
+/// The original reasoning: recording a counted line as an offer would burn the back-off on content
+/// nobody was shown, so the message would stop being injected having never been read. That was
+/// wrong, and the error is worth keeping because it is subtle. There is no further content coming.
+/// The entire offer this reader will ever receive is *that these exist and where they are*, so the
+/// first mention is not a down-payment on a fuller one — it is the whole thing. "Expiring after one
+/// offer" is the intended terminal state, not a loss.
+///
+/// What the original reasoning actually built was a notice with **no drain**: injected at every
+/// turn boundary, byte-identical, for as long as D96's 24-hour horizon allowed. That is D24's
+/// measured defect in miniature, reintroduced hours after citing D24. A session receiving it did
+/// the only thing available and muted it — *"I've left them unread rather than acknowledging mail
+/// on your behalf"* — which is the outcome the notification literature names as the signal to
+/// retire or downgrade a channel.
+///
+/// So the ids go into `shown`, `mark_delivered_all` increments `attempts`, and
+/// [`crate::messages::FOREIGN_GLOBAL_OFFERS`] stops it at one. A *new* foreign global still earns
+/// its own single mention, because the cap is per message rather than per session.
 fn render_elsewhere(elsewhere: &[&Message], out: &mut String) {
     if elsewhere.is_empty() {
         return;
@@ -478,6 +491,9 @@ pub fn render_all(
                 "  \u{2026}and {hidden} more \u{2014} run `amb inbox` to see them all."
             );
         }
+        // Recorded, so the cap can bite (D134). Without this nothing increments `attempts` and
+        // the notice has no drain at all.
+        shown_ids.extend(elsewhere.iter().map(|m| m.id));
         render_elsewhere(&elsewhere, &mut out);
         out.push_str(
             "  Reply with `amb reply <id> --body \"...\"`, acknowledge with `amb read <id>` \
@@ -1078,35 +1094,31 @@ mod tests {
         crate::assert_rendered_shape("render_all elsewhere", &out);
     }
 
-    /// **A withheld global is not an offer, so it must not be recorded as one** (D130).
+    /// **A withheld global IS an offer — it is the only one this reader will ever get** (D134).
     ///
-    /// `Rendered::shown` is documented as the set an offer is recorded against, and it drives
-    /// `mark_delivered_all`, which increments `attempts`. If a counted-but-unshown message went
-    /// into it, the back-off would burn on content nobody read and after `MAX_OFFERS` turn
-    /// boundaries the message would stop being injected entirely — a disk emergency expiring
-    /// unseen. D89's rule: a ledger that only writes on success reports a broken mechanism as an
-    /// idle one, and here it would manufacture the failure rather than merely hide it.
+    /// This test previously asserted the opposite, under the name
+    /// `a_withheld_global_is_never_recorded_as_an_offer`, and it was **pinning a defect**: with the
+    /// ids kept out of `shown`, nothing incremented `attempts`, so the counted line had no drain
+    /// and was injected at every turn boundary byte-identical until D96's 24-hour horizon. D24's
+    /// measured defect, in miniature, guarded by a test that would have reddened on the fix.
+    ///
+    /// That is the same shape as D128 — an assertion whose failure message argued for the wrong
+    /// behaviour — and it is recorded here rather than quietly rewritten because I wrote both the
+    /// defect and the test that defended it, in the same commit, having documented D128 the day
+    /// before.
     #[test]
-    fn a_withheld_global_is_never_recorded_as_an_offer() {
+    fn a_withheld_global_is_recorded_so_the_notice_can_stop() {
         let mut foreign = msg(1, None, None);
         foreign.from_proj = "codelore".into();
         let mine = msg(2, Some("uuid-bob"), None);
 
         let r = render_all(&[foreign, mine], &[], 0.0, false, "nest").expect("renders");
+        let mut shown = r.shown.clone();
+        shown.sort_unstable();
         assert_eq!(
-            r.shown,
-            vec![2],
-            "only the message actually spelled out is an offer"
-        );
-
-        // The presence row: a global from this project IS shown, so the exclusion above is about
-        // provenance and not about globals in general.
-        let own = msg(3, None, None);
-        let r2 = render_all(&[own], &[], 0.0, false, "nest").expect("renders");
-        assert_eq!(
-            r2.shown,
-            vec![3],
-            "a global from this project is ordinary mail here"
+            shown,
+            vec![1, 2],
+            "the withheld global must be recorded, or the notice never drains"
         );
     }
 
