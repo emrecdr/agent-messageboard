@@ -1051,3 +1051,106 @@ fn sending_to_a_session_that_has_ended_says_so_and_sending_to_a_live_one_stays_q
         "and that the message survives — it is a log, not a dropped write: {departed}"
     );
 }
+
+/// **F6's filters through the shipped binary, including the zero that means something else.**
+///
+/// The library tests assert `inbox_matching` against a `Connection`, which is the cheap layer to
+/// write and therefore the one that exists first (M20). This drives `amb inbox` itself, because
+/// two of the three things F6 adds live outside the query: the CLI has to turn loose words into
+/// terms, and the empty result has to say which kind of empty it is.
+///
+/// **The `narrowed_by` key is the half a parsing agent depends on.** `count: 0` is identical
+/// whether the inbox is empty or the filter missed, and unlike a person reading the rendered
+/// sentence, a program has no other channel to find out. That is D132's lesson applied on the
+/// same day it was learned, one surface away.
+#[test]
+fn inbox_filters_narrow_through_the_binary_and_say_so_when_they_match_nothing() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run("uuid-bob", &["register", "--name", "bob"]);
+    b.run("uuid-carol", &["register", "--name", "carol"]);
+
+    let send = |who: &str, subject: &str, body: &str, kind: &str| {
+        b.run(
+            who,
+            &[
+                "send",
+                "bob",
+                "--subject",
+                subject,
+                "--body",
+                body,
+                "--kind",
+                kind,
+            ],
+        );
+    };
+    send(
+        "uuid-alice",
+        "cargo hold",
+        "taking cargo for a round",
+        "proposal",
+    );
+    send(
+        "uuid-alice",
+        "disk at 99%",
+        "the shared target dir is 29G",
+        "findings",
+    );
+    send(
+        "uuid-carol",
+        "glob anchors",
+        "anchors and glob patterns",
+        "note",
+    );
+
+    let subjects = |args: &[&str]| -> Vec<String> {
+        b.json("uuid-bob", args)["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["subject"].as_str().expect("subject").to_string())
+            .collect()
+    };
+
+    assert_eq!(subjects(&["inbox"]).len(), 3, "the unfiltered baseline");
+    assert_eq!(
+        subjects(&["inbox", "--from", "carol"]),
+        vec!["glob anchors"]
+    );
+    assert_eq!(
+        subjects(&["inbox", "--kind", "findings"]),
+        vec!["disk at 99%"]
+    );
+
+    // Loose words become terms, and every one must match. Reversed order on purpose: this is the
+    // query shape that returns nothing from `amb memory recall`, and the reason F6 splits (D131).
+    assert_eq!(
+        subjects(&["inbox", "anchors", "glob"]),
+        vec!["glob anchors"]
+    );
+    // One term in the subject, one only in the body — the CLI cannot know which field a word is in.
+    assert_eq!(subjects(&["inbox", "disk", "29G"]), vec!["disk at 99%"]);
+
+    // The zero that is not an empty inbox: JSON says what was applied, and the rendered form says
+    // the inbox may not be empty. Both, because the two audiences have different next moves.
+    let missed = b.json("uuid-bob", &["inbox", "--from", "ghost"]);
+    assert_eq!(missed["count"], 0);
+    assert_eq!(
+        missed["narrowed_by"], "from ghost",
+        "a program must be able to tell a miss from an empty inbox: {missed}"
+    );
+    let rendered = b.run("uuid-bob", &["inbox", "--from", "ghost"]);
+    assert!(
+        rendered.contains("the inbox itself may not be empty"),
+        "and so must a person: {rendered}"
+    );
+
+    // The presence row that proves the assertions above are not vacuous: with no filter the key
+    // is null and the old sentence is the one that prints.
+    let plain = b.json("uuid-bob", &["inbox"]);
+    assert!(
+        plain["narrowed_by"].is_null(),
+        "an unfiltered inbox narrowed nothing: {plain}"
+    );
+}

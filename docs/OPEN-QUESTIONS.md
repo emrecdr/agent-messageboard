@@ -275,3 +275,51 @@ question closes with D27 and the messaging half of the project with it. If the m
 to be laptops that sleep with no always-on host among them, the hub degrades into a merge problem
 and the replication argument deserves re-opening on its merits rather than being inherited from
 here.
+
+### Re-checked 2026-09-06, and the ground moved under two of its premises
+
+**Still open, and closer to buildable than it reads above — but not from this machine.** The
+question was re-validated rather than re-argued, because the section above is dense with claims
+that were true on 2026-08-27 and are checkable now.
+
+**The platform grew the thing D27 and D101 said it would not.** Claude Code v2.1.225 lets a session
+*initiate* to a session on another of your machines, where v2.1.224 could only reply. `ListAgents`
+on this machine returns 15 peers, and three of them are `Remote Control` rows for other machines.
+So the flat statement above — that native cross-session messaging needs both sessions live and
+reaches one named recipient at a time — has had its first clause weakened.
+
+**Its withdrawal condition is nevertheless NOT met, and the same listing is the evidence.** The
+condition is a conjunction: persistence for absent sessions *and* a broadcast address. All three
+Remote Control rows print `offline`, and an offline session cannot be sent to; `SendMessage` still
+takes one named live recipient. That is D17's distinction demonstrated live rather than argued —
+`@project` addresses a **place**, so an agent that registers afterwards still receives the
+broadcast, and the platform's model cannot express a recipient that is not currently there. The
+durable half remains uncovered, which is the half `amb` exists for.
+
+**Three costs the section above does not price, found while validating it.**
+
+- **The hook path is per *tool call*, not per session.** `PreToolUse` and `PostToolUse` both fire on
+  every tool use, so a hundred-tool session is roughly two hundred database touches. Measured here:
+  the `hook monitor` path is **4.12 ms median** (30 runs, warm). A LAN SSH handshake is 50–200 ms
+  and a multiplexed one is single-digit ms at best. The `AMB_HUB` design routes *anything that
+  touches the database*, so the multiplier lands on the one path D9 forbids breaking. Fail-open on
+  an unreachable hub is necessary and not sufficient; the reachable-but-slow hub is the harder case
+  and is unbudgeted above.
+- **The transport is a shell-quoting surface, and this project has been bitten twice in one day.**
+  `ssh $AMB_HUB amb send bob --body "$BODY"` puts a sender-written body — newlines, quotes,
+  backticks — through a remote shell. `--body-file` exists because of exactly this on the *local*
+  side (U9). Any implementation must pass argv as an array and never build a remote command string,
+  and the section above does not say so.
+- **`agents.host` is schema 16, and D131 makes the timing a first-class hazard.** A migration runs
+  on `open`, so the first execution of a new binary migrates the shared board and every installed
+  copy then refuses it — machine-wide, from a change still in the working tree. With three sessions
+  live on this board, the migration is a coordinated action rather than a commit.
+
+**And the practical blocker, which is none of the above.** There is nothing here to hub *to*:
+`sshd` is not running, `~/.ssh/config` names only `bitbucket.org`, and all four `known_hosts`
+entries are git forges. The fake-`ssh` seam suggested above tests the composition of the arguments
+and nothing about the transport — which is precisely the gap `eyeball.sh` exists to cover for the
+local surfaces (M32). **Building this without a real second host would ship the central mechanism
+unexercised**, and the section above already forbids quoting a latency figure obtained that way.
+
+So: unchanged in principle, better specified, and waiting on a hub rather than on a decision.

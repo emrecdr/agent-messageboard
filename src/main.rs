@@ -70,6 +70,15 @@ enum Command {
         /// Hide messages this agent has already acknowledged with `amb read`.
         #[arg(long)]
         unread: bool,
+        /// Only mail from this sender — a display name or an agent id.
+        #[arg(long, value_name = "AGENT")]
+        from: Option<String>,
+        /// Only mail whose sender set this --kind. `note` is the default, so it is a real value.
+        #[arg(long, value_name = "KIND")]
+        kind: Option<String>,
+        /// Words that must ALL appear, each in a subject or a body: `amb inbox disk cargo`.
+        #[arg(value_name = "TERM")]
+        terms: Vec<String>,
     },
     /// Acknowledge messages. The only thing that marks one read (D9).
     Read {
@@ -662,15 +671,39 @@ fn run(cli: Cli) -> Result<(), Error> {
             }
         }
 
-        Command::Inbox { unread } => {
-            let msgs = messages::inbox(&conn, &me, unread)?;
+        Command::Inbox {
+            unread,
+            ref from,
+            ref kind,
+            ref terms,
+        } => {
+            // Joined and re-split so `amb inbox "cargo clean"` and `amb inbox cargo clean` mean
+            // the same thing. A shell decides which of those a user typed and the searcher did
+            // not choose it; the splitting rule lives in `Filter::terms_of`, where it is tested.
+            let filter = messages::Filter {
+                from: from.clone(),
+                kind: kind.clone(),
+                terms: messages::Filter::terms_of(&terms.join(" ")),
+            };
+            let msgs = messages::inbox_matching(&conn, &me, unread, &filter)?;
+            let narrowed = filter.describe();
             if cli.json {
                 let items: Vec<_> = msgs.iter().map(messages::Message::to_json).collect();
-                print_json(
-                    &serde_json::json!({ "agent": me.name, "count": items.len(), "messages": items }),
-                );
+                print_json(&serde_json::json!({
+                    "agent": me.name,
+                    "count": items.len(),
+                    // **The filter reaches the JSON too** (D132, one surface away and one day
+                    // old). `count: 0` alone cannot tell a consumer whether the inbox is empty or
+                    // whether its own filter matched nothing, and it is the parsing agent — not
+                    // the person — that has no other way to find out.
+                    "narrowed_by": narrowed,
+                    "messages": items,
+                }));
             } else {
-                println!("{}", delivery::render_inbox(&msgs, &me.name, &me.project));
+                println!(
+                    "{}",
+                    delivery::render_inbox(&msgs, &me.name, &me.project, narrowed.as_deref())
+                );
             }
         }
 
@@ -714,7 +747,10 @@ fn run(cli: Cli) -> Result<(), Error> {
                     // is unreachable, because `render_inbox` ends `out.trim_end()`. Three callers
                     // of one renderer had three tail idioms, one of them defending against its
                     // own renderer's documented contract, and no mutation could redden the guard.
-                    println!("{}", delivery::render_inbox(&shown, &me.name, &me.project));
+                    println!(
+                        "{}",
+                        delivery::render_inbox(&shown, &me.name, &me.project, None)
+                    );
                 }
                 let list: Vec<String> = ids.iter().map(|i| format!("#{i}")).collect();
                 println!("marked {} read", list.join(" "));
@@ -881,7 +917,10 @@ fn run(cli: Cli) -> Result<(), Error> {
                 // `println!`, like the `inbox` arm above: `render_inbox` trims its tail, and
                 // `watch` is the monitor-mode primitive — a missing final newline concatenates
                 // the last mail line with whatever the caller prints next (U6).
-                println!("{}", delivery::render_inbox(&found, &me.name, &me.project));
+                println!(
+                    "{}",
+                    delivery::render_inbox(&found, &me.name, &me.project, None)
+                );
             }
         }
 
@@ -942,7 +981,10 @@ fn run(cli: Cli) -> Result<(), Error> {
                     "messages": items,
                 }));
             } else {
-                println!("{}", delivery::render_inbox(&found, &me.name, &me.project));
+                println!(
+                    "{}",
+                    delivery::render_inbox(&found, &me.name, &me.project, None)
+                );
             }
         }
 

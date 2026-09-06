@@ -7241,3 +7241,56 @@ reaches a binding; the library test catches one that reaches a binding and never
 e2e catches one that reaches a key and never reaches the shipped binary. M20's rule is that the
 outermost layer is the one to suspect, because the library test is the cheap one to write — and
 here it was the outermost that carried the defect for two days.
+
+## D133 · An inbox filter narrows the answer, never the question of whose mail it is
+
+**Decided.** `amb inbox` takes `--from`, `--kind` and free words (F6). `messages::Filter` carries
+them; `inbox_matching` passes them to the same `select` the hooks use, which appends clauses and
+binds from `?6`. `inbox`, `deliverable`, `undelivered` and `mark_read_all` pass an empty filter and
+run the query they always ran.
+
+**The board reached 500 messages with one flag on the reading surface.** `--unread`, and nothing
+else. An agent looking for one thread read all of it or none of it, and `amb claims` had meanwhile
+grown `--project`, `--all`, `--live` and `--raw` — the asymmetry is the argument, because both
+commands answer "what is going on" and only one of them could be asked a narrower question.
+
+**A filter is not an addressing mode, and keeping those apart is what protects D17.** The 2×2 over
+`to_agent`/`to_proj` decides *whose mail a row is* and remains exactly one predicate; filters
+narrow the answer afterwards. The moment a filter needs to know which addressing mode a row arrived
+by, it has stopped being a filter and the schema is being fought — which is the failure CLAUDE.md
+names for this file specifically.
+
+**Terms are split, and that is the whole design.** `memory::search` lowercases a query into one
+needle and asks for a contiguous match, so `recall "glob anchors"` returns nothing with both words
+in the vault. D131 shipped a column hours earlier to measure how often that costs a search: 65 of
+146 answered. Writing a second surface with the same semantics would be this project's
+most-repeated mistake — fixing one instance trains attention on the thing fixed rather than on its
+siblings (D86, D88, D90). So every term must match, each in either the subject or the body, and
+`amb inbox "cargo clean"` and `amb inbox cargo clean` mean the same thing because a shell decided
+which one the reader typed and the reader did not.
+
+**`%` and `_` are literals.** They are `LIKE` metacharacters and nobody searching an inbox knows
+that; unescaped, `100%` matches every message containing `100`, silently and in the direction that
+returns *more* than was asked for. Escaped with `\`, every clause carries `ESCAPE '\'`, and the
+term is lowercased to pair with `lower()` rather than relying on `LIKE`'s own folding — which
+SQLite applies to ASCII only, so one non-ASCII character would otherwise make a single term in a
+query case-sensitive while its neighbours were not.
+
+**`--from` matches a name or an id, and D18 does not apply.** D18 governs what is *stored*: a
+recipient is resolved before it is written, and a display name never reaches the column. This is a
+read. Resolving first would mean refusing to filter by an agent who has since left the board, and
+that is the population most worth filtering for.
+
+**The empty result says which kind of empty it is, and this is the part that is not a `WHERE`
+clause.** "Nothing matched" and "nobody has written to you" would otherwise print one sentence.
+That is D89's rule — a mechanism reporting its own miss as an absence — on the surface where
+believing the wrong one is most expensive, because a reader told the inbox is empty stops looking.
+The rendered form names the filter and points at `amb inbox`; `--json` carries `narrowed_by`,
+because `count: 0` is identical either way and a parsing agent has no rendered sentence to read.
+That last half is D132 applied the same day it was learned, one surface away.
+
+**Not built: FTS5, and it is deferred rather than rejected.** `query.rs` states the order — fix the
+defect (D88), fix the instrument (D89), then let the instrument choose — and D131 is step two, four
+hours old with no data yet. `LIKE` over 500 rows on a 2 MB board is not the constraint; adopting an
+index before the instrument that would justify it has anything to say would settle the question the
+instrument exists to answer.

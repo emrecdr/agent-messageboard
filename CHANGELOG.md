@@ -9,6 +9,35 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Added
+
+- **`amb inbox` can be narrowed** (D133, F6): `--from alice`, `--kind findings`, and free words —
+  `amb inbox disk cargo`. Every word must appear, each in a subject or a body, so a term may land
+  in either. `--from` accepts a display name or an agent id.
+
+  **The board passed 500 messages with one flag on the reading surface.** An agent looking for one
+  thread read all of it or none of it, while `amb claims` had meanwhile grown `--project`, `--all`,
+  `--live` and `--raw`.
+
+  **Terms are split rather than treated as one needle, and that is the design.** `amb memory recall`
+  lowercases a query into a single contiguous match, so `recall "glob anchors"` returns nothing with
+  both words in the vault — D131 shipped a column hours earlier to measure the cost and it answered
+  65 of 146 searches. Repeating those semantics in a new surface would be this project's
+  most-repeated mistake, so `amb inbox anchors glob` finds the message that `recall` would miss.
+
+  **`%` and `_` are literals, not wildcards.** Unescaped, `100%` would match every message
+  containing `100` — silently, and in the direction that returns more than was asked for.
+
+  **A filtered miss does not read as an empty inbox.** "Nothing matched your filter" and "nobody has
+  written to you" would otherwise print one sentence, which is D89's shape on the surface where
+  believing the wrong one is most expensive: a reader told the inbox is empty stops looking. The
+  rendered form names the filter and points at `amb inbox`; `--json` carries `narrowed_by`, because
+  `count: 0` is identical either way and a parsing agent has no sentence to read. The filters are
+  taught in the primer — a filter nobody is told about is a zero by construction (D91).
+
+  Hooks are unaffected: every delivery path passes an empty filter and runs the query it always ran,
+  asserted directly rather than assumed.
+
 ### Fixed
 
 - **`amb status --json` was four fields behind `amb status`** (D132). The text receipt printed

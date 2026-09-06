@@ -368,12 +368,118 @@ pub fn send(conn: &mut Connection, me: &Identity, out: &Outgoing<'_>) -> Result<
 /// `amb inbox` still shows it, because a log you cannot re-read is not a log.
 pub const MAX_OFFERS: i64 = 10;
 
+/// What narrows an inbox. Every field empty means "everything", which is what the hooks pass.
+///
+/// **A filter is not an addressing mode, and that distinction is what keeps D17 intact.** The 2×2
+/// over `to_agent`/`to_proj` decides *whose mail this is* and stays exactly one predicate; these
+/// narrow the answer afterwards. If a filter ever needs to know which addressing mode a row
+/// arrived by, it has stopped being a filter and the schema is being fought.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Filter {
+    /// A sender, matched against **either** the agent id or the display name.
+    ///
+    /// D18 requires a *stored* recipient to be a resolved id and never a name, and this is
+    /// deliberately not that: it is a read. Resolving first would mean refusing to filter by an
+    /// agent who has since left the board, which is the population most worth filtering for.
+    pub from: Option<String>,
+    /// A `--kind`, matched exactly. `note` is the default every sender gets, so it is a real value.
+    pub kind: Option<String>,
+    /// Words that must **all** appear, each in the subject or the body.
+    pub terms: Vec<String>,
+}
+
+impl Filter {
+    /// Split a free-text query into terms — the whole difference between this and D131's defect.
+    ///
+    /// **`memory::search` lowercases the entire query into one needle** and asks whether a body
+    /// contains it contiguously, so `recall "glob anchors"` returns nothing with both words in the
+    /// vault. D131 shipped a `terms` column hours ago to measure how often that costs a search;
+    /// it answered 65 of 146. Writing a second surface with the same semantics would be this
+    /// project's most-repeated mistake — fixing one instance trains attention on the thing fixed
+    /// rather than on its siblings (D86, D88, D90) — so this one splits, and every term must match.
+    #[must_use]
+    pub fn terms_of(query: &str) -> Vec<String> {
+        query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+
+    /// Whether this narrows anything at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.from.is_none() && self.kind.is_none() && self.terms.is_empty()
+    }
+
+    /// What was applied, for a reader who got nothing back.
+    ///
+    /// **`None` and "no mail" must not print the same sentence** — D89's rule, which this project
+    /// has now been bitten by three times in instruments alone. An empty filtered result and an
+    /// empty inbox are different facts about the world, and the second is the one that reads as
+    /// "nobody has written to me".
+    #[must_use]
+    pub fn describe(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if let Some(f) = &self.from {
+            parts.push(format!("from {f}"));
+        }
+        if let Some(k) = &self.kind {
+            parts.push(format!("kind {k}"));
+        }
+        if !self.terms.is_empty() {
+            parts.push(format!("matching {}", self.terms.join(" + ")));
+        }
+        Some(parts.join(", "))
+    }
+}
+
+/// A `LIKE` pattern matching a term anywhere, with any wildcard the searcher typed made literal.
+///
+/// **`%` and `_` are `LIKE` metacharacters and nobody searching an inbox knows that.** Unescaped,
+/// `100%` would match every message containing `100`, and `to_proj` would match `toXproj` — both
+/// silently, returning *more* than was asked for, which is the direction a searcher is least
+/// likely to notice. Escaped with `\`, and every clause using this carries `ESCAPE '\'`.
+///
+/// Lowercased to pair with `lower()` on the column rather than relying on `LIKE`'s own folding,
+/// which SQLite applies to ASCII only: a term containing any non-ASCII would otherwise match
+/// case-*sensitively* while the term beside it did not, and a rule that holds for some words in a
+/// query is worse than one that holds for none.
+fn like_contains(term: &str) -> String {
+    let mut out = String::with_capacity(term.len() + 2);
+    out.push('%');
+    for c in term.to_lowercase().chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
 /// Everything addressed to this agent, or broadcast to its project.
 ///
 /// One query serves all three addressing modes. This is the **explicit** read: it never hides a
 /// message, whatever its offer count, because an agent that runs `amb inbox` has asked.
 pub fn inbox(conn: &Connection, me: &Identity, unread_only: bool) -> Result<Vec<Message>> {
-    select(conn, me, unread_only, None)
+    select(conn, me, unread_only, None, &Filter::default())
+}
+
+/// [`inbox`], narrowed (F6).
+///
+/// Delegates to the same `select` rather than growing a second query, so the two cannot disagree
+/// about who a message belongs to — which is the failure D132 had just found one surface away.
+pub fn inbox_matching(
+    conn: &Connection,
+    me: &Identity,
+    unread_only: bool,
+    filter: &Filter,
+) -> Result<Vec<Message>> {
+    select(conn, me, unread_only, None, filter)
 }
 
 /// Unread mail this agent has not already been offered [`MAX_OFFERS`] times.
@@ -382,7 +488,7 @@ pub fn inbox(conn: &Connection, me: &Identity, unread_only: bool) -> Result<Vec<
 /// injection spends context the agent did not ask to spend, so it must back off; an explicit
 /// `amb inbox` must not, or a message the agent ignored for a while becomes unrecoverable.
 pub fn deliverable(conn: &Connection, me: &Identity) -> Result<Vec<Message>> {
-    select(conn, me, true, Some(MAX_OFFERS))
+    select(conn, me, true, Some(MAX_OFFERS), &Filter::default())
 }
 
 /// Mail this agent has never been offered at all.
@@ -392,7 +498,7 @@ pub fn deliverable(conn: &Connection, me: &Identity) -> Result<Vec<Message>> {
 /// of forty edits would be D24 at forty times the rate. Restricting it to genuinely new mail
 /// means each message is delivered mid-turn at most once; `Stop` stays the catch-up sweep (D25).
 pub fn undelivered(conn: &Connection, me: &Identity) -> Result<Vec<Message>> {
-    select(conn, me, true, Some(1))
+    select(conn, me, true, Some(1), &Filter::default())
 }
 
 fn select(
@@ -400,6 +506,7 @@ fn select(
     me: &Identity,
     unread_only: bool,
     max_offers: Option<i64>,
+    filter: &Filter,
 ) -> Result<Vec<Message>> {
     // The 2x2 from schema.sql, as one predicate. Four addressing modes, one query:
     //   to_agent = me                      -> direct, from any project
@@ -408,6 +515,52 @@ fn select(
     // The 12th column answers "has this reader acknowledged it" per row, so the inbox can say
     // which part of a list is new (U1). Delivery-side selects carry it too; it costs one index
     // probe against `reads` per row that the unread filter was already paying.
+    //
+    // **F6's filters are appended clauses that bind from `?6` on, never `(?N IS NULL OR …)`.**
+    // `lib.rs` records that idiom defeating `ix_claims_live` on the `PostToolUse` path; none of
+    // `from_agent`, `kind`, `subject` or `body` carries an index for it to defeat, but a clause
+    // that is *absent* cannot be mis-planned at all. It also keeps the unfiltered query — every
+    // hook, and every caller that existed before F6 — byte-identical to the one that shipped,
+    // which is the property that lets the delivery paths share this function without inheriting
+    // a risk they gain nothing from.
+    use std::fmt::Write as _;
+    let cutoff = now()? - broadcast_horizon().as_secs_f64();
+    let mut binds: Vec<rusqlite::types::Value> = vec![
+        me.project.clone().into(),
+        me.id.clone().into(),
+        i64::from(unread_only).into(),
+        max_offers.map_or(rusqlite::types::Value::Null, Into::into),
+        cutoff.into(),
+    ];
+    let mut narrowing = String::new();
+    if let Some(from) = &filter.from {
+        binds.push(from.clone().into());
+        let n = binds.len();
+        // Either spelling. `a` is the roster row already joined for `from_name`, so matching the
+        // display name costs nothing extra and is what a person actually types.
+        let _ = write!(
+            narrowing,
+            "\n          AND (m.from_agent = ?{n} OR a.name = ?{n})"
+        );
+    }
+    if let Some(kind) = &filter.kind {
+        binds.push(kind.clone().into());
+        let n = binds.len();
+        let _ = write!(narrowing, "\n          AND m.kind = ?{n}");
+    }
+    for term in &filter.terms {
+        binds.push(like_contains(term).into());
+        let n = binds.len();
+        // **One clause per term, ANDed** — D131's defect is a single needle for the whole query,
+        // and the fix is structural rather than a better needle. Each term may land in either
+        // field, so `disk cargo` finds a message whose subject says one and whose body says the
+        // other; requiring both in the same column would be a narrower rule nobody asked for.
+        let _ = write!(
+            narrowing,
+            "\n          AND (lower(m.subject) LIKE ?{n} ESCAPE '\\' \
+             OR lower(m.body) LIKE ?{n} ESCAPE '\\')"
+        );
+    }
     let sql_text = format!(
         "SELECT {MESSAGE_COLUMNS},
                 EXISTS(SELECT 1 FROM reads r
@@ -432,28 +585,18 @@ fn select(
           -- **broadcast** past it stops being injected; a message addressed to this agent never
           -- expires, because a question asked of you personally does not stop mattering because
           -- you were away. `?5` is the cutoff instant, not a duration.
-          AND (?4 IS NULL OR m.to_agent IS NOT NULL OR m.ts >= ?5)
+          AND (?4 IS NULL OR m.to_agent IS NOT NULL OR m.ts >= ?5){narrowing}
         ORDER BY m.id"
     );
-    let cutoff = crate::db::now()? - broadcast_horizon().as_secs_f64();
     let mut stmt = conn
         .prepare(&sql_text)
         .map_err(sql("preparing the inbox query"))?;
     let rows = stmt
-        .query_map(
-            params![
-                me.project,
-                me.id,
-                i32::from(unread_only),
-                max_offers,
-                cutoff
-            ],
-            |r| {
-                let mut m = row_to_message(r)?;
-                m.read = Some(r.get(11)?);
-                Ok(m)
-            },
-        )
+        .query_map(rusqlite::params_from_iter(binds), |r| {
+            let mut m = row_to_message(r)?;
+            m.read = Some(r.get(11)?);
+            Ok(m)
+        })
         .map_err(sql("running the inbox query"))?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(sql("reading an inbox row"))
@@ -785,7 +928,14 @@ pub fn mark_read_many(conn: &Connection, me: &Identity, ids: &[i64]) -> Result<(
 /// One transaction is safe here in a way it is not for [`mark_read_many`]: every id came from the
 /// query two lines above, so none of them can fail the existence check.
 pub fn mark_read_all(conn: &mut Connection, me: &Identity) -> Result<Vec<i64>> {
-    let ids: Vec<i64> = select(conn, me, true, None)?.iter().map(|m| m.id).collect();
+    // **Unfiltered, and that is the whole meaning of `--all`.** Narrowing here would make
+    // `amb read --all` acknowledge a subset while saying it cleared everything — the shape D9
+    // forbids most directly, since `read` is the only thing that marks mail read and a message
+    // silently left unacknowledged is one the reader believes they have dealt with.
+    let ids: Vec<i64> = select(conn, me, true, None, &Filter::default())?
+        .iter()
+        .map(|m| m.id)
+        .collect();
     if ids.is_empty() {
         return Ok(ids);
     }
@@ -2008,5 +2158,244 @@ mod tests {
         // Two edits in a short name is a typo; two edits in a three-letter name is another word.
         assert_eq!(nearest("api", &["ftp"]), None);
         assert_eq!(nearest("api", &["apo"]), Some("apo"));
+    }
+
+    /// **The whole of F6's difference from D131's defect, in one assertion.**
+    ///
+    /// `memory::search` lowercases a query into a single needle and asks for a contiguous match,
+    /// so `recall "glob anchors"` returns nothing while both words sit in the vault. That is a
+    /// *measured* failure — D131 shipped a column to count it and it answered 65 of 146. This
+    /// splits instead, and the test states the contrast rather than only the behaviour, because
+    /// the next reader's temptation is to "simplify" this back into one `contains`.
+    #[test]
+    fn a_query_becomes_one_term_per_word_rather_than_one_needle() {
+        assert_eq!(Filter::terms_of("glob anchors"), vec!["glob", "anchors"]);
+        assert_eq!(Filter::terms_of("  CARGO   Clean "), vec!["cargo", "clean"]);
+        assert!(
+            Filter::terms_of("   ").is_empty(),
+            "whitespace narrows nothing"
+        );
+        assert!(Filter::terms_of("").is_empty());
+    }
+
+    /// A wildcard the searcher typed is a literal, and the failure direction is the quiet one.
+    #[test]
+    fn like_metacharacters_in_a_search_term_are_escaped_rather_than_honoured() {
+        assert_eq!(like_contains("t_e"), r"%t\_e%");
+        assert_eq!(like_contains("100%"), r"%100\%%");
+        assert_eq!(like_contains(r"a\b"), r"%a\\b%");
+        // The ordinary case still has no escapes in it, so the rule above cannot be satisfied by
+        // escaping everything — which would match nothing and look just as green.
+        assert_eq!(like_contains("Cargo"), "%cargo%");
+    }
+
+    /// `describe` is `None` for an empty filter and names every part of a full one.
+    ///
+    /// A truth table rather than a needle list: the `None` row is the one that decides whether
+    /// `render_inbox` prints "no mail" or "nothing matched", and an assertion that only checked
+    /// the populated rows would pass with `describe` returning `Some("")` for an empty filter —
+    /// which reads as a filter nobody set.
+    #[test]
+    fn describe_is_none_only_when_nothing_was_narrowed() {
+        assert_eq!(Filter::default().describe(), None);
+        for (f, expected) in [
+            (
+                Filter {
+                    from: Some("alice".into()),
+                    ..Default::default()
+                },
+                "from alice",
+            ),
+            (
+                Filter {
+                    kind: Some("question".into()),
+                    ..Default::default()
+                },
+                "kind question",
+            ),
+            (
+                Filter {
+                    terms: vec!["disk".into(), "cargo".into()],
+                    ..Default::default()
+                },
+                "matching disk + cargo",
+            ),
+            (
+                Filter {
+                    from: Some("alice".into()),
+                    kind: Some("question".into()),
+                    terms: vec!["disk".into()],
+                },
+                "from alice, kind question, matching disk",
+            ),
+        ] {
+            assert_eq!(f.describe().as_deref(), Some(expected), "{f:?}");
+        }
+    }
+
+    /// Post four messages with distinct senders, kinds and words, for the filter tests below.
+    fn filterable(conn: &mut Connection, alice: &Identity, carol: &Identity, bob: &Identity) {
+        let to_bob = Recipient {
+            agent_id: Some(bob.id.clone()),
+            project: Some("nest".into()),
+        };
+        for (who, subject, body, kind) in [
+            (alice, "cargo hold", "taking cargo for a round", "proposal"),
+            (
+                alice,
+                "disk at 99%",
+                "the shared target dir is 29G",
+                "findings",
+            ),
+            (carol, "glob anchors", "anchors and glob patterns", "note"),
+            (carol, "unrelated", "nothing of interest here", "note"),
+        ] {
+            send(
+                conn,
+                who,
+                &Outgoing {
+                    to: &to_bob,
+                    subject,
+                    body,
+                    kind,
+                    thread: None,
+                    ext_id: None,
+                },
+            )
+            .expect("send");
+        }
+    }
+
+    fn subjects(msgs: &[Message]) -> Vec<&str> {
+        msgs.iter().map(|m| m.subject.as_str()).collect()
+    }
+
+    /// `--from` matches a display name or an id, and D18 does not apply because this is a read.
+    #[test]
+    fn a_sender_filter_accepts_the_name_a_person_types_and_the_id_a_machine_has() {
+        let (_d, mut conn, alice, bob, carol) = board();
+        filterable(&mut conn, &alice, &carol, &bob);
+
+        let by_name = inbox_matching(
+            &conn,
+            &bob,
+            false,
+            &Filter {
+                from: Some("carol".into()),
+                ..Default::default()
+            },
+        )
+        .expect("by name");
+        assert_eq!(subjects(&by_name), vec!["glob anchors", "unrelated"]);
+
+        let by_id = inbox_matching(
+            &conn,
+            &bob,
+            false,
+            &Filter {
+                from: Some("uuid-carol".into()),
+                ..Default::default()
+            },
+        )
+        .expect("by id");
+        assert_eq!(
+            subjects(&by_id),
+            subjects(&by_name),
+            "both spellings reach the same sender"
+        );
+    }
+
+    /// `--kind` is exact, and `note` is a real value rather than the absence of one.
+    #[test]
+    fn a_kind_filter_selects_the_default_kind_as_readily_as_a_set_one() {
+        let (_d, mut conn, alice, bob, carol) = board();
+        filterable(&mut conn, &alice, &carol, &bob);
+
+        for (kind, expected) in [
+            ("findings", vec!["disk at 99%"]),
+            ("proposal", vec!["cargo hold"]),
+            // The presence row that proves the two above are not passing vacuously.
+            ("note", vec!["glob anchors", "unrelated"]),
+            ("nosuchkind", vec![]),
+        ] {
+            let got = inbox_matching(
+                &conn,
+                &bob,
+                false,
+                &Filter {
+                    kind: Some(kind.into()),
+                    ..Default::default()
+                },
+            )
+            .expect("by kind");
+            assert_eq!(subjects(&got), expected, "kind {kind}");
+        }
+    }
+
+    /// **Every term must match, and either field may carry it** — the rule D131 could not express.
+    #[test]
+    fn every_term_must_match_and_a_term_may_land_in_either_field() {
+        let (_d, mut conn, alice, bob, carol) = board();
+        filterable(&mut conn, &alice, &carol, &bob);
+
+        let find = |q: &str| -> Vec<String> {
+            inbox_matching(
+                &conn,
+                &bob,
+                false,
+                &Filter {
+                    terms: Filter::terms_of(q),
+                    ..Default::default()
+                },
+            )
+            .expect("search")
+            .iter()
+            .map(|m| m.subject.clone())
+            .collect()
+        };
+
+        // Reversed order, both words present — the exact query shape that returns 0 from `recall`.
+        assert_eq!(find("anchors glob"), vec!["glob anchors"]);
+        // One term in the subject, the other only in the body.
+        assert_eq!(find("disk 29g"), vec!["disk at 99%"]);
+        // AND, not OR: a term that matches nothing empties the result.
+        assert!(
+            find("disk unicorn").is_empty(),
+            "one unmatched term is enough to exclude"
+        );
+        // Case folds on both sides.
+        assert_eq!(find("CARGO"), vec!["cargo hold"]);
+        // And the metacharacter is literal here too, not only in `like_contains`: `_` would be a
+        // single-character wildcard and would match `the` in two of these bodies.
+        assert!(find("t_e").is_empty(), "`_` is a literal, not a wildcard");
+        assert_eq!(
+            find("the").len(),
+            1,
+            "the presence row: `the` really is in one body, so the absence above is not vacuous"
+        );
+    }
+
+    /// **The unfiltered query is the one the hooks run, and F6 must not have moved it.**
+    ///
+    /// `select` grew a parameter that every delivery path passes empty. This asserts the empty
+    /// filter returns exactly what `inbox` returned before it existed — same rows, same order.
+    /// Without it, a mistake in the appended SQL would be invisible on the paths that matter most
+    /// and visible only on the new one nobody has depended on yet.
+    #[test]
+    fn an_empty_filter_returns_exactly_the_unfiltered_inbox() {
+        let (_d, mut conn, alice, bob, carol) = board();
+        filterable(&mut conn, &alice, &carol, &bob);
+
+        let plain = inbox(&conn, &bob, false).expect("inbox");
+        let empty = inbox_matching(&conn, &bob, false, &Filter::default()).expect("filtered");
+        assert_eq!(
+            plain.iter().map(|m| m.id).collect::<Vec<_>>(),
+            empty.iter().map(|m| m.id).collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            plain.len(),
+            4,
+            "and it is not the empty set agreeing with itself"
+        );
     }
 }
