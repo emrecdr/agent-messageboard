@@ -228,6 +228,13 @@ Three things about it read as omissions:
 contains no occurrence of `PreToolUse` at all; installing Claude's spellings would have written
 entries the runtime ignores in silence.
 
+**Two dimensions of the wire format are still hardcoded, and both are invisible while the two
+shipped vendors agree.** `hooks::plan_install` writes Claude's settings *schema* — root `hooks`,
+`"type": "command"`, nested `{matcher, hooks:[…]}` — and `delivery::envelope` emits Claude's
+*response* shape, `hookSpecificOutput.additionalContext`. `Vendor` has a field for neither. Cursor's
+schema is confirmed different; a third vendor is where this bites. Researched and deliberately not
+built: `docs/VENDOR-COMPATIBILITY.md`, deferred as `OPEN-QUESTIONS.md` Q15.
+
 ### Functional core, imperative shell
 
 The decisions are pure and exhaustively tested without a filesystem; only the shell performs I/O.

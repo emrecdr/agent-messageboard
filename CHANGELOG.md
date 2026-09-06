@@ -9,6 +9,24 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/VENDOR-COMPATIBILITY.md` — hosts beyond Claude Code, researched and then deferred**
+  (`OPEN-QUESTIONS.md` Q15). No code changed; the deferral is the outcome.
+
+  Thirteen findings, each marked verified or unverified with the method beside it, and a list of
+  what was *not* examined. The one that matters: **`amb` already serves a host with no settings
+  file, no hook system and no session-id environment variable** — verified against the real binary,
+  because D113 and D114 built that path for payload-only CLIs and it is what a framework needs. A
+  Google ADK integration therefore inverts — a plugin calls `amb hook turn` — and needs nothing from
+  `amb`.
+
+  Two dimensions of the wire format are hardcoded to Claude with no `Vendor` field: the settings
+  *schema* (`hooks::plan_install`) and the response *envelope* (`delivery::envelope`). Both are
+  invisible while the two shipped vendors agree, which is `tool_matcher`'s blind spot before Gemini.
+  Cursor's schema is confirmed different; Codex's is **unverified**, and a claim made about it
+  mid-research was wrong and is recorded as such — D111 requires the shipped binary, not docs.
+
 ### Fixed
 
 - **`SECURITY.md` said what a failed attestation check means and never what success looks like.**
