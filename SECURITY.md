@@ -77,7 +77,20 @@ gh attestation verify amb-installer.sh --repo emrecdr/agent-messageboard
 gh attestation verify amb-aarch64-apple-darwin.tar.xz --repo emrecdr/agent-messageboard
 ```
 
-A failure there means the file is not what this repository built, and is worth a private report.
+**Success is silent.** `gh` prints nothing and exits `0`; a failure prints an error and exits
+non-zero. Verified end to end on `v0.2.1-rc.1`, including the negative cases — an unattested file
+and a wrong `--repo` both exit `1` with a 404. If you want to see what was matched rather than
+trust the exit code, add `--format json`; it names the workflow, the repository, the commit and
+the tag that produced the file:
+
+```console
+$ gh attestation verify amb-installer.sh --repo emrecdr/agent-messageboard --format json | jq -r \
+    '.[0].verificationResult.signature.certificate | .buildSignerURI, .sourceRepositoryDigest'
+https://github.com/emrecdr/agent-messageboard/.github/workflows/release.yml@refs/tags/v0.2.1-rc.1
+300dbc3215eaee6c020e8dd46cb839e8aa3ef58e
+```
+
+A failure means the file is not what this repository built, and is worth a private report.
 
 **Why this binary rather than as a matter of routine.** `amb install` edits the host CLI's
 machine-wide settings file and registers hooks on four events; from then on every agent session on

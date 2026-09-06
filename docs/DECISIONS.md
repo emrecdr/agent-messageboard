@@ -7743,9 +7743,28 @@ is told how to check is D91's shape — a mechanism that cannot reach the party 
 counted as though its absence were a finding. `gh attestation verify` is the consumer half and the
 whole point.
 
-**What is still unverified, stated rather than left to be discovered.** The pipeline has never run
-(see below), so this configuration is *reasoned* and not *observed*. The first tag is still the
-test.
+**It ran, and this paragraph used to say it had not.** The original text here read *"the pipeline
+has never run, so this configuration is reasoned and not observed"* — true when written and
+resolved the same day. `v0.2.1-rc.1` fired `release.yml` for the first time in the repository's
+history: build, archive, shell installer, `Attest` and `Create GitHub Release` all green.
+
+**Verified from the consumer's side, which is the half that matters**, with both negative controls
+run rather than assumed:
+
+| check | result |
+|---|---|
+| `gh attestation verify amb-installer.sh --repo emrecdr/agent-messageboard` | exit 0 |
+| the same, on `amb-aarch64-apple-darwin.tar.xz` | exit 0 |
+| an unattested file | exit 1, HTTP 404 |
+| a real artifact against the wrong `--repo` | exit 1, HTTP 404 |
+
+The attestation binds `release.yml@refs/tags/v0.2.1-rc.1`, the repository, and commit `300dbc3`.
+
+**One thing the documentation had wrong and the run exposed: success is silent.** `gh` prints
+nothing and exits 0, so a reader following `SECURITY.md` sees no output and reasonably concludes
+nothing happened — which is this project's own failure shape arriving in the instructions for a
+security mechanism. `SECURITY.md` now says so and gives the `--format json` form for anyone who
+wants to see what was matched rather than trust an exit code.
 
 ### The release pipeline cannot run its own stated test
 
