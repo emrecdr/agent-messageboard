@@ -7651,3 +7651,91 @@ The hidden-count line first said `` `--limit 0` shows every one ``. It does not:
 *count* cap and leaves the body preview, so it returns every message and no message in full — 80,008
 characters rather than the original 265,949. It now says `lists all N`. **The overstatement was found
 by running the binary against a copy of the real board** (M32), after the suite was green.
+
+## D138 · The binary that edits every session's settings file ships with provenance, and `amb thread` is taught where it is used
+
+**Decided 2026-09-06.** Two unrelated changes, recorded together because both are the same shape —
+a mechanism that exists and cannot be reached by the party who needs it.
+
+### Release provenance
+
+`release.yml` granted `contents: write` and nothing else; no workflow contained *attest*,
+*sigstore*, *cosign*, *sbom* or *provenance*. `dist-workspace.toml` now sets
+`github-attestations = true`, so every published artifact is signed with a GitHub build provenance
+attestation and recorded in Sigstore's transparency log.
+
+**Why this binary and not as a matter of routine.** `amb install` edits the host CLI's machine-wide
+settings file and registers hooks on four events; from then on every agent session on the machine
+executes it, twice per tool call, with every error swallowed because D9 requires that mail delivery
+never break a session. A substituted binary would run everywhere and report nothing. **The blast
+radius is the whole machine and the failure mode is silence** — which is the property the rest of
+this project's discipline exists to attack, arriving through distribution instead of through code.
+
+**`github-attestations-phase = "host"`, and the default would have signed the wrong half.** Left at
+`build-local-artifacts` the step runs per platform runner and covers that platform's archives,
+while `amb-installer.sh` is produced in the *global* job and ships unattested. That is the artifact
+the README tells a person to run. In the `host` job every artifact has already been downloaded, so
+one step covers both.
+
+**The filter list is what `dist plan` prints, not what seemed likely.** Run it: `.tar.xz` archives,
+`source.tar.gz`, `amb-installer.sh`. A speculative `*.zip` — there is no Windows target — would be
+an unverifiable way to fail the first release, because `actions/attest` does not document what it
+does with a glob that matches nothing and this pipeline has never executed. **The coupling is named
+in the config**: adding a target whose archive is not `.tar.xz` leaves it unattested and nothing
+will say so.
+
+**Set in config, never in `release.yml`.** That file is generated; `dist generate` emitted
+`actions/attest@v4` and `check_action_pins.py` refused it on the first run, which is the gate doing
+exactly what it was built for. The pin lives beside the others.
+
+**Verification is documented in `SECURITY.md`, and that is not a formality.** An attestation nobody
+is told how to check is D91's shape — a mechanism that cannot reach the party positioned to use it,
+counted as though its absence were a finding. `gh attestation verify` is the consumer half and the
+whole point.
+
+**What is still unverified, stated rather than left to be discovered.** The pipeline has never run
+(see below), so this configuration is *reasoned* and not *observed*. The first tag is still the
+test.
+
+### The release pipeline cannot run its own stated test
+
+D116 closed Q14 with *"the first tag is the test, and nobody has pushed one."* Checked on
+2026-09-06: **a tag has been pushed.** `v0.2.0` is on the remote, at commit `3ff130f` (2026-08-31),
+whose tree contains only `ci.yml` — `release.yml` arrived five days later in `093f087`. A tag push
+runs the workflows present at the pushed ref, so it could not have triggered a workflow that did
+not exist there. Confirmed directly rather than inferred: `gh run list --workflow=release.yml`
+returns nothing and `gh release list` is empty.
+
+**The tag name is spent.** Re-pushing `v0.2.0` is a no-op, so the pipeline's stated test can no
+longer be run the way D116 describes it. **A condition that can no longer fire is worse than no
+condition** (D95): the next reader sees a standard and assumes something is watching.
+
+The cheap close is a throwaway pre-release tag — `v0.2.1-rc.1` — which exercises build, archive,
+installer, attestation and upload without claiming a release. **Not done here**, because pushing a
+tag is an outward-facing act and this change was made without that authorisation. Recorded as the
+next action rather than as a finding.
+
+### `amb thread` is taught in the reply hint
+
+D129 shipped `thread` and taught it nowhere — not `PRIMER`, not the delivery banner, not the hint
+that closes every injection. A peer audit measured the pattern: `PRIMER` teaches 7 of 18
+subcommands, and `--kind` went from 1 of 12 senders to 8 of 14 *after* the primer named it; claims
+followed the same path through D58/D91. For an agent the primer and the hint are the only
+discovery surfaces, so a capability absent from both is, in D58's words, not a capability.
+
+**In `REPLY_HINT` rather than `PRIMER`, because that line costs nothing at session start.** A
+primer line is permanent per-session context (D24); the hint is printed only beside mail an agent
+might want the context of, which is exactly when a whole conversation is worth reading.
+
+**The hint was itself unguarded, and that is the durable half of this.** `PRIMER` has an
+enumeration test because a verb absent from it is not a capability; the hint taught three verbs
+with nothing asserting any of them. It is now a named constant and both surfaces are checked by one
+list, under the question that list actually asks — *is this reachable by an agent anywhere at all*.
+
+`--limit` is deliberately **not** in that list. It is taught by D137's hidden-count line, which
+prints only when the cap has actually bitten, and a session whose inbox fits under the cap should
+not pay a primer line for it. It is guarded by the test that pins that line.
+
+**The caveat, recorded because the peer raised it against their own finding.** There is no database
+trace for `thread`, unlike `--kind` and claims which leave rows, so "predicts zero use" is an
+inference from two analogous features rather than an observation of this one.

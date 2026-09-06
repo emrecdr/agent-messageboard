@@ -9,6 +9,30 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Added
+
+- **Every released artifact carries a build provenance attestation** (D138). `dist-workspace.toml`
+  sets `github-attestations`, so the platform archives *and* `amb-installer.sh` are signed in the
+  release workflow and recorded in Sigstore's transparency log. `SECURITY.md` documents
+  `gh attestation verify`, which is the half that makes a signature worth having — an attestation
+  nobody is told how to check is D91's shape.
+
+  The phase is `host` rather than the default: left at `build-local-artifacts` the step signs each
+  platform's archives and misses the installer, which is produced in the global job and is the
+  artifact the README tells a person to run. The filter list is what `dist plan` actually prints
+  rather than what seemed likely — `actions/attest` does not document what it does with a glob
+  matching nothing, and this pipeline has never executed.
+
+  Worth it here because of the blast radius: `amb install` edits the host CLI's machine-wide
+  settings file, and from then on every session on the machine runs this binary twice per tool
+  call with every error swallowed (D9). A substituted binary would run everywhere and report
+  nothing.
+
+- **`amb thread <id>` is taught in the line that closes every injection** (D138). It shipped in
+  D129 and appeared in no primer, no banner and no hint. That line is now the named constant
+  `delivery::REPLY_HINT`, and the enumeration test that has guarded `PRIMER` since U9 checks both
+  surfaces — the hint taught three verbs with nothing asserting any of them.
+
 ### Changed
 
 - **`amb inbox` is a list again, and it had grown to 265,949 characters** (D137). Measured against

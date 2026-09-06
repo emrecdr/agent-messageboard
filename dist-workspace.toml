@@ -22,6 +22,45 @@ install-path = "$HOME/.local/bin"
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
 
+# Sign every published artifact's provenance, so a downloader can prove which workflow run and
+# which commit produced the binary they are about to trust (D138).
+#
+# **The blast radius here is unusual and it is what makes this worth the line.** This binary's
+# first act is to edit the host CLI's machine-wide settings file and register itself on four hook
+# events; from then on every agent session on the machine executes it, twice per tool call, with
+# every error swallowed because D9 requires that mail delivery never break a session. A
+# substituted binary would therefore run everywhere and report nothing — the same silence this
+# project's whole test discipline is built against, arriving through distribution rather than
+# through code.
+#
+# `dist` emits `actions/attest-build-provenance` and the `id-token`/`attestations` permissions the
+# generated workflow needs. **Set here rather than hand-edited into `release.yml` for the reason
+# the action pins above give**: that file is generated, and an edit applied by hand reverts on the
+# next `dist generate` with nothing saying so.
+#
+# Requires a public repository or GitHub Enterprise — checked, `emrecdr/agent-messageboard` is
+# public, and public-repo attestations are written to Sigstore's transparency log.
+github-attestations = true
+# **The `host` phase, not the default, because the default attests the wrong half.** Left at
+# `build-local-artifacts`, the step runs on each platform runner and signs that platform's
+# archives — while `amb-installer.sh` is produced in the *global* job and would ship unattested.
+# That is the artifact the README tells a person to run, so signing the archives and not the
+# installer would put the provenance everywhere except the path anyone uses. In the `host` job
+# every artifact has already been downloaded into `artifacts/`, so one step covers both.
+github-attestations-phase = "host"
+# **Exactly what `dist plan` says is produced, verified rather than assumed** — run it and read
+# the list. A glob matching nothing is a real hazard here: `actions/attest` does not document
+# what it does with an empty match, and this pipeline has never executed, so a speculative
+# `*.zip` (there is no Windows target) would be an unverifiable way to fail the first release.
+#
+# **The coupling this creates, named because it is silent:** adding a target to `targets` above
+# whose archive is not `.tar.xz` — a Windows `.zip` — leaves that artifact unattested, and
+# nothing here will say so. Update this list in the same commit that adds the target.
+#
+# `.sha256` and `sha256.sum` are deliberately absent: a checksum of an attested archive carries
+# no claim the attestation does not already make.
+github-attestations-filters = ["*.tar.xz", "*.tar.gz", "*.sh"]
+
 # Every action in the generated workflow, pinned to a commit.
 #
 # A floating tag is mutable, and this is the workflow that builds and publishes artifacts to
@@ -35,3 +74,9 @@ targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
 "actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803"
 "actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 "actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+# The attestation signer itself, and the one whose pin matters most: an action that mints
+# provenance is trusted to say what a binary is, so a mutable tag here would let the claim be
+# rewritten by whoever moves the tag. `dist generate` emitted it as `@v4` and the gate's
+# `check_action_pins.py` refused it on the first run — the loop this file's comments describe,
+# doing exactly what it was built for.
+"actions/attest" = "1e69f48acb82d1966a394da916b4c1698aa569d6"

@@ -63,5 +63,31 @@ authenticate.
 - Loss of the **board file** to a crash or deletion. It holds ephemeral coordination state and is
   disposable by decision (D15); the memory vault is the durable half and is protected separately.
 
+## Release integrity
+
+Every artifact a release publishes — both platform archives and `amb-installer.sh` — carries a
+**GitHub build provenance attestation** (D138), signed in the release workflow and recorded in
+Sigstore's public transparency log. It binds the file you downloaded to the workflow run, the
+commit, and the repository that produced it.
+
+**Verify before you install**, which is the half that makes the signature worth having:
+
+```bash
+gh attestation verify amb-installer.sh --repo emrecdr/agent-messageboard
+gh attestation verify amb-aarch64-apple-darwin.tar.xz --repo emrecdr/agent-messageboard
+```
+
+A failure there means the file is not what this repository built, and is worth a private report.
+
+**Why this binary rather than as a matter of routine.** `amb install` edits the host CLI's
+machine-wide settings file and registers hooks on four events; from then on every agent session on
+the machine executes the binary, twice per tool call, with every error swallowed because D9
+requires that mail delivery never break a session. A substituted binary would therefore run
+everywhere and report nothing. That silence is the reason the provenance is here.
+
+**What it does not cover.** Building from source — `cargo install --path .`, which the README
+still leads with — produces no attestation, because nothing signed it; there the git history is
+the provenance. And an attestation says *who built it*, never that the code is correct.
+
 If you are unsure whether something is in scope, report it privately anyway and let the triage
 sort it out.

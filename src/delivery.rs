@@ -70,6 +70,24 @@ pub const PRIMER: &str = "\
   amb claim <path> --intent \"...\"  say what you are about to work on — advisory, never blocks
 Add --json to any command for structured output.";
 
+/// The line that closes every injection — what to do with the mail just delivered.
+///
+/// **The second discovery surface, and until D138 it was the unguarded one.** `PRIMER` has an
+/// enumeration test because a verb absent from it is, in D58's words, not a capability;
+/// this string taught three verbs with nothing asserting any of them. Named so both surfaces
+/// can be checked by one list, under the question that list is actually asking — *is this
+/// reachable by an agent anywhere at all*.
+///
+/// **`amb thread` is here rather than in `PRIMER` because this line costs nothing at session
+/// start** (D24 — a primer line is permanent per-session context, this one is printed only
+/// beside mail an agent might want the context of, which is exactly when `thread` is useful).
+/// It shipped in D129 and appeared in no primer, no banner and no hint: measured by a peer
+/// audit, `PRIMER` teaches 7 of 18 subcommands, and `thread` was the one that is agent-facing,
+/// new, and taught nowhere. The precedent is `--kind`, which went from 1 of 12 senders to 8 of
+/// 14 after the primer named it.
+pub const REPLY_HINT: &str = "  Reply with `amb reply <id> --body \"...\"`, read the whole \
+     conversation with `amb thread <id>`, acknowledge with `amb read <id>` (or `amb read --all`).";
+
 /// The longest a quoted field is rendered before it is cut.
 ///
 /// Sender, subject and body are written by whoever sent the message, so their length is theirs to
@@ -653,10 +671,7 @@ pub fn render_all(
         // the notice has no drain at all.
         shown_ids.extend(elsewhere.iter().map(|m| m.id));
         render_elsewhere(&elsewhere, &mut out);
-        out.push_str(
-            "  Reply with `amb reply <id> --body \"...\"`, acknowledge with `amb read <id>` \
-             (or `amb read --all`).",
-        );
+        out.push_str(REPLY_HINT);
     }
     Some(Rendered {
         text: out,
@@ -2217,11 +2232,24 @@ mod tests {
             // whoever runs `--help`, which a session has no reason to do.
             "--from",
             "amb inbox disk cargo",
+            // **`--limit` is deliberately NOT in this list**, and the omission is the
+            // decision. It is taught by the hidden-count line, which prints only when the cap
+            // actually bit — the moment it is useful, and never otherwise. A session whose
+            // inbox fits under the cap has no use for it and should not pay a primer line for
+            // it (D24: a primer line is permanent per-session context). It is not unguarded:
+            // `the_cap_reports_what_it_hid_and_says_nothing_when_it_hid_nothing` pins that
+            // line, including that it names `--limit 0` for what it actually returns.
+            // D129's `thread`, which shipped taught nowhere — not primer, not banner, not
+            // hint. It lives in `REPLY_HINT` rather than here because that line is printed
+            // beside mail rather than at every session start, which is both cheaper and the
+            // moment it is useful.
+            "amb thread <id>",
         ] {
             assert!(
-                PRIMER.contains(taught),
-                "{taught:?} exists, is agent-runnable, and appears nowhere an agent reads: \
-                 {PRIMER}"
+                PRIMER.contains(taught) || REPLY_HINT.contains(taught),
+                "{taught:?} exists, is agent-runnable, and appears nowhere an agent reads. \
+                 Both surfaces were searched, because teaching it in either is enough and \
+                 teaching it in neither is D58's shape:\n{PRIMER}\n{REPLY_HINT}"
             );
         }
         assert!(
