@@ -54,7 +54,7 @@ pub use error::{Error, Result};
 /// | v | Changed |
 /// |---|---|
 /// | 1 | D117, 2026-09-05. Every object carries `v`, on the success and error paths alike. |
-/// | 2 | D137, 2026-09-06. `amb inbox --json` returns a window: `count` is what the object carries rather than everything selected, and `total`, `hidden`, `unread` and `limit` join it. `body` is untouched and still whole. |
+/// | 2 | D137, 2026-09-06. **A list-shaped command returns a window.** `amb inbox --json` and `amb claims --json` both report `count` as what the object carries rather than everything selected, with `total`, `hidden` and `limit` beside it (`unread` too, on the inbox). `body` is untouched and still whole. |
 pub const JSON_CONTRACT: u64 = 2;
 
 /// Assert a query's plan reaches the named index — for guards where the *plan* is the rule.

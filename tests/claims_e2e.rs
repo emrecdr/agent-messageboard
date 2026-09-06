@@ -752,3 +752,57 @@ fn claims_can_survey_every_project_and_still_defaults_to_this_one() {
         "the default must stay this project, or every existing reading changes: {mine}"
     );
 }
+
+/// **The cap fires in the shipped binary, not only in the library** (D137's sibling).
+///
+/// M20's arithmetic: count the layers a rule passes through, count the layers that assert it, and
+/// suspect the outermost — because a library test is cheaper to write and is therefore usually
+/// the one that exists. `claims::visible` is unit-tested; this is the only assertion that the
+/// binary a person runs actually applies it, across all three of its rendering branches.
+#[test]
+fn the_claims_listing_is_bounded_in_every_form_the_binary_prints() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+
+    let over = amb::claims::MAX_LISTED + 5;
+    for i in 0..over {
+        b.run("uuid-alice", &["claim", &format!("src/f{i}.rs")]);
+    }
+
+    // `--json`: a window, and the keys that say so. `count` is what the object carries and
+    // `total` is what exists — the split `amb::JSON_CONTRACT` v2 moved for.
+    let v = b.json("uuid-alice", &["claims"]);
+    assert_eq!(
+        v["count"].as_u64().expect("count"),
+        amb::claims::MAX_LISTED as u64,
+        "the JSON form is capped: {v}"
+    );
+    assert_eq!(v["total"].as_u64().expect("total"), over as u64);
+    assert_eq!(v["hidden"].as_u64().expect("hidden"), 5);
+    assert_eq!(
+        v["claims"].as_array().expect("claims").len(),
+        amb::claims::MAX_LISTED,
+        "and the array agrees with its own count"
+    );
+
+    // Both text forms say what they kept back, and name the flag that is the real answer.
+    for args in [vec!["claims"], vec!["claims", "--raw"]] {
+        let out = b.run("uuid-alice", &args);
+        assert!(
+            out.contains("…5 older claim(s) not shown"),
+            "{args:?} truncated silently: {out}"
+        );
+        assert!(
+            out.contains("`--live`"),
+            "{args:?} must name the flag that actually answers this: {out}"
+        );
+    }
+
+    // The absence row, with its premise proved: the presence assertions above ran through the
+    // same code path, so this is not the vacuous kind M27 records.
+    let under = b.run("uuid-alice", &["claims", "--limit", "0"]);
+    assert!(
+        !under.contains("older claim(s) not shown"),
+        "nothing was hidden, so nothing may claim it was: {under}"
+    );
+}

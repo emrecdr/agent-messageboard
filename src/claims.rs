@@ -373,12 +373,49 @@ pub fn edited_paths(conn: &Connection, project: &str) -> Result<Vec<EditedPath>>
     Ok(paths)
 }
 
+/// The most claims a listing spells out before it starts counting instead (D137's sibling).
+///
+/// **The same defect as `amb inbox`, on the surface `PRIMER` teaches, and found by looking for it
+/// rather than by hitting it.** Measured 2026-09-06 against the live board: `amb claims --all
+/// --json` rendered 165,245 characters — 41,300 tokens, larger than the uncapped inbox this
+/// project had just finished bounding.
+///
+/// **Claims grow faster than messages**, because `PostToolUse` writes one per file any agent
+/// edits, and `list` is a read-time filter with no reaper (see below) — so the row count only
+/// rises. On that board 526 of 528 rows had already lapsed, and 349 of them by more than three
+/// days.
+///
+/// 50 rather than [`crate::delivery::INBOX_MAX_RENDERED`]'s 25: a claim row is a fraction of a
+/// message's size, and the number should be generous enough that ordinary use never meets it.
+/// This is a backstop against the pathological board, not a substitute for `--live`, which cut
+/// that same listing to 159 characters.
+pub const MAX_LISTED: usize = 50;
+
+/// Keep the newest `limit` claims and report how many were left out.
+///
+/// **A prefix, where the message listing takes a suffix, and the two are the same intent.**
+/// [`list`] returns newest-first while `messages::inbox` returns oldest-first, so "keep the
+/// newest" is `[..n]` here and `[len - n..]` there. Written out because the slice is the half a
+/// reader checks and the ordering is the half they assume — flipping either produces a listing
+/// that is the right size, reports the right counts, and shows the wrong rows.
+pub fn visible(claims: &[Claim], limit: Option<usize>) -> (&[Claim], usize) {
+    match limit {
+        Some(n) if claims.len() > n => (&claims[..n], claims.len() - n),
+        _ => (claims, 0),
+    }
+}
+
 /// List claims, newest first.
 ///
 /// Expiry is a **read-time filter, never a reaper process** (`DESIGN.md`). With
 /// `live_only = false` the lapsed rows come too, so a lapse degrades into a lead — "alice held
 /// this until 40 minutes ago" — rather than the claim silently vanishing, which is
 /// `RESEARCH.md` R1's specific complaint about the prior art.
+///
+/// **That argument is untouched by [`MAX_LISTED`] and it is worth saying which part.** The cap
+/// bounds what one invocation *renders*; it does not filter, delete, or change what `--live`
+/// means. A lapse still degrades into a lead — the newest 50 leads, which on a board where two
+/// thirds of the rows lapsed over three days ago are the only ones anybody could act on.
 pub fn list(conn: &Connection, project: Option<&str>, live_only: bool) -> Result<Vec<Claim>> {
     let at = now()?;
     let (query, binds) = list_sql(project, live_only.then_some(at));
@@ -1025,6 +1062,43 @@ mod tests {
             expires_at,
             holder_alive: true,
         }
+    }
+
+    /// **`visible` keeps the head, because [`list`] is newest-first — and the message listing
+    /// keeps the tail for the identical reason.**
+    ///
+    /// Two functions with the same intent and opposite slices is exactly what gets "made
+    /// consistent" by a later reader. Both directions produce a listing of the right size that
+    /// reports the right `hidden`, so no count can tell them apart; only the rows can, and this
+    /// asserts the rows.
+    #[test]
+    fn the_newest_claims_survive_the_cap_and_the_oldest_are_counted() {
+        // Newest first, as `list` returns them: `a` is the most recent.
+        let rows: Vec<Claim> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|p| claim(p, "alice", "observed", 100.0))
+            .collect();
+
+        let (shown, hidden) = visible(&rows, Some(2));
+        assert_eq!(
+            shown.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "the newest two — taking the tail would give [c, d] and count the same 2 hidden"
+        );
+        assert_eq!(hidden, 2);
+
+        // No cap, and a cap nothing reaches: everything survives and nothing claims otherwise.
+        for limit in [None, Some(4), Some(9)] {
+            let (all, none_hidden) = visible(&rows, limit);
+            assert_eq!(all.len(), 4, "limit {limit:?} must not cut");
+            assert_eq!(none_hidden, 0, "and must not claim it did: {limit:?}");
+        }
+
+        // An empty listing is not a cap event either — the guard over `hidden` has to stay
+        // false here, or every empty board grows a line telling it what it is missing.
+        let (empty, nothing) = visible(&[], Some(2));
+        assert!(empty.is_empty());
+        assert_eq!(nothing, 0);
     }
 
     #[test]

@@ -175,6 +175,14 @@ enum Command {
         /// One row per claim instead of one line per holder-and-directory.
         #[arg(long)]
         raw: bool,
+        /// How many claims to list, newest first. 0 lists all of them. Default 50.
+        ///
+        /// The same bound `amb inbox` carries (D137). Claims accumulate faster than mail — one
+        /// per file any agent edits, and expiry is a read-time filter with no reaper — so this
+        /// listing was the largest agent-facing surface on the board once the inbox was capped.
+        /// `--live` is usually the better answer: it hides lapsed rows rather than counting them.
+        #[arg(long, value_name = "N", default_value_t = claims::MAX_LISTED)]
+        limit: usize,
     },
     /// Block until mail arrives. Backs `monitor` delivery mode; run it under a Monitor tool.
     Watch {
@@ -895,6 +903,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             all,
             live,
             raw,
+            limit,
         } => {
             // `--all` is `None`: every project. **Conflict *detection* stays project-scoped and
             // that is not the same question** — claims store repo-relative paths, so `README.md`
@@ -907,15 +916,28 @@ fn run(cli: Cli) -> Result<(), Error> {
             } else {
                 Some(project.as_deref().unwrap_or(&me.project))
             };
-            let rows = claims::list(&conn, scope, live)?;
+            let all_rows = claims::list(&conn, scope, live)?;
             let at = db::now()?;
+            // **One cap, applied before any branch, so all three describe the same set** — the
+            // JSON rows, the `--raw` lines and the aggregate summary. Splitting it would let
+            // `--json` and the text disagree about what was hidden, which is D33's failure and
+            // the reason D137 put the same computation in one place.
+            let (rows, hidden) = claims::visible(&all_rows, (limit > 0).then_some(limit));
             if cli.json {
                 let items: Vec<_> = rows.iter().map(|c| c.to_json(at)).collect();
-                print_json(&serde_json::json!({ "count": items.len(), "claims": items }));
+                print_json(&serde_json::json!({
+                    // Same split as `inbox` and part of the same v2: `count` is what this object
+                    // carries, `total` is what exists. See `amb::JSON_CONTRACT`.
+                    "count": items.len(),
+                    "total": all_rows.len(),
+                    "hidden": hidden,
+                    "limit": limit,
+                    "claims": items,
+                }));
             } else if rows.is_empty() {
                 println!("no claims");
             } else if raw {
-                for c in &rows {
+                for c in rows {
                     println!(
                         "{} · {} · {} · {}",
                         c.path,
@@ -928,13 +950,33 @@ fn run(cli: Cli) -> Result<(), Error> {
                 // Grouped when surveying the machine, flat when it is one project — the heading
                 // is what stops six different `README.md` files reading as one collision.
                 let lines = if all {
-                    claims::summarise_by_project(&rows, at)
+                    claims::summarise_by_project(rows, at)
                 } else {
-                    claims::summarise(&rows, at)
+                    claims::summarise(rows, at)
                 };
                 for line in lines {
                     println!("{line}");
                 }
+            }
+            // **Outside the three *text* branches, so no rendering of claims can truncate
+            // silently** — including `--raw`, which is one line per claim and the form the cap
+            // bites hardest. `--live` is named first because it is the answer on a real board:
+            // 526 of 528 rows had lapsed when this was measured, and `--live` cut the same
+            // listing by 260x.
+            //
+            // **`!cli.json` is load-bearing and was missing.** Written first as a bare
+            // `if hidden > 0` after the whole `if/else` chain, it appended a prose line to the
+            // JSON object — `trailing characters at line 2 column 3`, invalid on the one surface
+            // D117 versions and a hook feeds straight to a model. The unit test could not see it
+            // (the guard is in `main.rs`) and neither could any text assertion. The e2e test
+            // that drives the binary found it on its first run, which is M20's whole argument:
+            // count the layers, and suspect the outermost.
+            if !cli.json && hidden > 0 {
+                println!(
+                    "  …{hidden} older claim(s) not shown — `--live` hides lapsed ones · \
+                     `--limit 0` lists all {}.",
+                    all_rows.len()
+                );
             }
         }
 

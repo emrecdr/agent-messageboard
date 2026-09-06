@@ -43,7 +43,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 720 tests (722 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 722 tests (724 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -663,7 +663,7 @@ between commits, and scripts that scrape it get what they asked for.
 | `amb status` | What the board is *doing*: offers versus injections, what died unread, declared versus observed claims. Takes no arguments — every filter it could grow computes a number over a narrower population than the sentence beside it (D123) |
 | `amb claim <path> [--intent I] [--ttl T]` | Advisory claim; reports conflicts, never blocks |
 | `amb release <path>` | Drop a claim you hold |
-| `amb claims [--all] [--live] [--raw] [--project P]` | Who holds what. **`--all` surveys every project** — the default answers only for this one |
+| `amb claims [--all] [--live] [--raw] [--limit N] [--project P]` | Who holds what. **`--all` surveys every project** — the default answers only for this one. Lists the newest 50 and says how many it kept back; **`--live` is usually what you want** — on a real board 526 of 528 rows had lapsed (D137) |
 | `amb watch [--timeout S] [--poll MS]` | Block until mail arrives. `--poll` is floored at 50 ms — zero was a busy loop (D97) |
 | `amb snapshot <path> [--all]` | Write the board to a markdown file for a reader that cannot open it. **Marks nothing read**, and refuses a path inside a repository (D11, D61) |
 | `amb install [--vendor V] [--mode M] [--memory] [--dry-run]` | Wire delivery into the host CLI's settings file. `--vendor claude-code` (default) or `gemini-cli` (D111) |
@@ -911,7 +911,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 720 tests (722 on Linux)
+cargo test                       # all 722 tests (724 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change

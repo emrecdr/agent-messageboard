@@ -58,12 +58,29 @@ and why the on-disk schema is deliberately not one of them.
   is why a body cap alone bottoms out around 9,000 tokens however far it is tightened, and why the
   count is the term that grows without limit on a table nothing prunes.
 
-- **`--json` contract v2** (D117's integer, moved for the first time). `amb inbox --json` returns a
-  window, so `count` is now how many messages the object carries rather than everything selected,
-  and `total`, `hidden`, `unread` and `limit` join it. **`body` is untouched and every message
-  returned is whole** — the count is capped, never the field, so nothing a parser reads means
-  something new. A reader that cached "`count` is my whole inbox" is wrong from this version, and
-  moving the integer is how it finds out before failing.
+- **`amb claims` is bounded too, and it was the worse one** (D137). Found by measuring every
+  agent-facing command *after* the inbox was capped rather than by hitting it — this project's
+  recorded failure is that fixing one instance trains attention on the thing fixed rather than on
+  its siblings. `amb claims --all --json` was 165,245 characters (41,300 tokens), larger than the
+  inbox had been; it is now 15,922. Claims accumulate faster than mail, because `PostToolUse`
+  writes one per file any agent edits and expiry is a read-time filter with no reaper: **526 of
+  528 rows had already lapsed**, 349 of them by over three days.
+
+  `--live` was already the answer and cuts the same listing 260-fold. The cap is a backstop for
+  the board where nobody typed it, so the hidden line names `--live` first and `--limit 0` second.
+  Defaulting to `--live` and a D96-style listing horizon were both considered and rejected — the
+  horizon reaches only 104 of 528 rows, less than the flag that already exists.
+
+- **`--json` contract v2** (D117's integer, moved for the first time). **A list-shaped command
+  returns a window.** `amb inbox --json` and `amb claims --json` both report `count` as how many
+  rows the object carries rather than everything selected, with `total`, `hidden` and `limit`
+  beside it — and `unread` on the inbox. **`body` is untouched and every message returned is
+  whole** — the count is capped, never the field, so nothing a parser reads means something new. A
+  reader that cached "`count` is my whole inbox" is wrong from this version, and moving the
+  integer is how it finds out before failing.
+
+  Both commands are covered by one integer rather than two: v2 is unreleased, and one number for
+  one idea beats two for halves of it.
 
   `JSON_CONTRACT` moved from a private `const` in `main.rs` to `amb::JSON_CONTRACT`, because the
   one test asserting it had transcribed the literal `1` — M28's shape, a second copy whose only

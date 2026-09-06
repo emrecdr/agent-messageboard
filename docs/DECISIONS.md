@@ -7652,6 +7652,44 @@ The hidden-count line first said `` `--limit 0` shows every one ``. It does not:
 characters rather than the original 265,949. It now says `lists all N`. **The overstatement was found
 by running the binary against a copy of the real board** (M32), after the suite was green.
 
+### The sibling, found by looking for it rather than by hitting it
+
+**Amended the same day.** This project's recorded failure is that fixing one instance trains
+attention on the thing fixed rather than on its siblings — D86, D88 and D90 were each a second
+instance of a defect closed in the same file hours earlier. So every agent-facing command was
+measured after the inbox was capped, and the worst surface on the board turned out to be the one
+that had just been overtaken:
+
+| command | before | after |
+|---|---|---|
+| `amb claims --all --json` | 165,245 (41,300 tokens) | 15,922 (4,000) |
+| `amb claims --all` | 18,969 (4,700 tokens) | 2,570 (640) |
+
+**Claims grow faster than mail.** `PostToolUse` writes one per file any agent edits, and expiry is
+a read-time filter with no reaper by decision, so the row count only rises: **526 of 528 rows had
+already lapsed**, 349 of them by more than three days.
+
+**`--live` was already the right answer and cut the same listing 260-fold** — to 159 characters.
+It is taught in `PRIMER`. The cap is a backstop against the board where nobody typed it, not a
+replacement for it, which is why the hidden line names `--live` first and `--limit 0` second.
+
+**What was rejected.** *Defaulting to `--live`* — the lapsed rows are shown deliberately, so a
+lapse degrades into a lead rather than vanishing (`RESEARCH.md` R1's complaint about the prior
+art), and a cap bounds the render without touching that. *A 24-hour listing horizon*, on D96's
+model — measured, and it only reaches 104 of 528 rows, a 5x reduction where the cap gives 10x and
+`--live` gives 260x. It would have been a new mechanism buying less than the flag that exists.
+
+**Folded into `--json` v2 rather than bumping to v3.** v2 is unreleased, and one integer for one
+idea is better than two for halves of it: **v2 means a list-shaped command returns a window.**
+
+**The e2e test earned its place on its first run.** The hidden-count line was written after the
+whole `if/else` chain rather than after its *text* branches, so it appended prose to the JSON
+object — `trailing characters at line 2 column 3`, invalid output on the one surface D117 versions
+and a hook feeds straight to a model. No unit test could see it: the guard lives in `main.rs`.
+That is M20's arithmetic exactly — count the layers a rule passes through, and suspect the
+outermost, because the library test is the cheap one and therefore the one that exists.
+
+
 ## D138 · The binary that edits every session's settings file ships with provenance, and `amb thread` is taught where it is used
 
 **Decided 2026-09-06.** Two unrelated changes, recorded together because both are the same shape —
