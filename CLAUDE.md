@@ -635,7 +635,7 @@ Gemini session with no id to go and be a different CLI.
   show X" needs an assertion of **absence**, and "assert the positive explicitly" is the advice
   that stops you writing one.
 
-  **And the shape it takes most often is a guard over a count** (M27). `status.rs` scored 52/92,
+  **And the shape it takes most often is a guard over a count** (M27). `memory/status.rs` scored 52/92,
   and **thirty-seven of its forty survivors sit on the `if` that decides whether a line is rendered
   at all** — ten of them the literal edit `x > 0` -> `x >= 0`, the rest the other operators in the
   same conditions; only three are in the arithmetic. That relaxation is invisible to a

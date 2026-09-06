@@ -211,11 +211,19 @@ pub fn render(b: &Board) -> String {
     // per send" reads as a cost per message and is really a fact about how many sessions happened
     // to be open.
     //
-    // **Rendered unconditionally, and that is deliberate.** M27 measured this module at 52/92 with
-    // *thirty-seven of forty survivors* sitting on the `if` deciding whether a line renders at all,
-    // ten of them the literal `x > 0` -> `x >= 0`. A count guard has that relaxation and a
-    // rendered-always line has none, so the cheapest defence here is not to write the guard. The
-    // zero row is also the informative one: `0 global(s)` on a board that used to send them is the
+    // **Rendered unconditionally, and that is deliberate.** M27 measured `memory/status.rs` at
+    // 52/92 with *thirty-seven of forty survivors* sitting on the `if` deciding whether a line
+    // renders at all, ten of them the literal `x > 0` -> `x >= 0`. A count guard has that
+    // relaxation and a rendered-always line has none, so the cheapest defence here is not to write
+    // the guard.
+    //
+    // **That finding is inherited, not measured here, and this comment said otherwise** (M71). It
+    // read "M27 measured *this module*" — but `src/status.rs` was created six days after M27, and
+    // the file M27 scored is `memory/status.rs`. Two modules share a short name; the citation was
+    // exact when `CLAUDE.md` first wrote it and acquired a second referent when this file shipped.
+    // The design is unaffected and the principle is genuinely M27's; the attribution was not.
+    //
+    // The zero row is also the informative one: `0 global(s)` on a board that used to send them is the
     // signal D126's withdrawal condition is looking for.
     let _ = writeln!(
         s,

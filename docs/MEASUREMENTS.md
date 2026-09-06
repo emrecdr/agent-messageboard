@@ -2035,7 +2035,7 @@ the uuid and the note slug for want of an uppercase letter, the crate version an
 character set. Near-equivalent relative to this project's corpus, which is the only denominator
 available.
 
-### `status.rs`: thirty-seven of forty survivors sit on a print-guard
+### `memory/status.rs`: thirty-seven of forty survivors sit on a print-guard
 
 Not on the arithmetic — on the `if` that decides whether a line is **rendered at all**. Ten are
 literally `x > 0` relaxed to `x >= 0`; the rest are the other operators in the same conditions
@@ -4902,3 +4902,66 @@ gate printed an unqualified `the inventory IS closed` to everyone. An honest cav
 not a caveat; it is CLAUDE.md's always-already-open failure with the roles swapped. The summary
 line now reads `coverage is closed` and carries the distinction, names the manual check, and asks
 for rounds to be recorded. No new instrument, so nothing new to keep true.
+
+---
+
+## M71 · Mutation coverage is not reach: the central query yields four mutants, none in the predicate
+
+**2026-09-06.** Measured twice, on separate `--list` runs against separate target directories,
+because `cargo mutants --list` neither builds nor tests and both runs agreed exactly.
+
+| function | lines | mutants generated | mutants in the SQL |
+|---|---|---|---|
+| `messages::select` | 526–634 (109) | 4 | **0** |
+| `status::gather` | 128–178 (51) | 1 | **0** |
+
+`select`'s four are two whole-function replacements at line 548 and two arithmetic edits on a single
+subtraction at 549 — the horizon cutoff. Nothing lands past line 564, where the query begins.
+
+**That predicate is where the decisions are.** D17's 2×2 addressing model — the claim `CLAUDE.md`
+calls the central design claim — plus the sender-exclusion, the unread filter, D23's back-off, D96's
+horizon, D133's narrowing clauses and D134's per-message cap. All of it inside a `format!` string,
+which `cargo mutants` cannot see: it mutates Rust expressions, and a SQL predicate is a string
+literal to the compiler.
+
+**Scale, counted by SQL keyword lines:** `messages.rs` 31, `memory/index.rs` 40, `db.rs` 24,
+`status.rs` 21, `claims.rs` 14 — 130 lines across five modules, every one of them in a module
+`check_mutation_coverage.py` reports as covered.
+
+**This is a second axis on M70's limit, and orthogonal to it.** M70: coverage is not *currency* — a
+module rewritten since its round still reads as covered, and re-running fixes it. This: coverage is
+not *reach* — a module can have a round, be perfectly current, and still have its central logic
+never mutated once. Re-running does not fix it and never will. The gate prints `coverage is closed`,
+which is true of the Rust and false of the query.
+
+**What to do instead**, since the tool cannot: assert SQL clauses by hand, by deleting them and
+watching a test redden. D134's cap was verified that way — three deletions, three reddenings — and
+it is the only method available.
+
+**Found by not running a round.** M70's lesson is to read the mutant list before spending the cargo;
+applied to D134's diff it returned four whole-function replacements, so the round would have come
+back clean while testing none of the logic. That is the trap recorded a day earlier as *zero missed
+over mutants that were never generated is not evidence*, and the caveat paid for itself before it
+was written.
+
+### And a naming collision that made this measurement wrong on the first attempt
+
+`src/status.rs` yielded 14 mutants where `CLAUDE.md` records a 92-mutant round. Both are correct:
+M27 measured **`memory/status.rs`** (811 LOC, 92 viable, 57%), and `src/status.rs` is a different
+module created 2026-09-05 in `5235bab` — **six days after M27**.
+
+M27's table row is precise. Its section heading was not, and neither was `CLAUDE.md`'s citation:
+both said bare `status.rs`, which was unambiguous when written because only one file had that name.
+`src/status.rs` shipped and the sentence silently acquired a second referent.
+
+The cost was concrete: `3987359` put *"M27 measured this module at 52/92"* into `src/status.rs`, a
+module M27 predates. The **design** that citation justified is unaffected — rendering
+unconditionally still avoids the `x > 0` → `x >= 0` relaxation, and that principle is genuinely
+M27's — but it was inherited rather than measured there, and the comment claimed otherwise. All
+three sites now name the file.
+
+**The shape is new to this catalogue.** The prose did not drift and no decision was overturned; the
+*namespace* changed underneath a sentence that was exact when written. `check_docs.py` cannot see it
+— there is no link, table or count to compare — and neither can a reader, because the sentence still
+parses. The tell is a **short name in a repository that later gains a second file with that name**,
+and the fix is to spell the path wherever the claim is load-bearing.
