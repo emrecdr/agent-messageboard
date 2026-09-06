@@ -252,6 +252,20 @@ def records_are_uniquely_numbered():
     return problems
 
 
+def cargo_version() -> str:
+    """The version `Cargo.toml` declares, for [`unreleased_is_honest`].
+
+    Read here rather than passed in because it has exactly one reader; if a second appears, that
+    is the moment to hoist it rather than now (a helper with one caller is a name, not a
+    abstraction). Returns `""` when the line cannot be found, which makes every caller's guard
+    fail closed — an unreadable manifest must not excuse an empty changelog.
+    """
+    for line in (ROOT / "Cargo.toml").read_text().splitlines():
+        if line.startswith("version = "):
+            return line.split('"')[1]
+    return ""
+
+
 def unreleased_is_honest():
     """`[Unreleased]` saying nothing, while commits exist, is the drift itself.
 
@@ -291,6 +305,23 @@ def unreleased_is_honest():
     ).strip()
     placeholder = re.fullmatch(r"[-*]?\s*Nothing yet\.?", body, re.I) is not None
     silent = placeholder or not body
+    # **A cut-but-untagged release is documented, and this check could not say so.** Between
+    # moving the work into `## [<version>]` and pushing that version's tag there is a window
+    # where `[Unreleased]` is legitimately empty, `git describe` still reports the *previous*
+    # tag, and every commit since it counts as undocumented. The work is written down; the
+    # comparison is just anchored to a tag that has been superseded on disk and not yet in git.
+    #
+    # Recognised rather than skipped, because the alternative is `AMB_VERIFY_SKIP` on every
+    # release commit — and a bypass that becomes routine is a check that has been switched off
+    # by habit rather than by decision, which is the failure this function's own docstring
+    # records happening to it once already.
+    #
+    # Deliberately narrow: only the version `Cargo.toml` currently declares counts, and only
+    # while no tag for it exists. A stale section for some *other* version does not excuse an
+    # empty `[Unreleased]`.
+    cut_here = CHANGELOG.partition(f"## [{cargo_version()}]")[2].partition("\n## ")[0].strip()
+    if silent and cut_here and tag != f"v{cargo_version()}":
+        return []
     if n.isdigit() and int(n) > 0 and silent:
         since = f"since {tag}" if tag else "in a history with no tag"
         how = "says 'Nothing yet'" if placeholder else "is empty"

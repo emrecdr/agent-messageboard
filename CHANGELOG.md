@@ -9,6 +9,16 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+## [0.2.1-rc.1] — 2026-09-06
+
+**A pre-release, cut to fire the release pipeline for the first time.** D116 settled Q14 with the
+pipeline unfired and said the first tag would be the test; D138 then found that the tag which was
+supposed to be that test — `v0.2.0` — is already on the remote at a commit five days older than
+`release.yml`, so it could not have run it and its name is spent. `dist` accepts only a tag
+matching the package version, so firing the pipeline at all needs a version. This is the one you
+can throw away: it exercises build, archive, shell installer, **attestation** and upload without
+claiming a stable release.
+
 ### Added
 
 - **Every released artifact carries a build provenance attestation** (D138). `dist-workspace.toml`
