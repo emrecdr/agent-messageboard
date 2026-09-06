@@ -275,7 +275,10 @@ simply never — at this volume the table stays trivially small.
   `--yes`. The findings-inbox is still refused.
 - **No enforcement of claims** (D5). Conflicts are reported; nothing blocks.
 - **No outbox** (D10). `amb send` is the only write path.
-- **No files written inside repositories** (D11).
+- **No files written inside repositories** (D11). ~~As written.~~ **Revised by D49**:
+  `amb memory export` publishes into the repo it names, and only because a person ran it.
+  The rule is about *initiative*, not bytes — stated correctly at the top of this document
+  and flatly here, 251 lines apart, until 2026-09-06.
 - **No server, daemon or socket** (D3). One binary, one file.
 - **No notification subsystem** (D7). Hooks are the harness's existing extension point, and what
   they run is a poll.

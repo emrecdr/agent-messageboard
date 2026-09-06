@@ -104,7 +104,13 @@ genuinely undecided; when one is settled, delete it there and record it as a new
 **Several decisions are negative, and negative decisions leave no trace in the code.** They read
 as omissions and get "helpfully" fixed. These are deliberate:
 
-- **No decisions, findings or ADRs in the bus** (D2). Those live in the repos they govern.
+- **No decisions, findings or ADRs in the bus** (D2). A decision has no recipient and is never
+  consumed, so a queue is the wrong shape for it. ~~Those live in the repos they govern.~~
+  **Revised by D49**: they live in the *vault*, and are published into the repo they govern
+  one-way, only when a person asks. Still never on the bus — which is the half of D2 that
+  never moved. `README.md` and `DESIGN.md` have carried this correction since D49 and this
+  file did not, which is the always-already-open failure two sections below, committed in the
+  list that warns about it.
 - **Claims are advisory. No fencing tokens, nothing blocks** (D5). `claims` has
   `PRIMARY KEY (path, agent)`, not `PRIMARY KEY (path)` — exclusivity is not representable, on
   purpose.
