@@ -190,7 +190,11 @@ pub fn gather(conn: &Connection) -> Result<Board> {
 /// **`0/0` is not zero, and printing it as zero is this project's catalogued failure.** D74's
 /// whole subject is a ratio read as a verdict when its denominator described nothing; a lane that
 /// has never run and a lane that ran and never succeeded must not render identically.
-fn rate(numerator: i64, denominator: i64) -> String {
+///
+/// **Shared with [`crate::sent`] rather than copied there.** A second implementation of a rule this
+/// small is how M28's two constants rotted: the copy exists precisely so it can drift, and the
+/// drift is silent because both versions keep compiling.
+pub(crate) fn rate(numerator: i64, denominator: i64) -> String {
     if denominator <= 0 {
         "—".to_string()
     } else {

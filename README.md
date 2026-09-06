@@ -43,7 +43,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 724 tests (726 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 733 tests (735 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -661,6 +661,7 @@ between commits, and scripts that scrape it get what they asked for.
 | `amb register [--name N]` | Set a display name. Optional |
 | `amb doctor` | What is wrong with this installation, especially what fails silently |
 | `amb status` | What the board is *doing*: offers versus injections, what died unread, declared versus observed claims. Takes no arguments — every filter it could grow computes a number over a narrower population than the sentence beside it (D123) |
+| `amb sent` | What happened to the mail **you** sent: handed over by a hook, fetched by the recipient, or never delivered at all. Direct mail gets a rate; a broadcast gets reach and no rate, because `@project` is a place rather than a subscriber list (D139) |
 | `amb claim <path> [--intent I] [--ttl T]` | Advisory claim; reports conflicts, never blocks |
 | `amb release <path>` | Drop a claim you hold |
 | `amb claims [--all] [--live] [--raw] [--limit N] [--project P]` | Who holds what. **`--all` surveys every project** — the default answers only for this one. Lists the newest 50 and says how many it kept back; **`--live` is usually what you want** — on a real board 526 of 528 rows had lapsed (D137) |
@@ -911,7 +912,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 724 tests (726 on Linux)
+cargo test                       # all 733 tests (735 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -1058,7 +1059,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D138, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D139, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

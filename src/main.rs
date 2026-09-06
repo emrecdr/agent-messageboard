@@ -15,6 +15,7 @@ use amb::hooks;
 use amb::identity;
 use amb::memory;
 use amb::messages::{self, Outgoing};
+use amb::sent;
 use amb::status;
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -269,6 +270,14 @@ enum Command {
     /// D42; messaging, claims and delivery had no ledger at all, so whether a shipped change to
     /// any of them worked could only be answered by hand-querying SQLite.
     Status,
+
+    /// What happened to the mail *this session sent* — the sender's half of the receipt (D139).
+    ///
+    /// A separate command rather than a `--status --mine` flag: `status` answers *is the board
+    /// healthy* and most of its fields are board-wide, so a flag would leave a dozen of them
+    /// rendering something the caller did not ask about. That is D137's defect — one renderer
+    /// serving two acts — and it was fixed in this codebase the same week.
+    Sent,
     /// List agents known to the board.
     Agents {
         /// Another project's roster. Defaults to this project.
@@ -1074,6 +1083,19 @@ fn run(cli: Cli) -> Result<(), Error> {
                 print_json(&status::render_json(&b));
             } else {
                 print!("{}", status::render(&b));
+            }
+        }
+
+        Command::Sent => {
+            // `resolve` rather than an argument: the question is "what happened to *my* mail", and
+            // an agent selector would invite reading somebody else's receipt — a different feature
+            // with a different argument, which nobody has asked for.
+            let me = identity::resolve()?;
+            let s = sent::gather(&conn, &me.id)?;
+            if cli.json {
+                print_json(&sent::render_json(&s));
+            } else {
+                print!("{}", sent::render(&s));
             }
         }
 

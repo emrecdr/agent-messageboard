@@ -202,6 +202,120 @@ fn a_second_offer_of_one_message_costs_twice_and_is_still_one_offer() {
     );
 }
 
+/// **The three states of a sent message, each produced by the path that really writes it** (D139).
+///
+/// A library test can assert `gather`'s SQL against rows it inserted itself, and it does. What it
+/// cannot show is that the two *arriving* states come from two different commands: `delivered_at`
+/// is written only on the hook path, `read_at` only by `amb read`, and a fixture that writes both
+/// columns directly would pass whichever way round they were wired. That is M20 — the rule passes
+/// through three layers and the cheapest one to assert is not the one anybody runs.
+///
+/// The `fetched` state is the whole reason this command is not a funnel, so it is staged through
+/// `amb read --all` on mail the hook was never given a chance to offer.
+#[test]
+fn a_sent_message_is_handed_fetched_or_never_delivered_and_the_three_partition() {
+    let b = Board::new();
+    for (id, name) in [
+        ("uuid-alice", "alice"),
+        ("uuid-bob", "bob"),
+        ("uuid-carol", "carol"),
+    ] {
+        b.run(id, &["register", "--name", name]);
+    }
+    let send = |to: &str, subject: &str| {
+        b.run(
+            "uuid-alice",
+            &["send", to, "--subject", subject, "--body", "b"],
+        );
+    };
+
+    // 1. handed — sent, then a turn boundary puts it in front of bob.
+    send("bob", "handed");
+    b.hook("uuid-bob", "monitor", r#"{"hook_event_name":"Stop"}"#);
+
+    // 2. fetched — sent *after* that boundary, so no hook has offered it. `read --all` sets
+    //    `read_at` and never `delivered_at`, which is the asymmetry the third state exists for.
+    send("bob", "fetched");
+    b.run("uuid-bob", &["read", "--all"]);
+
+    // 3. unoffered — carol registered and never came back.
+    send("carol", "unoffered");
+
+    let j = b.json("uuid-alice", &["sent"]);
+    assert_eq!(j["direct_total"], 3, "{j}");
+    assert_eq!(j["direct_handed"], 1, "{j}");
+    assert_eq!(j["direct_fetched"], 1, "{j}");
+    assert_eq!(j["direct_unoffered"], 1, "{j}");
+    assert_eq!(
+        j["direct_acknowledged"], 2,
+        "both arriving states carry a read_at, and the handed one was acknowledged too: {j}"
+    );
+
+    // The partition, asserted through the binary rather than only in the library.
+    let n = |k: &str| j[k].as_i64().expect(k);
+    assert_eq!(
+        n("direct_handed") + n("direct_fetched") + n("direct_unoffered"),
+        n("direct_total"),
+        "the three states must still partition once real commands write the rows: {j}"
+    );
+
+    // **`acknowledged` exceeding `handed` is correct here and looks like a bug**, which is why the
+    // rendered form has to carry all three states rather than a two-tick funnel.
+    let out = b.run("uuid-alice", &["sent"]);
+    for needle in [
+        "1 handed over by a hook",
+        "1 fetched by the recipient",
+        "1 never reached them",
+        "2 of 3 acknowledged",
+    ] {
+        assert!(out.contains(needle), "missing {needle:?}:\n{out}");
+    }
+}
+
+/// A broadcast reports reach and never a rate, through the shipped binary.
+///
+/// The refusal is the feature (D17: `@project` is a place, not a subscriber list), and a refusal
+/// that only exists in a library test is one the next renderer can quietly drop.
+#[test]
+fn a_broadcast_receipt_reports_reach_and_never_a_rate() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run("uuid-bob", &["register", "--name", "bob"]);
+    b.run(
+        "uuid-alice",
+        &["send", "@", "--subject", "all", "--body", "b"],
+    );
+    b.hook("uuid-bob", "monitor", r#"{"hook_event_name":"Stop"}"#);
+
+    let j = b.json("uuid-alice", &["sent"]);
+    assert_eq!(j["broadcast_total"], 1, "{j}");
+    assert_eq!(j["broadcast_reached"], 1, "{j}");
+    assert_eq!(
+        j["direct_total"], 0,
+        "a broadcast must not be counted as direct mail: {j}"
+    );
+    for absent in ["broadcast_rate", "roster_ever"] {
+        assert!(
+            j.get(absent).is_none(),
+            "{absent:?} reached the contract, and a parser can now compute the division the \
+             human page refuses: {j}"
+        );
+    }
+
+    // The presence row licenses the absence below (M27): if the broadcast line stopped rendering
+    // altogether, "no percentage" would hold for the wrong reason.
+    let out = b.run("uuid-alice", &["sent"]);
+    let line = out
+        .lines()
+        .find(|l| l.starts_with("broadcast "))
+        .unwrap_or_else(|| panic!("the broadcast line must render:\n{out}"));
+    assert!(line.contains("1 agent(s) reached"), "{line}");
+    assert!(
+        !line.contains('%'),
+        "a rate reached the broadcast line: {line}"
+    );
+}
+
 /// **Every key of the `--json` contract, through the shipped binary — the layer that had the hole.**
 ///
 /// `status::render_json` is asserted in the library, and that is the cheap test to write, which is

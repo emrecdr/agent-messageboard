@@ -11,6 +11,27 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`amb sent` — what happened to the mail *you* sent** (D139). A sender had no delivery signal:
+  `status`'s `unoffered` is board-wide and unattributable, so the one question a sender actually has
+  was the one the board could not answer. Reported from outside, by a session evaluating `amb`
+  across a two-repo seam.
+
+  A `SELECT` over rows that already exist — no outbox, no relay, no new write path (D10 untouched).
+
+  **Direct mail is three states, not a funnel**, because `delivered` and `read` are not nested sets
+  here: `mark_read` inserts `read_at` alone, so a recipient who runs `amb inbox` then `amb read`
+  acknowledges mail no hook injected. Measured before the module was written — one session at **49
+  delivered against 50 read**, and **118 rows board-wide** carrying a `read_at` with no
+  `delivered_at`. A two-tick rendering would have printed what looks like an arithmetic bug. This is
+  D127's condition seen from the sender's side.
+
+  **A broadcast gets reach and no rate, stated in words.** `reads` rows are written by the
+  recipient, so an agent who never returned has no row; the only available denominator is the
+  48-row roster, which would divide *sessions that came back inside D96's horizon* by *every session
+  that ever registered*. That is question 1 of the ratio rule, and refusing it is D17 — `@project`
+  addresses a place, not a subscriber list. The roster is deliberately absent from `--json` too, so
+  a parser cannot perform the division the human page declines.
+
 - **`docs/VENDOR-COMPATIBILITY.md` — hosts beyond Claude Code, researched and then deferred**
   (`OPEN-QUESTIONS.md` Q15). No code changed; the deferral is the outcome.
 
