@@ -1305,3 +1305,83 @@ fn inbox_filters_narrow_through_the_binary_and_say_so_when_they_match_nothing() 
         "an unfiltered inbox narrowed nothing: {plain}"
     );
 }
+
+/// **D140 through the shipped binary: retracted mail leaves the hook and stays in the inbox.**
+///
+/// The library asserts the same split, and that is the cheap test to write — which is exactly why
+/// M20 says to suspect the outermost layer. Only this can show that the hook a session actually
+/// runs stops offering the message, because `deliverable` and the hook are different layers and
+/// the rule passes through both.
+#[test]
+fn a_retracted_message_stops_being_offered_and_is_still_readable() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run("uuid-bob", &["register", "--name", "bob"]);
+    b.run(
+        "uuid-alice",
+        &[
+            "send",
+            "bob",
+            "--subject",
+            "wrong",
+            "--body",
+            "5 GiB per hour",
+        ],
+    );
+
+    // The premise: the hook offers it before anything retracts it.
+    let (_, first) = b.hook("uuid-bob", "monitor", r#"{"hook_event_name":"Stop"}"#);
+    assert!(first.contains("wrong"), "the premise failed:\n{first}");
+
+    b.run(
+        "uuid-alice",
+        &[
+            "send",
+            "bob",
+            "--subject",
+            "correction",
+            "--body",
+            "that number was wrong",
+            "--supersedes",
+            "1",
+        ],
+    );
+
+    // The next turn boundary: the hook must not offer the withdrawn message again.
+    let (_, bobs) = b.hook("uuid-bob", "monitor", r#"{"hook_event_name":"Stop"}"#);
+    assert!(
+        !bobs.contains("5 GiB per hour"),
+        "the withdrawn message was offered again:\n{bobs}"
+    );
+
+    // Still readable, and it says who withdrew it. This is the half a `DELETE` would fail.
+    let read = b.run("uuid-bob", &["read", "1"]);
+    assert!(
+        read.contains("5 GiB per hour"),
+        "content must survive:\n{read}"
+    );
+    assert!(
+        read.contains("retracted by #2"),
+        "a reader of the withdrawn message must be told:\n{read}"
+    );
+
+    // And retracting somebody else's message is refused, with a usage exit rather than a data one.
+    let out = b.try_run(
+        "uuid-bob",
+        &[
+            "send",
+            "alice",
+            "--subject",
+            "s",
+            "--body",
+            "b",
+            "--supersedes",
+            "1",
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(64),
+        "EX_USAGE for a message that is not yours"
+    );
+}

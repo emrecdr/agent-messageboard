@@ -66,6 +66,17 @@ enum Command {
         /// Stable caller-supplied id. Sending twice with the same one delivers once (D6).
         #[arg(long = "id")]
         ext_id: Option<String>,
+        /// Retract an earlier message of your own: it stops being auto-injected (D140).
+        ///
+        /// **Nothing is erased.** `amb inbox` still lists it and `amb read` still shows it in
+        /// full; only the delivery path skips it, exactly as D96 expires a broadcast without
+        /// touching what `inbox` returns. The retraction is recorded beside the message rather
+        /// than replacing it, because D98 refuses to alter stored content.
+        ///
+        /// Only your own messages — superseding someone else's would be the first thing on this
+        /// board that blocks (D5).
+        #[arg(long)]
+        supersedes: Option<i64>,
     },
     /// Show messages addressed to this agent or broadcast to its project.
     Inbox {
@@ -123,6 +134,17 @@ enum Command {
         /// missing.
         #[arg(long, conflicts_with = "body")]
         body_file: Option<String>,
+        /// Retract an earlier message of your own: it stops being auto-injected (D140).
+        ///
+        /// **Nothing is erased.** `amb inbox` still lists it and `amb read` still shows it in
+        /// full; only the delivery path skips it, exactly as D96 expires a broadcast without
+        /// touching what `inbox` returns. The retraction is recorded beside the message rather
+        /// than replacing it, because D98 refuses to alter stored content.
+        ///
+        /// Only your own messages — superseding someone else's would be the first thing on this
+        /// board that blocks (D5).
+        #[arg(long)]
+        supersedes: Option<i64>,
     },
     /// Show a whole conversation, oldest first, from any message in it.
     ///
@@ -665,6 +687,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             ref kind,
             ref thread,
             ref ext_id,
+            supersedes,
         } => {
             let body = read_body(body.as_deref(), body_file.as_deref())?;
             let addr = address::parse(to)?;
@@ -693,6 +716,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                     kind,
                     thread: thread.as_deref(),
                     ext_id: ext_id.as_deref(),
+                    supersedes,
                 },
             )?;
             if cli.json {
@@ -817,9 +841,10 @@ fn run(cli: Cli) -> Result<(), Error> {
             id,
             ref body,
             ref body_file,
+            supersedes,
         } => {
             let body = read_body(body.as_deref(), body_file.as_deref())?;
-            let new_id = messages::reply(&mut conn, &me, id, &body)?;
+            let new_id = messages::reply(&mut conn, &me, id, &body, supersedes)?;
             if cli.json {
                 print_json(&serde_json::json!({ "sent": new_id, "in_reply_to": id }));
             } else {

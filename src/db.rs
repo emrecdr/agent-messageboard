@@ -419,7 +419,7 @@ pub const PRUNE_AT_BYTES: u64 = 50 * 1024 * 1024;
 ///
 /// Equal to `MIGRATIONS.len()`, asserted by a test rather than computed, so that bumping one
 /// without the other is caught rather than silently accepted.
-pub const SCHEMA_VERSION: i64 = 15;
+pub const SCHEMA_VERSION: i64 = 16;
 
 /// Migrations, applied in order from whatever version the board is already at.
 ///
@@ -847,6 +847,28 @@ const MIGRATIONS: &[&str] = &[
     // searches have no text query at all — the two are separable by `lane` without a second
     // column, and neither is invented.
     "ALTER TABLE searches ADD COLUMN terms INTEGER;",
+    // 15 -> 16 · a message can retract an earlier one, because this board carries 48
+    // retraction-shaped messages across 16 threads and nothing on any of them says what was
+    // retracted (D140).
+    //
+    // **The relation, not a status flag.** `notes.status` had a `superseded` value that nothing
+    // ever wrote, and D63 then found the index could say *that* a note was retired while nothing
+    // could answer *what replaced it*. A column on the superseding message answers both directions
+    // — `WHERE supersedes = ?` walks forward, reading the column walks back — and there is no
+    // second field to drift out of agreement with the first.
+    //
+    // No `DEFAULT`, and NULL is the honest value for every existing row: none of them recorded
+    // this, and backfilling a guess would be D95's shape, a number authored by a migration.
+    //
+    // **The index is not optional here.** The delivery filter asks "has anything retracted me"
+    // once per candidate row, on the `PostToolUse` path that fires after every tool call. Without
+    // it that is a full scan of `messages` per row per tool call. Partial, because the answer is
+    // only ever looked up for rows that retract something and those are a few dozen out of
+    // hundreds — `lib.rs`'s `assert_query_plan_uses` pins that the planner actually reaches it,
+    // since a plan is a property of the query only once something checks.
+    "ALTER TABLE messages ADD COLUMN supersedes INTEGER REFERENCES messages(id);
+     CREATE INDEX IF NOT EXISTS ix_messages_supersedes
+         ON messages(supersedes) WHERE supersedes IS NOT NULL;",
 ];
 
 /// Bring the board up to [`SCHEMA_VERSION`], or explain why it cannot be.
@@ -1602,7 +1624,16 @@ mod tests {
             // maintenance cost of replaying a ladder from the middle, and it is cheaper than a
             // migration written to be idempotent, because `IF NOT EXISTS` would let a genuinely
             // skipped migration pass silently.
+            //
+            // **And every *column* added after 8 to a table that predates it, which this said
+            // nothing about until one existed.** The rule read "every table" and was true only
+            // because no migration had yet altered a pre-8 table; D140's `messages.supersedes` is
+            // the first, and it failed here with `duplicate column name` rather than anywhere a
+            // reader would look. The index goes first — SQLite refuses to drop a column an index
+            // still references.
             "PRAGMA user_version = 8;
+             DROP INDEX IF EXISTS ix_messages_supersedes;
+             ALTER TABLE messages DROP COLUMN supersedes;
              DROP TABLE notes;
              DROP TABLE IF EXISTS note_paths;
              DROP TABLE IF EXISTS note_links;

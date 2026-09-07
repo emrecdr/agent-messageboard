@@ -9,6 +9,26 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Added
+
+- **`--supersedes <id>` on `send` and `reply` — a message can be retracted** (D140). Schema 16.
+
+  Measured before it was built: this board carries **48 retraction-shaped messages across 16
+  threads**, one running to six, and `amb thread` rendered every one at equal weight — so a session
+  reading the original got a wrong number with nothing on it to say so.
+
+  **Withheld, never erased.** A retracted message stops being auto-injected; `amb inbox` still
+  lists it and `amb read` still shows it in full, with a line naming what withdrew it. XEP-0424's
+  tombstone is the road not taken, because D98 refuses to alter stored content. The delivery filter
+  reuses D96's clause and condition rather than inventing a second mechanism.
+
+  **Only your own messages.** Superseding withholds a message from delivery, so allowing it on
+  someone else's mail would be the first blocking mechanism on a board whose central decision is
+  that nothing blocks (D5). `Error::NotYourMessage` exits 64; a missing id still exits 65.
+
+  The argument was already settled for notes by D40 — `superseded_by` recorded, superseded notes
+  never injected again — so only the surface was missing.
+
 ## [0.2.2] — 2026-09-06
 
 ### Added

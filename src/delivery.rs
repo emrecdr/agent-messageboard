@@ -260,6 +260,31 @@ pub fn scope_kind(m: &Message) -> String {
     }
 }
 
+/// `amb`'s own note that a message was retracted, or that it retracts one (D140).
+///
+/// **One function, called by every renderer of a message, for M23's reason**: containment that
+/// lives at a call site regrows with each new renderer, and D90 is the instance where one
+/// sender-written field had three renderers and exactly one of them was guarded. The retraction
+/// relation is not sender-written text — both halves are ids `amb` produced — so it needs no
+/// quoting, but it does need to appear everywhere a withdrawn message can still be read.
+///
+/// Returns `None` for the ordinary message, so the line costs nothing when there is nothing to
+/// say. The two states are not exclusive in principle: a retraction can itself be retracted, and
+/// then both lines render, which is the honest rendering of that chain.
+#[must_use]
+pub fn retraction(m: &Message) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(by) = m.superseded_by {
+        parts.push(format!(
+            "retracted by #{by} \u{2014} the sender withdrew this, and it is no longer delivered"
+        ));
+    }
+    if let Some(old) = m.supersedes {
+        parts.push(format!("retracts #{old}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" \u{b7} "))
+}
+
 /// Whether a project name is safe to render inside `amb`'s own brackets.
 ///
 /// Deliberately stricter than what `AMB_PROJECT` accepts, and that asymmetry is the point: the
@@ -846,6 +871,9 @@ pub fn render_inbox(
             speaker(m.sender()),
             quoted(&m.subject)
         );
+        if let Some(note) = retraction(m) {
+            let _ = writeln!(out, "    ! {note}");
+        }
         let (block, kept_back) = preview_block(&m.body, body_limit);
         for line in block.lines() {
             let _ = writeln!(out, "    {line}");
@@ -927,10 +955,11 @@ pub fn snapshot(
     for m in msgs {
         let _ = writeln!(
             out,
-            "### #{} · {} · from \"{}\"\n\n{}\n\n{}\n",
+            "### #{} · {} · from \"{}\"\n{}\n{}\n\n{}\n",
             m.id,
             scope_kind(m),
             speaker(m.sender()),
+            retraction(m).map_or(String::new(), |n| format!("\n! {n}")),
             quoted_block(&m.subject),
             quoted_block(&m.body)
         );
@@ -1104,6 +1133,8 @@ mod tests {
             subject: format!("subject {id}"),
             body: "line one\nline two".into(),
             thread_id: None,
+            supersedes: None,
+            superseded_by: None,
             read: None,
         }
     }
@@ -1863,6 +1894,60 @@ mod tests {
     /// nothing here could see it (audit round two). It now routes through [`render_inbox`], and
     /// `watch_cannot_be_forged_by_a_newline_in_a_subject` in `tests/cli_e2e.rs` pins that at the
     /// binary — the layer this test cannot reach (M20).
+    /// **A truth table, so the absences prove something** (M27). Three of the four rows assert a
+    /// line is *missing*, and an absence-only test has an unproven premise: if `retraction`
+    /// returned `None` unconditionally every one of them would pass. The `both` row is the
+    /// presence that licenses the other three.
+    #[test]
+    fn a_retraction_note_renders_each_direction_and_nothing_for_an_ordinary_message() {
+        let plain = |sup, by| {
+            let mut m = msg(7, Some("uuid-bob"), None);
+            m.supersedes = sup;
+            m.superseded_by = by;
+            retraction(&m)
+        };
+
+        assert_eq!(plain(None, None), None, "an ordinary message says nothing");
+
+        let withdrawn = plain(None, Some(9)).expect("a retracted message must say so");
+        assert!(withdrawn.contains("retracted by #9"), "{withdrawn}");
+        assert!(
+            withdrawn.contains("no longer delivered"),
+            "the consequence is the half a reader acts on: {withdrawn}"
+        );
+        assert!(
+            !withdrawn.contains("retracts #"),
+            "it retracts nothing itself: {withdrawn}"
+        );
+
+        let retracting = plain(Some(3), None).expect("a retraction must name its target");
+        assert!(retracting.contains("retracts #3"), "{retracting}");
+        assert!(
+            !retracting.contains("retracted by"),
+            "nothing has retracted it: {retracting}"
+        );
+
+        // A retraction that was itself retracted renders both, which is the honest chain.
+        let both = plain(Some(3), Some(9)).expect("both");
+        assert!(
+            both.contains("retracted by #9") && both.contains("retracts #3"),
+            "{both}"
+        );
+    }
+
+    /// The note has to reach the surface a person reads, not only the helper.
+    #[test]
+    fn the_inbox_shows_that_a_message_was_withdrawn() {
+        let mut m = msg(4, Some("uuid-bob"), None);
+        m.superseded_by = Some(11);
+        let out = render_inbox(listing(&[m], None), "bob", "nest", None, None);
+        assert!(
+            out.contains("! retracted by #11"),
+            "a reader of the withdrawn message must be told:\n{out}"
+        );
+        crate::assert_rendered_shape("inbox with a retraction", &out);
+    }
+
     #[test]
     fn every_renderer_of_a_sender_written_field_contains_it() {
         let mut m = msg(1, Some("uuid-bob"), None);

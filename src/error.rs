@@ -53,6 +53,14 @@ pub enum Error {
     #[error("no message with id {0}")]
     NoSuchMessage(i64),
 
+    /// **Retraction is authorial, and this is the board's only sender-scoped write permission**
+    /// (D140). Superseding withholds a message from delivery, so allowing it on someone else's
+    /// mail would be the first blocking mechanism on a board whose central decision is that
+    /// nothing blocks (D5). Distinct from [`Error::NoSuchMessage`] so a caller can tell a
+    /// mistyped id from one that is simply not theirs.
+    #[error("#{id} was sent by another agent — you can only supersede your own messages")]
+    NotYourMessage { id: i64 },
+
     #[error("no agent named {name:?} is registered in project {project:?}")]
     NoSuchAgent { name: String, project: String },
 
@@ -258,6 +266,7 @@ impl Error {
             Error::RemoteVolume { .. } => "remote_volume",
             Error::BadAddress { .. } => "bad_address",
             Error::NoSuchMessage(_) => "no_such_message",
+            Error::NotYourMessage { .. } => "not_your_message",
             Error::NoSuchAgent { .. } => "no_such_agent",
             Error::AgentInAnotherProject { .. } => "no_such_agent",
             Error::NameTaken { .. } => "name_taken",
@@ -307,6 +316,7 @@ impl Error {
             | Error::FieldTooLarge { .. }
             | Error::BadKind { .. }
             | Error::MissingBody
+            | Error::NotYourMessage { .. }
             | Error::EmptyRejection => exit::USAGE,
             Error::NoSuchMessage(_)
             | Error::NoSuchClaim(_)

@@ -43,7 +43,7 @@ amb send @ --subject "heads up" --body "starting on the capture path"
 amb claim src/capture/ --intent "two-tier capture"   # advisory; never blocks
 ```
 
-**Status: built and working.** 733 tests (735 on Linux), including multi-process concurrency and hook-safety
+**Status: built and working.** 740 tests (742 on Linux), including multi-process concurrency and hook-safety
 suites. `cargo test` runs them in about a second.
 
 ---
@@ -103,7 +103,7 @@ SQLite is compiled in — there is no system dependency.
 ```bash
 git clone https://github.com/emrecdr/agent-messageboard.git && cd agent-messageboard
 cargo install --path . --locked      # builds release, installs `amb` onto your PATH
-amb --version                        # amb 0.2.0 (16d672b 2026-09-01, schema 15, sqlite 3.53.2)
+amb --version                        # amb 0.2.0 (16d672b 2026-09-01, schema 16, sqlite 3.53.2)
 ```
 
 Then wire up delivery, **once per machine**:
@@ -661,6 +661,7 @@ between commits, and scripts that scrape it get what they asked for.
 | `amb register [--name N]` | Set a display name. Optional |
 | `amb doctor` | What is wrong with this installation, especially what fails silently |
 | `amb status` | What the board is *doing*: offers versus injections, what died unread, declared versus observed claims. Takes no arguments — every filter it could grow computes a number over a narrower population than the sentence beside it (D123) |
+| `amb send ... --supersedes <id>` | Retract an earlier message **of your own**: it stops being auto-injected, `amb inbox` still lists it, and reading it says what withdrew it. Also on `amb reply`. Withheld, never erased — D98 refuses to alter stored content (D140) |
 | `amb sent` | What happened to the mail **you** sent: handed over by a hook, fetched by the recipient, or never delivered at all. Direct mail gets a rate; a broadcast gets reach and no rate, because `@project` is a place rather than a subscriber list (D139) |
 | `amb claim <path> [--intent I] [--ttl T]` | Advisory claim; reports conflicts, never blocks |
 | `amb release <path>` | Drop a claim you hold |
@@ -831,7 +832,7 @@ thing that checks the one failure this project has hit most often.
 $ amb doctor
 BAD   binary          the PostToolUse hook runs /Users/you/.local/bin/amb
          which reports  0.1.0 (f9f79f9 2026-08-31, schema 12, sqlite 3.53.2)
-         but this build is  0.2.0 (16d672b 2026-09-01, schema 15, sqlite 3.53.2)
+         but this build is  0.2.0 (16d672b 2026-09-01, schema 16, sqlite 3.53.2)
          Manual commands work and every hook is stale. Run tools/install.sh
          from the amb checkout — or by hand: rm /Users/you/.local/bin/amb && cp "$(command -v amb)" /Users/you/.local/bin/amb
          (rm first: an in-place cp onto a cached signature leaves macOS killing the copy)
@@ -912,7 +913,7 @@ has no global default: `cargo` resolves only inside a directory containing `rust
 ```bash
 cargo build                      # debug
 cargo build --release            # bundled SQLite; ~15s cold
-cargo test                       # all 733 tests (735 on Linux)
+cargo test                       # all 740 tests (742 on Linux)
 cargo clippy --all-targets       # lint policy lives in Cargo.toml, not a CI flag
 cargo fmt                        # `cargo fmt --check` is what the gate below runs
 ./tools/verify.sh                # every gate check in one command — ~30s after a change
@@ -984,7 +985,7 @@ stays in `main.rs` is sequencing and printing, which is what the shell is for.
 
 ```
 $ amb --version
-amb 0.2.0 (16d672b 2026-09-01, schema 15, sqlite 3.53.2)
+amb 0.2.0 (16d672b 2026-09-01, schema 16, sqlite 3.53.2)
 ```
 
 The release, the commit it was built from, and the schema it expects — so a binary can be
@@ -1059,7 +1060,7 @@ each repo and is independent of this project. See [`docs/BRIEF.md`](docs/BRIEF.m
 
 | Read | For |
 |---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D139, each recording what was rejected and why |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | **The specification.** D1–D140, each recording what was rejected and why |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Schema, CLI surface, addressing model — **the bus and claims half**; memory is `MEMORY-DESIGN.md` |
 | [`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md) | The numbers the decisions rest on, and how to re-run them |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | Prior art, patterns, and sources |

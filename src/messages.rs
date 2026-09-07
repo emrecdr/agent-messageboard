@@ -106,6 +106,10 @@ pub struct Outgoing<'a> {
     /// Caller-supplied stable id. Makes a resend idempotent (D6): the same `ext_id` twice
     /// yields one row and the original id back.
     pub ext_id: Option<&'a str>,
+    /// An earlier message of **this sender's own** that this one retracts (D140).
+    ///
+    /// Validated in [`send`] rather than trusted: the id must exist and must belong to the caller.
+    pub supersedes: Option<i64>,
 }
 
 /// A message as stored.
@@ -124,6 +128,22 @@ pub struct Message {
     pub subject: String,
     pub body: String,
     pub thread_id: Option<String>,
+    /// The id of an earlier message this one retracts, if any (D140).
+    ///
+    /// **The relation lives on the retracting message, so both directions are one column.**
+    /// Reading it walks back to what was withdrawn; `WHERE supersedes = ?` walks forward to what
+    /// replaced it. D63 is why: the notes index could say *that* a note was retired while nothing
+    /// could answer *what replaced it*, because the status flag and the edge were separate facts.
+    pub supersedes: Option<i64>,
+    /// The id of the message that retracted **this** one, if any — the same edge read backwards.
+    ///
+    /// **Computed in [`MESSAGE_COLUMNS`] rather than looked up per renderer**, so every surface
+    /// that shows a message shows that it was withdrawn. M23 is the rule: containment belongs to
+    /// the field, not to the caller, or it regrows with each new renderer — and D90 is the
+    /// instance where one field had three renderers and only one of them was guarded.
+    ///
+    /// `MIN` rather than the newest: the operative fact is when the sender first withdrew it.
+    pub superseded_by: Option<i64>,
     /// Whether *this reader* has acknowledged the message (`amb read`), computed by the inbox
     /// query. `None` from paths with no reader in scope (`get`), where the question has no
     /// answer — U1's finding was that the primary surface hid a distinction the design makes
@@ -209,7 +229,8 @@ impl Message {
 /// Kept beside the mapping so the two cannot drift: adding a column here without adding it
 /// there is a compile error rather than a silently shifted index.
 const MESSAGE_COLUMNS: &str = "m.id, m.ts, m.from_agent, a.name, m.from_proj, m.to_agent, \
-                               m.to_proj, m.kind, m.subject, m.body, m.thread_id";
+                               m.to_proj, m.kind, m.subject, m.body, m.thread_id, m.supersedes, \
+                               (SELECT MIN(sup.id) FROM messages sup WHERE sup.supersedes = m.id)";
 
 /// The twelfth column: has *this reader* acknowledged this message.
 ///
@@ -236,7 +257,7 @@ fn read_column(agent_param: &str) -> String {
 /// is what `MESSAGE_COLUMNS` already promised for the other eleven.
 fn row_to_message_read(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let mut m = row_to_message(r)?;
-    m.read = Some(r.get(11)?);
+    m.read = Some(r.get(13)?);
     Ok(m)
 }
 
@@ -254,6 +275,8 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         subject: r.get(8)?,
         body: r.get(9)?,
         thread_id: r.get(10)?,
+        supersedes: r.get(11)?,
+        superseded_by: r.get(12)?,
         read: None,
     })
 }
@@ -354,6 +377,31 @@ pub fn send(conn: &mut Connection, me: &Identity, out: &Outgoing<'_>) -> Result<
         });
     }
 
+    // **A retraction is authorial, so only the sender may retract their own message** (D140).
+    // Checked here, before the transaction, for the same reason the three bounds above are: a
+    // refusal must not have opened one.
+    //
+    // This is the board's only sender-scoped write permission, and it exists because superseding
+    // *withholds a message from the delivery path*. Without the check, any session could suppress
+    // any other session's mail — the first blocking mechanism on a board whose central decision
+    // (D5) is that nothing blocks. A missing id is a different failure from someone else's id, and
+    // they get different errors so the caller can tell a typo from a permission.
+    if let Some(target) = out.supersedes {
+        let owner: Option<String> = conn
+            .query_row(
+                "SELECT from_agent FROM messages WHERE id = ?1",
+                params![target],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(sql("checking who sent the superseded message"))?;
+        match owner {
+            None => return Err(Error::NoSuchMessage(target)),
+            Some(from) if from != me.id => return Err(Error::NotYourMessage { id: target }),
+            Some(_) => {}
+        }
+    }
+
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(sql("opening a write transaction"))?;
@@ -367,8 +415,9 @@ pub fn send(conn: &mut Connection, me: &Identity, out: &Outgoing<'_>) -> Result<
     let changed = tx
         .execute(
             "INSERT INTO messages
-               (ext_id, ts, from_agent, from_proj, to_agent, to_proj, kind, subject, body, thread_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+               (ext_id, ts, from_agent, from_proj, to_agent, to_proj, kind, subject, body,
+                thread_id, supersedes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(ext_id) DO NOTHING",
             params![
                 key,
@@ -381,6 +430,7 @@ pub fn send(conn: &mut Connection, me: &Identity, out: &Outgoing<'_>) -> Result<
                 out.subject,
                 out.body,
                 out.thread,
+                out.supersedes,
             ],
         )
         .map_err(sql("inserting the message"))?;
@@ -693,7 +743,18 @@ fn select(
           -- **broadcast** past it stops being injected; a message addressed to this agent never
           -- expires, because a question asked of you personally does not stop mattering because
           -- you were away. `?5` is the cutoff instant, not a duration.
-          AND (?4 IS NULL OR m.to_agent IS NOT NULL OR m.ts >= ?5){narrowing}
+          AND (?4 IS NULL OR m.to_agent IS NOT NULL OR m.ts >= ?5)
+          -- D140's retraction, on that same delivery-only condition. A message its own sender has
+          -- withdrawn stops being injected; `amb inbox` still lists it, and `amb read` still
+          -- shows it in full. **Withheld, never erased** — D98 refuses to alter stored content,
+          -- so this is XEP-0424's tombstone question answered the other way: the retraction is a
+          -- fact recorded beside the message rather than a replacement of it.
+          --
+          -- The subquery walks *forward* — has anything retracted me — because the column lives
+          -- on the retracting message. `ix_messages_supersedes` is what keeps that from being a
+          -- scan per row on the hook path.
+          AND (?4 IS NULL OR NOT EXISTS (
+                SELECT 1 FROM messages sup WHERE sup.supersedes = m.id)){narrowing}
         ORDER BY m.id"
     );
     let mut stmt = conn
@@ -1165,7 +1226,18 @@ pub fn thread(conn: &Connection, me: &Identity, msg_id: i64) -> Result<Vec<Messa
 ///
 /// A reply to a *broadcast* goes to the sender, not back to the whole project. Broadcasting a
 /// reply to everyone is how a coordination channel turns into noise.
-pub fn reply(conn: &mut Connection, me: &Identity, msg_id: i64, body: &str) -> Result<i64> {
+///
+/// **`supersedes` is threaded through rather than left to `send`, because a retraction is a
+/// reply** (D140). Every one of the 48 retraction-shaped messages on this board arrived as
+/// `Re: something`; a flag available only on `send` would be reachable in principle and unused in
+/// practice, which is D91's shape. It still has to be the caller's own message — `send` checks.
+pub fn reply(
+    conn: &mut Connection,
+    me: &Identity,
+    msg_id: i64,
+    body: &str,
+    supersedes: Option<i64>,
+) -> Result<i64> {
     let original = get(conn, msg_id)?;
     let thread = original
         .thread_id
@@ -1195,6 +1267,7 @@ pub fn reply(conn: &mut Connection, me: &Identity, msg_id: i64, body: &str) -> R
             kind: &original.kind,
             thread: Some(&thread),
             ext_id: None,
+            supersedes,
         },
     )
 }
@@ -1419,6 +1492,7 @@ mod tests {
                 kind: "note",
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("send");
@@ -1461,6 +1535,7 @@ mod tests {
                 kind: "note",
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("send");
@@ -1500,11 +1575,12 @@ mod tests {
                 kind: "question",
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("root");
-        let r1 = reply(&mut conn, &bob, root, "because mutants").expect("first reply");
-        let r2 = reply(&mut conn, &alice, r1, "then clean it").expect("second reply");
+        let r1 = reply(&mut conn, &bob, root, "because mutants", None).expect("first reply");
+        let r2 = reply(&mut conn, &alice, r1, "then clean it", None).expect("second reply");
 
         // An unrelated message, so a query that over-selects is caught too.
         send(
@@ -1517,6 +1593,7 @@ mod tests {
                 kind: "note",
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("noise");
@@ -1568,6 +1645,7 @@ mod tests {
                 kind: "note",
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("send");
@@ -1601,6 +1679,7 @@ mod tests {
                 kind: "note",
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("first");
@@ -1615,6 +1694,7 @@ mod tests {
                 kind: "note",
                 thread: Some(&first.to_string()),
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("named");
@@ -1650,6 +1730,7 @@ mod tests {
             body: &huge,
             thread: None,
             ext_id: None,
+            supersedes: None,
         };
 
         let err = send(&mut conn, &bob, &out).expect_err("a body past the cap must be refused");
@@ -1688,6 +1769,7 @@ mod tests {
             body: "b",
             thread: None,
             ext_id: None,
+            supersedes: None,
         };
         let err = send(&mut conn, &bob, &out).expect_err("past the cap");
         assert!(
@@ -1736,6 +1818,7 @@ mod tests {
             body: "b",
             thread: None,
             ext_id: None,
+            supersedes: None,
         };
         let first = send(&mut conn, &bob, &out).expect("send");
         let _second = send(
@@ -1795,6 +1878,7 @@ mod tests {
                 body: "b",
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("carol broadcasts");
@@ -1871,6 +1955,7 @@ mod tests {
             body: "b",
             thread: None,
             ext_id: None,
+            supersedes: None,
         };
         // Sized off the constant, so the cap can move without this row silently becoming a
         // valid kind (the reached-assertion audit: a fixture that drifts under a grown cap
@@ -1928,6 +2013,7 @@ mod tests {
                 body: &body,
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("send");
@@ -1957,6 +2043,7 @@ mod tests {
                 body: "b",
                 thread: None,
                 ext_id: None,
+                supersedes: None,
             },
         )
         .expect("send")
@@ -1970,6 +2057,208 @@ mod tests {
     /// `amb inbox`, which prints this order straight to a person — so the ordering was load-bearing
     /// on exactly the path nothing covered. D51's shape: correct by accident on one path, unguarded
     /// on the one that depends on it.
+    /// **D140's central split: a retracted message stops being *delivered* and stays *readable*.**
+    ///
+    /// The two halves are one decision and asserting only the first would pass on an
+    /// implementation that deleted the row. D96 established the shape — the horizon filters the
+    /// delivery path and `amb inbox` is untouched — and this is the same clause on a new
+    /// condition, so it is guarded the same way: both sides, in one test, on one board.
+    #[test]
+    fn a_superseded_message_leaves_the_delivery_path_and_stays_in_the_inbox() {
+        let (_d, mut conn, alice, bob, _carol) = board();
+        let to_bob = Address::Agent {
+            name: "bob".into(),
+            project: None,
+        };
+        let wrong = send_to(&mut conn, &alice, &to_bob, "5 GiB per hour");
+        assert!(
+            deliverable(&conn, &bob)
+                .expect("before")
+                .iter()
+                .any(|m| m.id == wrong),
+            "the premise: it is deliverable before anything retracts it"
+        );
+
+        // **Sent, not replied.** `reply` addresses the *original's sender*, so alice replying to
+        // her own message would address it to alice — and `select` excludes a sender's own mail,
+        // so bob would never see the retraction. A retraction is addressed like any other
+        // message: it has to go where the original went. `--supersedes` on `reply` is for the
+        // other shape — answering someone else while withdrawing a claim of your own.
+        let rcpt = resolve_recipient(&conn, &to_bob, &alice).expect("resolve");
+        let fix = send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &rcpt,
+                subject: "correction",
+                body: "that number was wrong",
+                kind: "note",
+                thread: None,
+                ext_id: None,
+                supersedes: Some(wrong),
+            },
+        )
+        .expect("the sender may retract their own message");
+
+        let delivered: Vec<i64> = deliverable(&conn, &bob)
+            .expect("after")
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert!(
+            !delivered.contains(&wrong),
+            "a retracted message must not be injected again: {delivered:?}"
+        );
+        assert!(
+            delivered.contains(&fix),
+            "and the retraction itself must be delivered, or nobody learns of it: {delivered:?}"
+        );
+
+        // The other half, and the one a `DELETE`-shaped implementation would fail.
+        let listed: Vec<i64> = inbox(&conn, &bob, false)
+            .expect("inbox")
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert!(
+            listed.contains(&wrong),
+            "withheld from delivery, never erased \u{2014} `amb inbox` still lists it: {listed:?}"
+        );
+    }
+
+    /// The index the delivery filter's comment claims, verified rather than asserted in prose.
+    ///
+    /// **Scoped to the subquery, and saying so is the point.** `select` builds its SQL by
+    /// `format!` and the whole statement is not reachable from here; what *is* reachable is the
+    /// exact lookup the index exists for, which fires once per candidate row on the `PostToolUse`
+    /// path. A plan is a property of its fixture as much as of its query (M63), so the fixture
+    /// carries rows on both sides of the predicate rather than an empty table the planner would
+    /// scan regardless.
+    #[test]
+    fn the_retraction_lookup_reaches_its_index_rather_than_scanning_messages() {
+        let (_d, mut conn, alice, _bob, _carol) = board();
+        let to_bob = Address::Agent {
+            name: "bob".into(),
+            project: None,
+        };
+        let wrong = send_to(&mut conn, &alice, &to_bob, "wrong");
+        for _ in 0..8 {
+            send_to(&mut conn, &alice, &to_bob, "unrelated");
+        }
+        let rcpt = resolve_recipient(&conn, &to_bob, &alice).expect("resolve");
+        send(
+            &mut conn,
+            &alice,
+            &Outgoing {
+                to: &rcpt,
+                subject: "correction",
+                body: "b",
+                kind: "note",
+                thread: None,
+                ext_id: None,
+                supersedes: Some(wrong),
+            },
+        )
+        .expect("retract");
+
+        crate::assert_query_plan_uses(
+            &conn,
+            "SELECT 1 FROM messages sup WHERE sup.supersedes = ?1",
+            vec![wrong.into()],
+            "ix_messages_supersedes",
+        );
+    }
+
+    /// The edge is readable from both ends off one column (D63's finding, applied here).
+    #[test]
+    fn the_retraction_edge_reads_forwards_and_backwards() {
+        let (_d, mut conn, alice, _bob, _carol) = board();
+        let to_bob = Address::Agent {
+            name: "bob".into(),
+            project: None,
+        };
+        let wrong = send_to(&mut conn, &alice, &to_bob, "wrong");
+        let fix = reply(&mut conn, &alice, wrong, "right", Some(wrong)).expect("retract");
+
+        let by_id = |id: i64| get(&conn, id).expect("get");
+        assert_eq!(
+            by_id(fix).supersedes,
+            Some(wrong),
+            "forwards: what it retracts"
+        );
+        assert_eq!(
+            by_id(wrong).superseded_by,
+            Some(fix),
+            "backwards: what retracted it \u{2014} the half D63 found missing on the notes side"
+        );
+        assert_eq!(
+            by_id(wrong).supersedes,
+            None,
+            "and the withdrawn message retracts nothing"
+        );
+        assert_eq!(
+            by_id(fix).superseded_by,
+            None,
+            "nor has the retraction been retracted"
+        );
+    }
+
+    /// **The board's only sender-scoped write permission, and the reason it exists** (D140).
+    ///
+    /// Superseding withholds a message from delivery. Without this check any session could
+    /// suppress any other session's mail, which would be the first blocking mechanism on a board
+    /// whose central decision is that nothing blocks (D5). A missing id and someone else's id are
+    /// different failures and must not collapse into one error.
+    #[test]
+    fn only_the_sender_may_retract_and_a_missing_id_is_a_different_failure() {
+        let (_d, mut conn, alice, bob, _carol) = board();
+        let to_bob = Address::Agent {
+            name: "bob".into(),
+            project: None,
+        };
+        let alices = send_to(&mut conn, &alice, &to_bob, "alice said this");
+
+        let to_alice = Address::Agent {
+            name: "alice".into(),
+            project: None,
+        };
+        let rcpt = resolve_recipient(&conn, &to_alice, &bob).expect("resolve");
+        let attempt = |conn: &mut Connection, target: i64| {
+            send(
+                conn,
+                &bob,
+                &Outgoing {
+                    to: &rcpt,
+                    subject: "s",
+                    body: "b",
+                    kind: "note",
+                    thread: None,
+                    ext_id: None,
+                    supersedes: Some(target),
+                },
+            )
+        };
+
+        match attempt(&mut conn, alices) {
+            Err(Error::NotYourMessage { id }) => assert_eq!(id, alices),
+            other => panic!("bob retracted alice's message: {other:?}"),
+        }
+        match attempt(&mut conn, 99_999) {
+            Err(Error::NoSuchMessage(id)) => assert_eq!(id, 99_999),
+            other => panic!("a missing id must not read as a permission failure: {other:?}"),
+        }
+        // The refusal must not have written anything — the same rule the three bounds above keep.
+        assert!(
+            inbox(&conn, &alice, false).expect("inbox").is_empty(),
+            "a refused retraction stored a message anyway"
+        );
+        assert_eq!(
+            get(&conn, alices).expect("get").superseded_by,
+            None,
+            "and it must not have marked the target either"
+        );
+    }
+
     #[test]
     fn the_inbox_arrives_in_the_order_it_was_sent() {
         let (_d, mut conn, alice, bob, _carol) = board();
@@ -2478,6 +2767,7 @@ mod tests {
                     kind,
                     thread: None,
                     ext_id: None,
+                    supersedes: None,
                 },
             )
             .expect("send");

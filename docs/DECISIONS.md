@@ -7891,3 +7891,68 @@ earlier. The cost of a separate command is a README row and this record.
 selector invites reading somebody else's, which is a different feature nobody asked for. **No
 withdrawal condition**, for D123's reason: messaging is the product, not an experiment, and D95
 records what a stated threshold that cannot fire does to the next reader.
+
+## D140 · A message can be retracted, and retraction withholds rather than erases
+
+**Decided 2026-09-07.** `amb send --supersedes <id>` and `amb reply <id> --supersedes <id>` record
+that an earlier message of **the sender's own** is withdrawn. Schema 16 adds
+`messages.supersedes`. A withdrawn message stops being auto-injected; `amb inbox` still lists it
+and `amb read` still shows it in full, with a line naming what retracted it.
+
+**Measured before it was built.** This board carries **48 retraction-shaped messages across 16
+threads** — one thread ("Retracting the 5 GiB/hour in my #471") runs to six. `amb thread` rendered
+every one of them at equal weight, so a session reading the original got a wrong number with
+nothing on it to say so. The gap was reported from outside by a session evaluating `amb` across a
+two-repo seam, and confirmed by query rather than taken on trust.
+
+### The argument was already had, on the other half of the product
+
+D40 settled this for notes: `observe --supersedes <id>`, `superseded_by` recorded, and superseded
+notes never injected again. Its named failure state is `supersedes-but-active` — *"both are
+injectable and the model picks"* — which is exactly what the bus was doing. **Only the surface was
+missing**, which is why this ranked above two proposals that sound larger.
+
+### Withheld, never erased
+
+**Rejected: a tombstone.** [XEP-0424](https://xmpp.org/extensions/xep-0424.html) replaces a
+retracted message's content with a `<retracted/>` element, and the field distinguishes that from
+[XEP-0308](https://xmpp.org/extensions/xep-0308.html) correction, where prior versions stay
+visible. amb cannot take the tombstone road: **D98 refuses to alter stored content**, with a
+measurement behind it. So the retraction is a fact recorded *beside* the message.
+
+The split is D96's, reused rather than reinvented: the horizon clause filters the delivery path on
+`?4 IS NULL` and leaves `amb inbox` untouched, and the retraction clause sits next to it under the
+same condition. D23 and D24 already argue for that split — the cap belongs where context is spent,
+not where a person went looking.
+
+### One column, read both ways
+
+`supersedes` lives on the *retracting* message. Reading it walks back to what was withdrawn;
+`WHERE supersedes = ?` walks forward to what replaced it, and `MESSAGE_COLUMNS` computes that
+second direction so every renderer has it.
+
+**Rejected: a `status` flag on the retracted message.** That is the shape D63 had to repair — the
+notes index could say *that* a note was retired while nothing could answer *what replaced it*,
+because the flag and the edge were two facts that could disagree. One column cannot disagree with
+itself.
+
+### Only the sender, and this is the board's only write permission
+
+**A retraction is authorial.** Superseding withholds a message from delivery, so allowing it on
+someone else's mail would be **the first blocking mechanism on a board whose central decision is
+that nothing blocks** (D5). `Error::NotYourMessage` exits 64; a missing id still exits 65, because
+a typo and a permission failure are different things and collapsing them would send the caller to
+the wrong fix.
+
+### What is deliberately not built
+
+- **No un-retraction.** A retraction is itself a message, so retracting it restores delivery
+  through the same mechanism — and both lines render, which is the honest rendering of that chain.
+- **No warning when the retraction is addressed elsewhere than the original.** Considered and
+  dropped: the sender chooses an address like any other message, and a mismatch is a choice rather
+  than a silent failure. Worth knowing that `reply` addresses the *original's sender*, so replying
+  to your own message addresses it to yourself and `select` excludes it — retracting to an audience
+  means `send`, and `--supersedes` on `reply` is for withdrawing a claim of your own while
+  answering somebody else.
+- **No contradiction detection**, exactly as D40 ruled for notes. Representing it is not optional;
+  inferring it is out of scope.

@@ -42,6 +42,7 @@ fn send_to(conn: &mut Connection, from: &Identity, to: &str, subject: &str) -> i
             kind: "note",
             thread: None,
             ext_id: None,
+            supersedes: None,
         },
     )
     .expect("send")
@@ -246,6 +247,7 @@ fn an_auto_generated_name_widens_rather_than_locking_a_session_out() {
             kind: "note",
             thread: None,
             ext_id: None,
+            supersedes: None,
         },
     )
     .expect("send");
@@ -310,6 +312,7 @@ fn resending_the_same_ext_id_delivers_once() {
         kind: "note",
         thread: None,
         ext_id: Some("stable-id-1"),
+        supersedes: None,
     };
     let first = messages::send(&mut c, &alice, &out).expect("first send");
     let second = messages::send(&mut c, &alice, &out).expect("resend");
@@ -343,6 +346,7 @@ fn two_senders_may_choose_the_same_ext_id_without_one_swallowing_the_other() {
             kind: "note",
             thread: None,
             ext_id: Some("task-1"),
+            supersedes: None,
         },
     )
     .expect("alice sends");
@@ -356,6 +360,7 @@ fn two_senders_may_choose_the_same_ext_id_without_one_swallowing_the_other() {
             kind: "note",
             thread: None,
             ext_id: Some("task-1"),
+            supersedes: None,
         },
     )
     .expect("bob sends");
@@ -390,6 +395,7 @@ fn one_sender_reusing_its_own_ext_id_still_delivers_once() {
         kind: "note",
         thread: None,
         ext_id: Some("task-1"),
+        supersedes: None,
     };
     assert_eq!(
         messages::send(&mut c, &alice, &out).expect("first"),
@@ -490,7 +496,7 @@ fn a_reply_to_a_broadcast_goes_only_to_its_sender() {
     messages::mark_read(&c, &bob, bcast).expect("bob reads");
     messages::mark_read(&c, &carol, bcast).expect("carol reads");
 
-    messages::reply(&mut c, &bob, bcast, "my answer").expect("reply");
+    messages::reply(&mut c, &bob, bcast, "my answer", None).expect("reply");
 
     assert_eq!(
         subjects(&c, &alice),
