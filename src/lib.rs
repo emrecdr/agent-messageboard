@@ -19,6 +19,7 @@
 //! number (D5, D13) rather than restating them, so there is one copy of each argument.
 
 pub mod address;
+pub mod attach;
 pub mod claims;
 pub mod db;
 pub mod delivery;

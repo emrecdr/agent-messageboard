@@ -1385,3 +1385,74 @@ fn a_retracted_message_stops_being_offered_and_is_still_readable() {
         "EX_USAGE for a message that is not yours"
     );
 }
+
+/// `--attach` cites a file by a verifiable sha256 rather than pasting it (D142).
+///
+/// The file holds exactly `abc`, whose sha256 is a published NIST vector, so this asserts the
+/// *shipped binary* produced the correct digest — not merely some 64-hex string. That is the
+/// property a reader's `sha256sum` depends on: a wrong hash would pass a "contains sha256:" check
+/// and fail every real verification.
+#[test]
+fn an_attachment_is_cited_by_its_true_sha256() {
+    let b = Board::new();
+    let file = b.cwd.join("abc.txt");
+    std::fs::write(&file, b"abc").expect("write attachment");
+
+    b.run(
+        "uuid-alice",
+        &[
+            "send",
+            "@",
+            "--subject",
+            "see the file",
+            "--body",
+            "not pasting it",
+            "--attach",
+            &file.to_string_lossy(),
+        ],
+    );
+
+    let seen = b.run("uuid-alice", &["read", "1"]);
+    assert!(
+        seen.contains("── attached ──"),
+        "no attachment block: {seen}"
+    );
+    assert!(seen.contains("3 bytes"), "wrong or missing size: {seen}");
+    assert!(
+        seen.contains("sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+        "the binary must cite the true digest of `abc`, not merely some hash: {seen}"
+    );
+    // The bytes themselves never reach the board: only the reference does.
+    assert!(!seen.contains("not a real body"), "sanity: {seen}");
+}
+
+/// A `--attach` path that cannot be read stops the send; it does not deliver a message that cites
+/// nothing (D142). This is the "failures are silences" rule: a partial send would be the silence.
+#[test]
+fn a_missing_attachment_errors_and_sends_nothing() {
+    let b = Board::new();
+    let out = b.try_run(
+        "uuid-alice",
+        &[
+            "send",
+            "@",
+            "--subject",
+            "will not send",
+            "--body",
+            "b",
+            "--attach",
+            &b.cwd.join("does-not-exist.rs").to_string_lossy(),
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "an unreadable attachment must fail the send"
+    );
+    // And nothing was written: a peer registering afterwards finds an empty inbox, proving the
+    // send did not half-succeed before hitting the bad path.
+    let inbox = b.run("uuid-bob", &["inbox"]);
+    assert!(
+        !inbox.contains("will not send"),
+        "a failed --attach must leave no message behind: {inbox}"
+    );
+}

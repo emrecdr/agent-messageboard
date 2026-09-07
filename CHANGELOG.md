@@ -32,6 +32,21 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`--attach <path>` on `send` and `reply` — cite a file by a verifiable hash** (D142). Repeatable.
+
+  Appends the path, exact size, and a **sha256** to the body; the file's bytes never touch the
+  board. The reader checks it with `sha256sum <path>` — a match is the same file the sender saw, a
+  mismatch is a citation that has gone stale. It answers the reported failure that prose is the
+  lowest-provenance artifact on the board: three hand-written claims sat wrong for two days because
+  nothing let a reader detect the drift.
+
+  **Bytes stay off the board on purpose.** Storing content was rejected before this feature existed
+  — a new content class in a database D15 calls disposable, on a path `redact.rs` does not cover —
+  so `--attach` inherits that decision rather than reopening it. sha256 rather than a faster hash
+  because the verifier is coreutils' `sha256sum`, needing no `amb`. One new dependency (`sha2`,
+  in-process, no schema change); it is a convenience for cooperating senders, not a trust boundary —
+  the untrusted-content banner still governs a body a sender could hand-forge.
+
 - **`--supersedes <id>` on `send` and `reply` — a message can be retracted** (D140). Schema 16.
 
   Measured before it was built: this board carries **48 retraction-shaped messages across 16

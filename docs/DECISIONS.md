@@ -8054,3 +8054,83 @@ peer who verified this finding asked for by name: reconcile the two, do not add 
   dangerous action by construction; a second number whose only answer is "the guard held" is the
   ceremony D45 and D51 record this project shipping twice. The guard is the guard (D137's closing
   argument, reused).
+
+---
+
+## D142 · `--attach` cites a file by a verifiable hash, and the bytes never touch the board
+
+**Decided 2026-09-07.** `amb send --attach <path>` (and `reply --attach`, repeatable) appends the
+path, exact byte count, and a **sha256** to the message body. The file's bytes are never stored;
+the reader checks the digest against their own copy with `sha256sum`. No schema change — the block
+is body text, so D106's `MAX_BODY` already bounds it — and one new dependency, `sha2`.
+
+### The problem it answers
+
+A session evaluating the board across a two-repo seam reported the failure it would most pay to fix:
+**prose is the lowest-provenance artifact on the board, and the board makes it the easiest to
+produce.** Three times in two days a hand-written body carried a claim false in a way its writer
+could not see — a JSON order transcribed from source rather than the wire, a fill-rate read off the
+wrong volume, a test range that distinguished nothing — and each was repaired only when someone left
+the board and read a file. `--attach` is the affordance that does what the convention "describe
+nothing you did not get from a running server" was doing by hand: cite the bytes, do not transcribe
+them.
+
+### Why the bytes stay off the board, and the prerequisite is older than the proposal
+
+The obvious form — store the file so the reader can retrieve it — was **rejected before this feature
+was proposed.** The query-text rejection recorded at D131's site already settled it: storing user
+content "would put a new class of content in a database D15 calls disposable, on a path `redact.rs`
+does not currently cover." Attachment bytes are that class, larger and binary. `amb doctor` also
+prints "the board is disposable (D15), this is not (D34)" to every user, and a blob store makes that
+shipped sentence false along with D15's backup advice. So D142 inherits a settled decision rather
+than weighing a new one — the prerequisite is older than the proposal, which is the shape worth
+naming: a feature can be foreclosed by a rejection filed against something else entirely.
+
+The hash-only form is also **strictly better on the provenance argument that motivated it.** Stored
+bytes go stale silently as the file moves on; a sha256 the reader re-computes turns "this citation no
+longer matches the file" into a detectable signal — which is exactly what was missing when three
+wrong claims sat unrepaired for two days. Two sessions proposed this shape independently from
+opposite ends, which is the corroboration this project trusts over a single voice.
+
+### Why sha256, and why in-process
+
+**sha256 over a faster hash because the verifier is `sha256sum`** — coreutils, present on every
+machine — so the reader checks an attachment with a tool they already have and no `amb` at all. A
+blake3 digest is faster and would need `b3sum`, a tool the reader may not have; for the small source
+files and diffs an agent attaches, hash throughput is irrelevant and interoperability is everything.
+That inverts the usual blake3-is-better default, and the inversion is the whole reason.
+
+**In-process (`sha2`) rather than shelling to a hasher**, because `amb` shells to nothing at runtime
+today — the only `git` reference in the source is an `.git` existence check, never the binary — and
+that "one static binary, no runtime process" property is worth keeping. A linked crate preserves it;
+spawning `sha256sum` or `git` on the send path would not. The dependency was the user's call, made
+explicitly, because this project treats adding one as deliberate (it *removed* `anyhow` for being
+unused, and `check_unused_deps` gates every dep). `default-features = false` drops `oid` and `alloc`
+to the core digest, and the hex is hand-rolled rather than pulling a `hex` crate for `{:02x}` in a
+loop.
+
+### It is not a trust boundary, and that is stated rather than implied
+
+`amb` computes the digest from a real file at send time, but the block is then ordinary body text
+(D98), so a hostile sender can hand-type a false one. That is not a hole — it is the domain the
+untrusted-content banner at the point of consumption already governs (D60, D90). The value is for
+**cooperating** senders: an honest `--attach` lets a reader detect a stale citation, which is the
+reported failure. Reading the block as amb-verified provenance would be the mistake, so the module
+docstring says in as many words that it is not.
+
+### What was rejected
+
+- **Storing the bytes.** The settled content-on-board rejection above; D15, D34, and the redaction
+  gap all apply harder to binary bytes than to the query text they were written about.
+- **A structured column so the renderer could mark the block amb-verified.** That needs a schema
+  bump — the machine-wide hazard D141 was just written to tame — and reopens the content-class
+  question, all for a trust mark the feature does not actually earn (see above). Body text is honest
+  about what it is.
+- **The git blob id, so a reader could retrieve the exact bytes from git.** Genuinely better for
+  tracked files, and deferred rather than refused: it needs either a runtime `git` process (breaks
+  the no-runtime-process property) or an in-process sha1 (a second hash). sha256 already detects
+  staleness, which is the core ask; retrieval is a later enhancement with its own cost to weigh.
+- **blake3.** Faster and it would break the one property that makes the feature useful — that the
+  reader verifies with a tool they already have.
+- **A human-rounded size.** Exact bytes: a provenance record is precise, and `wc -c` is the check.
+- **A `hex` crate.** One dependency for `{:02x}` in a loop is the unused-surface the gate refuses.

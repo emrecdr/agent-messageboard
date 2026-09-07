@@ -77,6 +77,13 @@ enum Command {
         /// board that blocks (D5).
         #[arg(long)]
         supersedes: Option<i64>,
+        /// Cite a file by a verifiable reference instead of pasting it (D142). Repeatable.
+        ///
+        /// Appends the path, exact size, and a sha256 to the body; the bytes never touch the board.
+        /// The reader checks it with `sha256sum <path>` — a match is the same file you sent, a
+        /// mismatch is a citation that went stale. An unreadable path is an error, not a silent drop.
+        #[arg(long)]
+        attach: Vec<String>,
     },
     /// Show messages addressed to this agent or broadcast to its project.
     Inbox {
@@ -145,6 +152,12 @@ enum Command {
         /// board that blocks (D5).
         #[arg(long)]
         supersedes: Option<i64>,
+        /// Cite a file by a verifiable reference instead of pasting it (D142). Repeatable.
+        ///
+        /// Same as `send --attach`: appends the path, exact size, and a sha256 the reader checks
+        /// with `sha256sum`. The bytes never touch the board; an unreadable path is an error.
+        #[arg(long)]
+        attach: Vec<String>,
     },
     /// Show a whole conversation, oldest first, from any message in it.
     ///
@@ -688,8 +701,9 @@ fn run(cli: Cli) -> Result<(), Error> {
             ref thread,
             ref ext_id,
             supersedes,
+            ref attach,
         } => {
-            let body = read_body(body.as_deref(), body_file.as_deref())?;
+            let body = with_attachments(read_body(body.as_deref(), body_file.as_deref())?, attach)?;
             let addr = address::parse(to)?;
             // Resolve the human-written name to an agent id *before* writing anything. An
             // unknown name must fail here rather than be stored as an undeliverable row.
@@ -842,8 +856,9 @@ fn run(cli: Cli) -> Result<(), Error> {
             ref body,
             ref body_file,
             supersedes,
+            ref attach,
         } => {
-            let body = read_body(body.as_deref(), body_file.as_deref())?;
+            let body = with_attachments(read_body(body.as_deref(), body_file.as_deref())?, attach)?;
             let new_id = messages::reply(&mut conn, &me, id, &body, supersedes)?;
             if cli.json {
                 print_json(&serde_json::json!({ "sent": new_id, "in_reply_to": id }));
@@ -1605,6 +1620,23 @@ fn observe_edit(
     let taken = claims::take(conn, me, &rel, None, None, claims::Source::Observed)?;
     // D19's rule is `claims::conflicts_to_report`, not an `if` here.
     Ok(claims::conflicts_to_report(&taken))
+}
+
+/// Append each `--attach`ed file's provenance block to a body (D142).
+///
+/// Glue in the shell, beside [`read_body`]: the hashing and rendering are the library's
+/// (`amb::attach`), and this only reads the named files and joins the block on. An unreadable path
+/// propagates as an error, so an attachment that cannot be honoured stops the send rather than
+/// vanishing from it.
+fn with_attachments(mut body: String, attach: &[String]) -> Result<String, Error> {
+    if !attach.is_empty() {
+        let attachments = attach
+            .iter()
+            .map(|p| amb::attach::read(p))
+            .collect::<Result<Vec<_>, _>>()?;
+        body.push_str(&amb::attach::render_block(&attachments));
+    }
+    Ok(body)
 }
 
 /// Resolve a message body from `--body`, or from a file or stdin via `--body-file`.
