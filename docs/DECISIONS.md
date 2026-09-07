@@ -8055,6 +8055,40 @@ peer who verified this finding asked for by name: reconcile the two, do not add 
   ceremony D45 and D51 record this project shipping twice. The guard is the guard (D137's closing
   argument, reused).
 
+### The diagnose fix had a residual, found in review, and the guard is narrower than the above reads
+
+Two corrections, both from a peer reviewing the committed fix rather than taking it.
+
+**The Diagnose fix closed one error variant and left the rest — one arm below itself.** It
+special-cased `SchemaVersion` (the newer-board error) to recover the version, and left `Err(_) =>
+{}` to swallow every other failed open: `CorruptBoard`, `Sqlite` (a locked board past the busy
+timeout), `Io`, `RemoteVolume` — **and `DirtyMigration`, the error this very decision added.** Each
+left `on_disk = None`, so `schema_check(None, …)` printed "no board yet" beside the `size` row — the
+exact pairing the conservation invariant forbids, still reachable, because the invariant test drove
+only the `SchemaVersion` path it was written for. The sharpest instance is self-inflicted: a dirty
+build running `amb doctor` on the shared board hits the guard, the guard's error lands in `Err(_)`,
+and the diagnostic denies the board exists **in precisely the case the guard fires** — with D73
+making `doctor` the thing you run when the board is the problem.
+
+The fix is at the pure layer, not the caller: `schema_check(board, binary, exists)`. "No board yet"
+is now reachable only when `!exists`; a present board whose version could not be read is a `Warn`,
+never absent. That makes the conflation *unrepresentable* rather than merely handled at one call
+site — the same move D63 made for the notes index. The invariant is now tested against a corrupt
+board (the general `Err(_)` path) as well as a newer one, so it is checked mechanism-independently;
+and the truth table carries both a presence and an absence row, because an absence-only assertion
+has an unproven premise (M27).
+
+**The guard is narrower than "the intended rollout" language implies, and the injection is what
+actually closes the outage class.** `build.rs` derives `dirty` from `git status --porcelain`, so a
+*clean* tree on a commit whose schema is newer than the installed binaries is **permitted** to
+migrate the shared board — `cargo run -- inbox` after committing but before `install.sh` strands
+every peer just as hard as the dirty case did. What forecloses the outage is D141's *injection*
+(no test opens the real board) plus the discipline (build → commit → `install.sh`, nothing against
+the default board between); the dirty guard is a backstop for the unreproducible-schema case, not
+the whole fix. Recorded rather than widened: catching the clean-but-newer case needs "am I the
+installed binary", which is the `settings.json` read D9 keeps off the open path — the rejection
+above still stands.
+
 ---
 
 ## D142 · `--attach` cites a file by a verifiable hash, and the bytes never touch the board

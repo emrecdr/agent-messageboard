@@ -180,8 +180,20 @@ pub fn build_check(running: &str, hooks: &[HookBinary]) -> Check {
 /// A board *newer* than the binary is the stale-binary failure seen from the board's side, and it
 /// is the one D58 already breaks silence for. A board older is ordinary — the next open migrates
 /// it — so it is not a finding.
-pub fn schema_check(board: Option<i64>, binary: i64) -> Check {
+pub fn schema_check(board: Option<i64>, binary: i64, exists: bool) -> Check {
     match board {
+        // **The board is present but its version is unknown** — the open failed for a reason other
+        // than a version mismatch (a corrupt or locked board, or a `DirtyMigration` refusal, D141).
+        // Without `exists` this rendered as "no board yet" beside a `size` row measuring the same
+        // file — the conservation invariant's own violation, one arm below the fix that added it,
+        // and reachable by the guard D141 introduced. "No board yet" is now unrepresentable while
+        // the file exists.
+        None if exists => Check::new(
+            "schema",
+            Health::Warn,
+            "the board exists but this build could not open it — run the command that failed to \
+             see why",
+        ),
         None => Check::new(
             "schema",
             Health::Ok,
@@ -749,7 +761,7 @@ pub fn gather(now: f64, board: Option<&Path>) -> Report {
                     Err(_) => {}
                 }
             }
-            checks.push(schema_check(on_disk, db::SCHEMA_VERSION));
+            checks.push(schema_check(on_disk, db::SCHEMA_VERSION, exists));
             if exists {
                 checks.push(integrity_check(Integrity::from_probe(
                     conn.as_ref().map(db::quick_check),
@@ -1166,13 +1178,13 @@ mod tests {
     /// Reporting "board and binary agree at 11" while they do not is the precise failure.
     #[test]
     fn schema_drift_is_reported_in_the_one_direction_that_breaks_hooks() {
-        let bad = schema_check(Some(13), 12);
+        let bad = schema_check(Some(13), 12, true);
         assert_eq!(bad.health, Health::Bad);
         assert!(bad.detail.contains("newer amb"), "{}", bad.detail);
 
         // Older is ordinary: the next open migrates it. Ok, but it must say so rather than claim
         // agreement — flipping `<` to `<=` or to `==` swaps these two messages silently.
-        let older = schema_check(Some(11), 12);
+        let older = schema_check(Some(11), 12, true);
         assert_eq!(older.health, Health::Ok);
         assert!(
             older.detail.contains("migrates it to 12"),
@@ -1180,13 +1192,26 @@ mod tests {
             older.detail
         );
 
-        let agreed = schema_check(Some(12), 12);
+        let agreed = schema_check(Some(12), 12, true);
         assert_eq!(agreed.health, Health::Ok);
         assert!(agreed.detail.contains("agree at 12"), "{}", agreed.detail);
 
-        let none = schema_check(None, 12);
-        assert_eq!(none.health, Health::Ok);
-        assert!(none.detail.contains("no board yet"), "{}", none.detail);
+        // The two faces of `None`, which used to be one (D141). Absent is "no board yet"; present
+        // but unopenable is a `Warn`, never "no board yet" — the `exists` flag is what keeps the
+        // schema line from denying a board a `size` row is measuring. Both rows here, so this is a
+        // truth table rather than an absence-only assertion (M27): the presence row fails if the
+        // `Warn` arm stops rendering, the absence row if "no board yet" leaks into the present case.
+        let absent = schema_check(None, 12, false);
+        assert_eq!(absent.health, Health::Ok);
+        assert!(absent.detail.contains("no board yet"), "{}", absent.detail);
+
+        let unreadable = schema_check(None, 12, true);
+        assert_eq!(unreadable.health, Health::Warn);
+        assert!(
+            unreadable.detail.contains("exists but") && !unreadable.detail.contains("no board yet"),
+            "a present board must not read as absent: {}",
+            unreadable.detail
+        );
     }
 
     /// `duplicate_check`'s verdict, both directions.
@@ -1343,6 +1368,49 @@ mod tests {
         );
     }
 
+    /// A board present but unopenable is reported present, never absent (D141) — the `Err(_)` path
+    /// the test above never reaches.
+    ///
+    /// **This is the residual a review found one arm below the H1 fix.** That fix special-cased the
+    /// *newer-board* error and left every other failed open — a corrupt or locked board, or the
+    /// `DirtyMigration` refusal D141 itself introduced — in the arm that discards the version, so
+    /// `schema_check(None, …)` said "no board yet" beside a `size` row measuring the same file. The
+    /// conservation invariant held in the test above and was violated in production, because the
+    /// test drove only the one mechanism it was written for. A corrupt board exercises the general
+    /// path, so the invariant is now checked mechanism-independently rather than for one error.
+    #[test]
+    fn a_present_but_unopenable_board_is_never_reported_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("board.db");
+        std::fs::write(&path, b"this is not a sqlite database").expect("clobber");
+
+        let report = gather(1_700_000_000.0, Some(&path));
+        let schema = report
+            .checks
+            .iter()
+            .find(|c| c.name == "schema")
+            .expect("schema row");
+        assert!(
+            !schema.detail.contains("no board yet"),
+            "a corrupt board that exists must not read as absent: {}",
+            schema.detail
+        );
+        // The conservation invariant, on the non-schema failure path this time.
+        let absent = report
+            .checks
+            .iter()
+            .any(|c| c.name == "schema" && c.detail.contains("no board yet"));
+        let sized = report.checks.iter().any(|c| c.name == "size");
+        assert!(
+            !(absent && sized),
+            "the report calls the board absent while a size row measures it"
+        );
+        assert!(
+            sized,
+            "an existing board must render a size row, or the invariant is vacuous"
+        );
+    }
+
     /// Freshness reads in the coarsest useful unit, and never cries about ordinary silence.
     ///
     /// **Found by mutation: five survivors across three comparisons.** Each is a boundary — the
@@ -1449,10 +1517,10 @@ mod tests {
     /// A board newer than the binary is the stale-binary failure from the other side.
     #[test]
     fn a_board_newer_than_the_binary_is_bad_and_older_is_routine() {
-        assert_eq!(schema_check(Some(9), 8).health, Health::Bad);
-        assert_eq!(schema_check(Some(7), 8).health, Health::Ok);
-        assert_eq!(schema_check(Some(8), 8).health, Health::Ok);
-        assert_eq!(schema_check(None, 8).health, Health::Ok);
+        assert_eq!(schema_check(Some(9), 8, true).health, Health::Bad);
+        assert_eq!(schema_check(Some(7), 8, true).health, Health::Ok);
+        assert_eq!(schema_check(Some(8), 8, true).health, Health::Ok);
+        assert_eq!(schema_check(None, 8, false).health, Health::Ok);
     }
 
     /// Installed is three of four conditions; this is the fourth.
