@@ -331,6 +331,35 @@ Gemini session with no id to go and be a different CLI.
 - **Repeat any measurement before quoting it.** `docs/MEASUREMENTS.md` records two wrong sub-claims
   that came from single noisy runs. Do not quote a startup number that was not measured for the
   current binary.
+
+  **That is the weak form, and it only covers an instrument noisy enough to disagree with itself.**
+  Repetition is a cure for variance. It does nothing at all to an instrument that is *stable and
+  wrong* — which reports the same number every time, with nothing to warn you, because it is
+  measuring a different quantity than the one you are asking about.
+
+  The strong form is six lines up this list and was filed under the wrong heading: *"After adding a
+  guard, delete it and watch the test go red."* **Change the state and watch the counter.** An
+  observation cannot distinguish a check from a decoration; only an intervention can. Two instances
+  from one day:
+
+  - `gh attestation verify` on the 0.2.2 artifact exited 0 — and success is silent, so that
+    proved nothing on its own. Appending **one byte** and re-running gave exit 1 and a 404 on the
+    changed digest. The tampered run is what made the clean run evidence.
+  - The same check, written as `gh attestation verify … | tail -6` then `echo $?`, reads **`tail`'s**
+    status and printed `exit: 0` for a file that did not exist. Perfectly stable, no variance,
+    and it agreed with what was expected.
+
+  A peer's instance is sharper because repetition is *provably* useless there: `du` reported
+  168 GB of APFS clonefile clones, and deleting one whose logical size was 1,442,192 KB freed
+  **96 KB**. Four orders of magnitude, and a hundred runs would print 168 GB a hundred times.
+  This is the general case; the two noisy runs above are the special case where the instrument at
+  least had the decency to disagree with itself.
+
+  **And check whether the output already contradicts itself before trusting any of it.** In that
+  same session the volume's own subdirectories summed to **643 GB on a 414 GB volume** — the
+  signature of block sharing, present in the first listing, read past in favour of the biggest
+  number. *A sum of parts exceeding its container* is mechanical, free, and arrives before the
+  answer does. So does a percentage over 100, which is how D127 was caught.
 - **A ratio is a verdict only if its numerator and denominator describe the same opportunity.**
   This is not another entry in the catalogue of silences — that catalogue is about mechanisms
   failing to *reach* someone, and this mechanism reached fine. It compared two things against
