@@ -642,7 +642,7 @@ fn run(cli: Cli) -> Result<(), Error> {
         // person runs `doctor` to diagnose. Every judgement still lives in `amb::doctor`; this
         // prints (D70, D78).
         Command::Doctor => {
-            let report = doctor::gather(db::now()?);
+            let report = doctor::gather(db::now()?, None);
             if cli.json {
                 print_json(&report.to_json());
             } else {

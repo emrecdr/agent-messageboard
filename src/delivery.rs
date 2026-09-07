@@ -1037,10 +1037,13 @@ pub fn envelope(event: &str, context: &str) -> Value {
 /// reinstall). Every other error the hook can hit is transient, unactionable, or both, and
 /// speaking about those would trade a silence for a nuisance.
 ///
-/// Deliberately does **not** repeat [`crate::Error::SchemaVersion`]'s advice that the board is
-/// safe to delete. That advice is correct for a board from the future in general and wrong here:
-/// the stale copy recreates the board at the old version, a current session migrates it back up,
-/// and the same failure returns. The fix is the binary, so the notice names the binary.
+/// **Names the binary, never deletion — and since D141 the two surfaces agree.** Until then
+/// [`crate::Error::SchemaVersion`] told the reader the board was safe to delete: correct for a
+/// board from the future in general, wrong here, because the stale copy recreates the board at the
+/// old version, a current session migrates it back up, and the same failure returns. This notice
+/// deliberately diverged from that advice — so for a while one surface carried the looping remedy
+/// and the other did not (M28). D141 fixed the error to name the binary too, closing the divergence
+/// rather than routing around it. The fix is the binary, so both surfaces name the binary.
 ///
 /// **And it named the wrong command for it, on the one surface that reaches every session** (D128).
 /// The remediation read `cargo install --path . --locked`, which writes `~/.cargo/bin/amb` — while

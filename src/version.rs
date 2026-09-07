@@ -45,6 +45,18 @@ pub fn banner() -> &'static str {
     &BANNER
 }
 
+/// Whether this binary was built over uncommitted tracked changes (D141).
+///
+/// The `dirty` marker is a suffix `build.rs` appends to [`AMB_BUILD_ID`] rather than a separate
+/// field — one pre-rendered string suits both a git checkout and a source tarball — so this reads
+/// it back off the stamp. A tarball build stamps `no git` and reads as **clean**, which is correct:
+/// a release tarball is a legitimate reproducible build, and only an *uncommitted* one has a schema
+/// no commit can reproduce. That is the distinction [`crate::db::may_advance_shared_schema`] turns
+/// on when it decides whether this build may migrate the machine-wide board.
+pub fn is_dirty() -> bool {
+    env!("AMB_BUILD_ID").ends_with(" dirty")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +132,15 @@ mod tests {
             "build.rs could not read this repository: {:?}",
             banner()
         );
+    }
+
+    /// `is_dirty` agrees with the stamp the banner prints (D141).
+    ///
+    /// Build-state dependent, so it cannot assert a fixed value — it asserts the two never
+    /// disagree, which is the property the migration guard leans on: dirtiness is read off the
+    /// same fingerprint `--version` shows, so a refused migration and the banner tell one story.
+    #[test]
+    fn is_dirty_agrees_with_the_stamped_banner() {
+        assert_eq!(is_dirty(), banner().contains(" dirty"));
     }
 }

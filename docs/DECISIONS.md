@@ -7956,3 +7956,101 @@ the wrong fix.
   answering somebody else.
 - **No contradiction detection**, exactly as D40 ruled for notes. Representing it is not optional;
   inferring it is out of scope.
+
+---
+
+## D141 · A schema migration is a machine-wide action, and one instrument was performing it
+
+**Decided 2026-09-07.** Three surfaces around one condition — a board whose schema is newer than
+the binary looking at it — are reconciled: a **dirty** build refuses to advance the *shared*
+board's schema (`db::may_advance_shared_schema`), `doctor` reports a newer board as the
+stale-binary fault rather than as absent, and `Error::SchemaVersion` names the binary rather than
+advising deletion. No schema change; the guard is `AMB_ALLOW_DIRTY_MIGRATION`-overridable and
+private boards are exempt.
+
+### The cause was measured, and it was a unit test
+
+The 2026-09-07 lockout — the board reached schema 16 while every installed binary expected 15, so
+delivery stopped machine-wide — had a cause nobody could name from the outside. A session
+evaluating the seam put it precisely: *"only `main.rs` opens the default board, and the e2e harness
+always sets `AMB_DB`, so the suite cannot reach it."* That is true of the e2e suite and false of
+the **library** suite. `doctor::tests::the_report_names_the_storage_engine` called the real
+`gather()`, which reached `db::db_path()` and opened the default board **in-process**, with no
+`AMB_DB` to redirect it — and on a schema bump, `open` migrates. `cargo test` migrated the shared
+board; a session note from 2026-09-05 had already recorded the symptom with the mechanism left
+open — *"building and testing was enough for something to execute it once."* This is that
+something. Found by grepping every `open()`, `gather(`, and `db_path()` call for one not behind
+`AMB_DB`, which is the arithmetic form of "who can reach the shared resource."
+
+### The module's own rule names the defect
+
+`doctor.rs` opens with *"every decision here is a pure function over facts someone else gathered,
+because the facts are the untestable part … `gather` is the only thing that touches the world."*
+The shell was correctly isolated and then **unit-tested against the real world** — the one thing an
+imperative shell must not be, because its side effects are the environment's. `gather` now takes
+`board: Option<&Path>`; `None` is production, a test passes a temp path, and the impure boundary is
+injectable like every other seam this project tests through (D102's argument, applied to a
+filesystem instead of a clock).
+
+### Prevent: a dirty build will not advance the shared board's schema
+
+`may_advance_shared_schema(dirty, shared, forced)` refuses exactly one of eight cases: an unforced,
+dirty build about to migrate the machine-wide board. The argument is **reproducibility**, not
+authorship. A dirty build's schema corresponds to *no commit*, so if it migrates the shared board,
+no peer can build a binary that matches until the author commits — the board is stranded at a
+version that exists nowhere in git. A **clean** build corresponds to a real commit and is
+permitted, because that is the intended rollout: commit, then `tools/install.sh`, whose clean
+binary migrates freely. The guard fires only on the exact dangerous shortcut and is silent on every
+ordinary open — a current board early-returns before it, and a private board (`AMB_DB` set, or any
+path that is not `db_path()`) is exempt, which is every test and scratch board.
+
+**This is a guard, not the discipline.** The order is still build → commit → `install.sh`, with no
+dev binary against the default board in between; the guard makes the one shortcut that skips it
+refuse loudly instead of stranding the machine silently — the half a written ritual cannot enforce,
+because the 2026-09-05 measurement showed the migration happening with no `amb` command run at all.
+
+### Diagnose: a newer board is the stale-binary fault, not an absent board
+
+`doctor` read the on-disk version *through* `db::open_at`, which **refuses** a newer board — so the
+version came back `None`, and `schema_check(None, …)` renders "no board yet; one is created on first
+use." During the lockout the report therefore said the board did not exist, two lines above a
+`size` row measuring its 2.4 MB. The `Health::Bad` "newer amb — every hook is failing" arm, which
+D73 mutation-hardened specifically for this recurring fault, was **unreachable through its only
+production caller**: M20's shape (a rule guarded at the pure layer, unreachable at the shell)
+crossed with D95's (a check on the wrong axis cannot fire). The fix reads the version from the
+`SchemaVersion` error, which already carries it.
+
+The guarding test is studygo's **conservation invariant** rather than an arm-by-arm assertion on
+`schema_check`: *no report may call the board absent while another row measures its bytes*, whatever
+the mechanism. It holds over any report `gather` produces and stays true through a refactor that
+moves where the version is read — the arm-by-arm form would pass a report that regressed by a
+different route.
+
+### Remediate: the error names the binary, reconciled rather than re-worded
+
+`Error::SchemaVersion` said *"it holds only ephemeral coordination state, so deleting it is safe."*
+Deletion is wrong in the **one direction the error fires** — it is constructed only by
+`check_not_newer`, only when `found > expected` — because the stale copy recreates the board at the
+old version, a current session migrates it back up, and the failure returns. `delivery::stale_binary_notice`
+had already reasoned this out and routed around the deletion advice, so for a while one surface
+carried the looping remedy and the other did not (M28). The error now names `tools/install.sh` too,
+which **closes** the divergence rather than routing around it a second time — the correction the
+peer who verified this finding asked for by name: reconcile the two, do not add a third.
+
+### Rejected
+
+- **Comparing this binary to the installed one on the open path.** The precise signal ("am I the
+  copy the hooks invoke") needs `settings.json` parsed and the hook paths' fingerprints read —
+  which is what `doctor` does deliberately and what D9 forbids on the hook open path, where it would
+  land on every tool call. Dirtiness is a cheap local proxy that catches the real case: the outage
+  was a dev build, and a dev build is dirty.
+- **Refusing every migration of the shared board.** A clean binary *must* be able to migrate it —
+  that is the rollout. Refusing it would break `install.sh` itself.
+- **Making `doctor` non-mutating outright.** The destructive path was the test, now injected. The
+  real `doctor` command still migrates an *older* board on open, and that is fine: D73 makes
+  `doctor` the thing you run when the board is the problem, and you run it on purpose. A read-only
+  open path for one command is a larger change than the defect warrants.
+- **A token- or schema-level instrument watching for accidental migrations.** The guard bounds the
+  dangerous action by construction; a second number whose only answer is "the guard held" is the
+  ceremony D45 and D51 record this project shipping twice. The guard is the guard (D137's closing
+  argument, reused).

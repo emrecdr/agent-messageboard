@@ -79,11 +79,40 @@ pub enum Error {
     #[error("the name {name:?} is already taken in project {project:?} — choose another")]
     NameTaken { name: String, project: String },
 
+    /// **The board is newer than this binary, which means this copy of `amb` is stale** (D73, D94).
+    /// Constructed from exactly one place — [`crate::db::check_not_newer`], guarded by
+    /// `found > expected` — so this is its only meaning, and the remedy is always the binary.
+    ///
+    /// **Does not say "delete the board", which it used to and which is wrong here** (D141). The
+    /// hook-path notice [`crate::delivery::stale_binary_notice`] had already reasoned this out and
+    /// routed around the deletion advice; the two had drifted, one carrying the correct fix and one
+    /// the looping one (M28). Deleting recreates the board at the old version, a current session
+    /// migrates it back up, and the same failure returns — so both surfaces now name the binary.
     #[error(
-        "the database at {path} was created by a different schema version ({found}, expected \
-         {expected}). It holds only ephemeral coordination state, so deleting it is safe."
+        "the board at {path} is at schema {found}, newer than this binary's {expected}: this copy \
+         of `amb` is stale and refuses to misread it. Reinstall with `tools/install.sh` from the \
+         repository (not `cargo install`, which leaves the hook copy stale). The board is fine and \
+         nothing is lost."
     )]
     SchemaVersion {
+        path: String,
+        found: i64,
+        expected: i64,
+    },
+
+    /// **An uncommitted build refuses to advance the shared board's schema** (D141). A `dirty`
+    /// binary's schema corresponds to no commit, so migrating the machine-wide board to it strands
+    /// every other session's binary at a version none of them can reproduce — the outage of
+    /// 2026-09-07, when a newer-tree build migrated the real board and every installed copy then
+    /// refused it. A private board (`AMB_DB` set) is exempt, and `AMB_ALLOW_DIRTY_MIGRATION=1`
+    /// overrides deliberately.
+    #[error(
+        "this build of `amb` is uncommitted (dirty) and will not migrate the shared board at \
+         {path} from schema {found} to {expected}: a schema no commit reproduces would strand \
+         every other session. Commit the change and reinstall with `tools/install.sh`, or set \
+         AMB_ALLOW_DIRTY_MIGRATION=1 to migrate a private board anyway."
+    )]
+    DirtyMigration {
         path: String,
         found: i64,
         expected: i64,
@@ -266,6 +295,7 @@ impl Error {
             Error::RemoteVolume { .. } => "remote_volume",
             Error::BadAddress { .. } => "bad_address",
             Error::NoSuchMessage(_) => "no_such_message",
+            Error::DirtyMigration { .. } => "dirty_migration",
             Error::NotYourMessage { .. } => "not_your_message",
             Error::NoSuchAgent { .. } => "no_such_agent",
             Error::AgentInAnotherProject { .. } => "no_such_agent",
@@ -326,7 +356,7 @@ impl Error {
             | Error::ExportStale { .. } => exit::DATA,
             Error::AmbiguousNote { .. } | Error::InsideRepository { .. } => exit::USAGE,
             Error::NameTaken { .. } => exit::USAGE,
-            Error::SchemaVersion { .. } => exit::CONFIG,
+            Error::SchemaVersion { .. } | Error::DirtyMigration { .. } => exit::CONFIG,
             Error::Sqlite { .. } | Error::CorruptBoard { .. } => exit::UNAVAILABLE,
             Error::Io { .. } => exit::CANTCREAT,
             Error::Json { .. } | Error::ClockBeforeEpoch => exit::SOFTWARE,

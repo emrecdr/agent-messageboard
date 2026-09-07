@@ -24,6 +24,7 @@ use crate::db;
 use crate::hooks;
 use crate::version;
 use serde_json::{Value, json};
+use std::path::Path;
 
 /// How bad a finding is.
 ///
@@ -623,7 +624,7 @@ fn board_bytes(path: &std::path::Path) -> u64 {
 ///
 /// Every fallible read degrades to a `Warn` rather than aborting: a doctor that stops at the first
 /// thing it cannot read is useless precisely when it is needed.
-pub fn gather(now: f64) -> Report {
+pub fn gather(now: f64, board: Option<&Path>) -> Report {
     let mut checks = Vec::new();
     let running = version::banner();
     // Set from the delivery hooks found below, and read by the `deliver` freshness row further
@@ -713,20 +714,41 @@ pub fn gather(now: f64) -> Report {
     // One connection for every question the board answers — schema and integrity here, the
     // freshness lanes in the memory block below. An earlier form opened a second one for
     // freshness, which paid the whole open (and `migrate`'s version pass) twice per run.
-    let board_path = db::db_path();
+    // **Injected, so a unit test never touches the real board** (D141). `gather` reaching
+    // `db::db_path()` directly is the one place the impure shell was exercised against the live
+    // environment: a `#[test]` calling `gather` opened — and, on a schema bump, *migrated* — the
+    // machine-wide board, which is the mechanism behind the 2026-09-07 outage. `None` keeps the
+    // production behaviour; a test passes a temporary path.
+    let board_path = match board {
+        Some(p) => Ok(p.to_path_buf()),
+        None => db::db_path(),
+    };
     let mut conn = None;
     match &board_path {
         Err(e) => checks.push(Check::new("board", Health::Warn, e.to_string())),
         Ok(path) => {
             checks.push(location_check(path));
             let exists = path.exists();
+            // **Read the version even when the open is refused** (D141). A board *newer* than this
+            // binary makes `open_at` return `SchemaVersion` rather than a connection, and that
+            // error already carries the on-disk version. Discarding it via `.ok()` left `on_disk`
+            // at `None`, which `schema_check` renders as "no board yet" — beside a non-zero `size`
+            // row two lines down, the impossible pair that shipped during the 2026-09-07 lockout.
+            // The error's `found` is the honest version, and it makes the `Bad` "newer amb" arm —
+            // mutation-hardened but until now unreachable through this caller — actually fire.
+            let mut on_disk = None;
             if exists {
-                conn = db::open_at(path).ok();
+                match db::open_at(path) {
+                    Ok(c) => {
+                        on_disk = c
+                            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                            .ok();
+                        conn = Some(c);
+                    }
+                    Err(crate::Error::SchemaVersion { found, .. }) => on_disk = Some(found),
+                    Err(_) => {}
+                }
             }
-            let on_disk = conn.as_ref().and_then(|c| {
-                c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-                    .ok()
-            });
             checks.push(schema_check(on_disk, db::SCHEMA_VERSION));
             if exists {
                 checks.push(integrity_check(Integrity::from_probe(
@@ -1243,13 +1265,81 @@ mod tests {
     /// not that anybody calls it.
     #[test]
     fn the_report_names_the_storage_engine() {
-        let report = gather(1_700_000_000.0);
+        // A path that does not exist, so `gather` never opens — let alone migrates — the real
+        // board (D141). The `sqlite` row is board-independent, so an absent board proves the
+        // point without a side effect. Before injection this called the real `db_path()` and was
+        // the in-process test that migrated the shared board on a schema bump.
+        let report = gather(
+            1_700_000_000.0,
+            Some(Path::new("/nonexistent/amb/doctor-test.db")),
+        );
         let found = report.checks.iter().find(|c| c.name == "sqlite");
         let found = found.expect("doctor must report the bundled sqlite build");
         assert!(
             found.detail.contains(crate::version::sqlite()),
             "the row does not carry the version actually compiled in: {}",
             found.detail
+        );
+    }
+
+    /// A board newer than the binary is reported as the stale-binary fault, never as absent (D141).
+    ///
+    /// Two assertions, and the second is studygo's **conservation-invariant** framing rather than
+    /// mine. The first pins the H1 fix: the newer-board `Bad` arm is now reachable *through
+    /// `gather`*, where before it was unreachable because the refused open discarded the version
+    /// and `schema_check(None, …)` said "no board yet". The second is mechanism-independent — a
+    /// report is wrong on its face if it calls the board absent while another row measures its
+    /// bytes, whatever caused it — so it keeps holding if a future refactor moves where the
+    /// version is read. It is red against exactly the report that shipped on 2026-09-07.
+    #[test]
+    fn a_newer_board_is_reported_stale_and_never_as_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("board.db");
+        // Create it at the current schema, then stamp it one past — what a newer binary's
+        // migration leaves behind, and what makes `open_at` refuse this build.
+        {
+            let conn = db::open_at(&path).expect("create board");
+            let v: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .expect("read version");
+            conn.execute_batch(&format!("PRAGMA user_version = {}", v + 1))
+                .expect("stamp forward");
+        }
+
+        let report = gather(1_700_000_000.0, Some(&path));
+        let schema = report
+            .checks
+            .iter()
+            .find(|c| c.name == "schema")
+            .expect("a schema row");
+        assert_eq!(
+            schema.health,
+            Health::Bad,
+            "a newer board is the stale-binary fault, not health: {}",
+            schema.detail
+        );
+        assert!(
+            schema.detail.contains("newer amb"),
+            "the schema row must name the fault, not deny the board exists: {}",
+            schema.detail
+        );
+
+        // The conservation invariant: "no board yet" and a measured size cannot both appear. It
+        // holds over *any* report `gather` produces, and is what fired on the day the two shipped
+        // together. Here `absent` is false and a size row is present, so the report is coherent —
+        // and the same assertion goes red if H1 regresses and the schema row reverts to absent.
+        let absent = report
+            .checks
+            .iter()
+            .any(|c| c.name == "schema" && c.detail.contains("no board yet"));
+        let sized = report.checks.iter().any(|c| c.name == "size");
+        assert!(
+            !(absent && sized),
+            "the report calls the board absent while a size row measures it (the 2026-09-07 pairing)"
+        );
+        assert!(
+            sized,
+            "an existing board must render a size row, or the invariant is vacuous"
         );
     }
 

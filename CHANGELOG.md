@@ -9,6 +9,27 @@ and why the on-disk schema is deliberately not one of them.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A schema migration is a machine-wide action, and a unit test was performing it** (D141). The
+  2026-09-07 lockout — the board reached a schema every installed binary refused, stopping delivery
+  for every session — traced to `doctor`'s own `the_report_names_the_storage_engine`, which called
+  the real `gather()` in-process and so opened, and on a schema bump *migrated*, the default board.
+  `gather` now takes an injectable board path so no test touches the real board, and a **dirty**
+  build refuses to advance the *shared* board's schema (`AMB_ALLOW_DIRTY_MIGRATION` overrides;
+  private boards are exempt): a schema no commit reproduces must not strand every peer's binary.
+
+- **`amb doctor` reported a board newer than the binary as absent** (D141). It read the version
+  through an open the newer board refuses, so `schema_check` saw `None` and printed "no board yet"
+  beside a `size` row measuring the same board's bytes. It now reads the version from the error that
+  refusal already carries, so the `Bad` "newer amb — every hook is failing" arm actually fires; a
+  conservation-invariant test forbids "absent" and a measured size from ever appearing together.
+
+- **`Error::SchemaVersion` advised deleting the board, which loops in the one direction it fires**
+  (D141, M28). Deletion recreates the board at the old version and a current session migrates it
+  back up. The message now names `tools/install.sh`, reconciling it with the delivery-path notice
+  that had already routed around the same wrong advice.
+
 ### Added
 
 - **`--supersedes <id>` on `send` and `reply` — a message can be retracted** (D140). Schema 16.

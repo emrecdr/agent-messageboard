@@ -894,6 +894,7 @@ pub fn migrate(conn: &mut Connection, path: &Path) -> Result<()> {
         return Ok(());
     }
     check_not_newer(found, path)?;
+    guard_dirty_migration(found, path)?;
 
     // **`Immediate`, and the version is read again inside it.** These are N unrelated processes
     // with no common parent, and a schema upgrade rolls out to all of them at once — every live
@@ -933,6 +934,50 @@ pub fn migrate(conn: &mut Connection, path: &Path) -> Result<()> {
 fn check_not_newer(found: i64, path: &Path) -> Result<()> {
     if found > SCHEMA_VERSION {
         return Err(Error::SchemaVersion {
+            path: path.display().to_string(),
+            found,
+            expected: SCHEMA_VERSION,
+        });
+    }
+    Ok(())
+}
+
+/// Whether this binary may advance the **shared** board's schema (D141).
+///
+/// **Refuses exactly one combination: a `dirty` binary about to migrate the machine-wide board,
+/// unforced.** A dirty build's schema corresponds to no commit, so migrating the shared board to
+/// it strands every other session's installed binary at a version none of them can reproduce —
+/// the 2026-09-07 outage, when a newer-tree build migrated the real board and every installed copy
+/// then refused it. Everything else is permitted, and each exemption is deliberate:
+///
+/// - a **clean** binary corresponds to a real commit — the intended rollout is commit then
+///   `tools/install.sh`, and the clean binary it builds migrates freely;
+/// - a **private** board (`AMB_DB` set, or any path that is not the default) is the caller's own,
+///   which is every test and every scratch board;
+/// - an explicit **override** (`AMB_ALLOW_DIRTY_MIGRATION`) is someone choosing to anyway.
+///
+/// Pure over the three facts so it can be truth-tabled; [`guard_dirty_migration`] gathers them.
+/// This does not *cause* the ritual — it makes the one dangerous shortcut refuse loudly instead of
+/// stranding the machine silently, which is the half a written ritual cannot enforce.
+pub fn may_advance_shared_schema(dirty: bool, shared: bool, forced: bool) -> bool {
+    forced || !shared || !dirty
+}
+
+/// Whether `path` is the real, machine-wide board rather than a test or scratch one.
+///
+/// The default board is the one no `AMB_DB` override redirects *and* whose path is what
+/// [`db_path`] resolves to. Both halves are needed: an in-process unit test leaves `AMB_DB` unset
+/// but opens a `tempdir` board (path differs), while the e2e harness sets `AMB_DB` to a tempdir
+/// (override present). Only the genuine default satisfies both.
+fn is_shared_board(path: &Path) -> bool {
+    std::env::var_os("AMB_DB").is_none() && db_path().map(|d| d == path).unwrap_or(false)
+}
+
+/// Refuse a dirty build's migration of the shared board, before the write lock is taken (D141).
+fn guard_dirty_migration(found: i64, path: &Path) -> Result<()> {
+    let forced = std::env::var_os("AMB_ALLOW_DIRTY_MIGRATION").is_some();
+    if !may_advance_shared_schema(crate::version::is_dirty(), is_shared_board(path), forced) {
+        return Err(Error::DirtyMigration {
             path: path.display().to_string(),
             found,
             expected: SCHEMA_VERSION,
@@ -1121,6 +1166,43 @@ pub fn now() -> Result<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The migration guard refuses exactly one of eight cases (D141).
+    ///
+    /// The whole truth table, because the rule is a disjunction and the failure that matters is a
+    /// single missed `!`: only an unforced, dirty build on the shared board is refused, and a
+    /// mutation that let it through — or that started refusing a clean build, or a private board —
+    /// would be an outage or a broken test suite respectively.
+    #[test]
+    fn only_a_dirty_unforced_build_is_barred_from_the_shared_board() {
+        for dirty in [false, true] {
+            for shared in [false, true] {
+                for forced in [false, true] {
+                    let permitted = may_advance_shared_schema(dirty, shared, forced);
+                    let expect = !(dirty && shared && !forced);
+                    assert_eq!(
+                        permitted, expect,
+                        "dirty={dirty} shared={shared} forced={forced}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A `tempdir` board is never the shared one, which is why the guard leaves every test alone.
+    ///
+    /// The guard is invisible in the suite precisely because [`is_shared_board`] returns false for
+    /// every board a test opens — an in-process test leaves `AMB_DB` unset but its path is a
+    /// `tempdir`, not [`db_path`]'s. If this regressed to "any `AMB_DB`-unset open is shared", a
+    /// dirty schema bump would redden the whole suite instead of only the real board.
+    #[test]
+    fn a_tempdir_board_is_not_the_shared_board() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(
+            !is_shared_board(&dir.path().join("board.db")),
+            "a tempdir board must not read as the machine-wide default"
+        );
+    }
 
     /// The WAL truncation limit must actually be installed, read back off a real connection —
     /// a stated ceiling nothing can check is a comment with a number in it (D95).

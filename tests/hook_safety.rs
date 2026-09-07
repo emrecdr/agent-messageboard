@@ -471,8 +471,11 @@ fn a_binary_older_than_the_board_says_so_instead_of_going_quiet() {
         "`cargo install` leaves the hook copy stale, so naming it here sends the reader round the \
          same loop (D94): {ctx}"
     );
-    // The looping advice this notice exists to avoid. `Error::SchemaVersion` says deleting the
-    // board is safe; here that is wrong, because the stale copy recreates it at the old version.
+    // The looping advice this notice must never carry. Until D141 `Error::SchemaVersion` itself
+    // said the board was "safe to delete" — wrong here, because the stale copy recreates it at the
+    // old version and a current session migrates it back up — and this notice deliberately diverged
+    // from it (M28). D141 reconciled the two rather than leaving one copy drifted: the error now
+    // names the binary too, so both surfaces agree and neither sends the reader round the loop.
     assert!(
         !ctx.contains("deleting is safe") && !ctx.contains("safe to delete"),
         "the notice must not repeat the advice that loops: {ctx}"
