@@ -84,6 +84,14 @@ enum Command {
         /// mismatch is a citation that went stale. An unreadable path is an error, not a silent drop.
         #[arg(long)]
         attach: Vec<String>,
+        /// Deliver this message mid-turn, interrupting the recipient's current work (D143).
+        ///
+        /// Default off. Without it, the message waits until the recipient's agent is idle — its
+        /// turn ends — so it never breaks their visible process; `amb inbox` and the `Stop` sweep
+        /// still show it. Reserve `--urgent` for genuinely time-critical mail (a peer about to edit
+        /// a file you just broke), the way a phone reserves its interrupting alert level.
+        #[arg(long)]
+        urgent: bool,
     },
     /// Show messages addressed to this agent or broadcast to its project.
     Inbox {
@@ -158,6 +166,10 @@ enum Command {
         /// with `sha256sum`. The bytes never touch the board; an unreadable path is an error.
         #[arg(long)]
         attach: Vec<String>,
+        /// Deliver this reply mid-turn (D143). Default off — it waits for the recipient's idle
+        /// moment, the same as `send --urgent`.
+        #[arg(long)]
+        urgent: bool,
     },
     /// Show a whole conversation, oldest first, from any message in it.
     ///
@@ -702,6 +714,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             ref ext_id,
             supersedes,
             ref attach,
+            urgent,
         } => {
             let body = with_attachments(read_body(body.as_deref(), body_file.as_deref())?, attach)?;
             let addr = address::parse(to)?;
@@ -731,6 +744,7 @@ fn run(cli: Cli) -> Result<(), Error> {
                     thread: thread.as_deref(),
                     ext_id: ext_id.as_deref(),
                     supersedes,
+                    urgent,
                 },
             )?;
             if cli.json {
@@ -857,9 +871,10 @@ fn run(cli: Cli) -> Result<(), Error> {
             ref body_file,
             supersedes,
             ref attach,
+            urgent,
         } => {
             let body = with_attachments(read_body(body.as_deref(), body_file.as_deref())?, attach)?;
-            let new_id = messages::reply(&mut conn, &me, id, &body, supersedes)?;
+            let new_id = messages::reply(&mut conn, &me, id, &body, supersedes, urgent)?;
             if cli.json {
                 print_json(&serde_json::json!({ "sent": new_id, "in_reply_to": id }));
             } else {

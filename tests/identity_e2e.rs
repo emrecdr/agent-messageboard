@@ -519,8 +519,19 @@ fn the_injected_envelope_names_the_event_that_actually_fired() {
 
         // Mail from *someone else*, so this session has something it has never been offered — a
         // session does not receive its own broadcast, and a hook with nothing to say says nothing.
+        // `--urgent` because since D143 only urgent mail rides the mid-turn (`PostToolUse`) lane
+        // this test fires on; a normal broadcast would wait for `Stop` and the envelope would be
+        // empty. The event-naming rule under test is unaffected by which lane carries the mail.
         let out = Command::new(env!("CARGO_BIN_EXE_amb"))
-            .args(["send", "@", "--subject", "knock", "--body", "anyone there"])
+            .args([
+                "send",
+                "@",
+                "--subject",
+                "knock",
+                "--body",
+                "anyone there",
+                "--urgent",
+            ])
             .current_dir(dir.path())
             .env("AMB_DB", &db)
             .env("AMB_PROJECT", &project)

@@ -1138,6 +1138,7 @@ mod tests {
             thread_id: None,
             supersedes: None,
             superseded_by: None,
+            urgent: false,
             read: None,
         }
     }

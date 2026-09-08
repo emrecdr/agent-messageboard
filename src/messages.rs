@@ -110,6 +110,11 @@ pub struct Outgoing<'a> {
     ///
     /// Validated in [`send`] rather than trusted: the id must exist and must belong to the caller.
     pub supersedes: Option<i64>,
+    /// Whether this message interrupts mid-turn (D143). Default `false`: only urgent mail is
+    /// delivered on `PostToolUse`, and everything else waits for the `Stop` sweep, so a normal
+    /// message never breaks the agent's visible process. Reserved for genuinely time-critical mail,
+    /// the way Apple's `timeSensitive` interruption level is — the default is not to interrupt.
+    pub urgent: bool,
 }
 
 /// A message as stored.
@@ -144,6 +149,11 @@ pub struct Message {
     ///
     /// `MIN` rather than the newest: the operative fact is when the sender first withdrew it.
     pub superseded_by: Option<i64>,
+    /// Whether the sender marked this message urgent (D143). Urgent mail is the only mail delivered
+    /// mid-turn (`PostToolUse`); everything else waits for the `Stop` sweep, so a normal message
+    /// never interrupts the agent's visible process. A stored property of the message, not a
+    /// per-reader one — every recipient sees the same urgency the sender set.
+    pub urgent: bool,
     /// Whether *this reader* has acknowledged the message (`amb read`), computed by the inbox
     /// query. `None` from paths with no reader in scope (`get`), where the question has no
     /// answer — U1's finding was that the primary surface hid a distinction the design makes
@@ -230,7 +240,8 @@ impl Message {
 /// there is a compile error rather than a silently shifted index.
 const MESSAGE_COLUMNS: &str = "m.id, m.ts, m.from_agent, a.name, m.from_proj, m.to_agent, \
                                m.to_proj, m.kind, m.subject, m.body, m.thread_id, m.supersedes, \
-                               (SELECT MIN(sup.id) FROM messages sup WHERE sup.supersedes = m.id)";
+                               (SELECT MIN(sup.id) FROM messages sup WHERE sup.supersedes = m.id), \
+                               m.urgent";
 
 /// The twelfth column: has *this reader* acknowledged this message.
 ///
@@ -257,7 +268,7 @@ fn read_column(agent_param: &str) -> String {
 /// is what `MESSAGE_COLUMNS` already promised for the other eleven.
 fn row_to_message_read(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
     let mut m = row_to_message(r)?;
-    m.read = Some(r.get(13)?);
+    m.read = Some(r.get(14)?);
     Ok(m)
 }
 
@@ -277,6 +288,7 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         thread_id: r.get(10)?,
         supersedes: r.get(11)?,
         superseded_by: r.get(12)?,
+        urgent: r.get(13)?,
         read: None,
     })
 }
@@ -416,8 +428,8 @@ pub fn send(conn: &mut Connection, me: &Identity, out: &Outgoing<'_>) -> Result<
         .execute(
             "INSERT INTO messages
                (ext_id, ts, from_agent, from_proj, to_agent, to_proj, kind, subject, body,
-                thread_id, supersedes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                thread_id, supersedes, urgent)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(ext_id) DO NOTHING",
             params![
                 key,
@@ -431,6 +443,7 @@ pub fn send(conn: &mut Connection, me: &Identity, out: &Outgoing<'_>) -> Result<
                 out.body,
                 out.thread,
                 out.supersedes,
+                out.urgent,
             ],
         )
         .map_err(sql("inserting the message"))?;
@@ -610,7 +623,7 @@ fn like_contains(term: &str) -> String {
 /// One query serves all three addressing modes. This is the **explicit** read: it never hides a
 /// message, whatever its offer count, because an agent that runs `amb inbox` has asked.
 pub fn inbox(conn: &Connection, me: &Identity, unread_only: bool) -> Result<Vec<Message>> {
-    select(conn, me, unread_only, None, &Filter::default())
+    select(conn, me, unread_only, None, false, &Filter::default())
 }
 
 /// [`inbox`], narrowed (F6).
@@ -623,7 +636,7 @@ pub fn inbox_matching(
     unread_only: bool,
     filter: &Filter,
 ) -> Result<Vec<Message>> {
-    select(conn, me, unread_only, None, filter)
+    select(conn, me, unread_only, None, false, filter)
 }
 
 /// Unread mail this agent has not already been offered [`MAX_OFFERS`] times.
@@ -632,17 +645,23 @@ pub fn inbox_matching(
 /// injection spends context the agent did not ask to spend, so it must back off; an explicit
 /// `amb inbox` must not, or a message the agent ignored for a while becomes unrecoverable.
 pub fn deliverable(conn: &Connection, me: &Identity) -> Result<Vec<Message>> {
-    select(conn, me, true, Some(MAX_OFFERS), &Filter::default())
+    select(conn, me, true, Some(MAX_OFFERS), false, &Filter::default())
 }
 
-/// Mail this agent has never been offered at all.
+/// **Urgent** mail this agent has never been offered — the only mail delivered mid-turn (D143).
 ///
-/// What the `PostToolUse` hook injects, and the whole reason mid-turn delivery is affordable.
-/// That hook fires after *every* tool call, so offering the same three messages again after each
-/// of forty edits would be D24 at forty times the rate. Restricting it to genuinely new mail
-/// means each message is delivered mid-turn at most once; `Stop` stays the catch-up sweep (D25).
+/// What the `PostToolUse` hook injects, and mid-turn delivery is now doubly restricted. To
+/// genuinely new mail (`Some(1)`, so each message is offered mid-turn at most once, or the hook
+/// firing after every one of forty edits would be D24 at forty times the rate) **and** to mail the
+/// sender marked `--urgent`. Non-urgent mail is not shown here at all: it waits for the `Stop`
+/// sweep ([`deliverable`]), so a normal message never interrupts the agent's visible process.
+///
+/// **This amends D25.** Mid-turn delivery used to be universal; it is now the urgency exception —
+/// the same shape Apple's notification model takes, where the interrupting level is reserved for
+/// time-sensitive mail and the default defers. The `Stop` sweep is unchanged, so nothing is lost,
+/// only deferred.
 pub fn undelivered(conn: &Connection, me: &Identity) -> Result<Vec<Message>> {
-    select(conn, me, true, Some(1), &Filter::default())
+    select(conn, me, true, Some(1), true, &Filter::default())
 }
 
 fn select(
@@ -650,6 +669,7 @@ fn select(
     me: &Identity,
     unread_only: bool,
     max_offers: Option<i64>,
+    urgent_only: bool,
     filter: &Filter,
 ) -> Result<Vec<Message>> {
     // The 2x2 from schema.sql, as one predicate. Four addressing modes, one query:
@@ -676,6 +696,15 @@ fn select(
         max_offers.into(),
         cutoff.into(),
     ];
+    // The urgency gate (D143), used only by [`undelivered`] — the `PostToolUse` path. Absent for
+    // every other caller, so `inbox`, `deliverable` (the `Stop` sweep) and the F6 filters are
+    // byte-identical to before, the same property the F6 comment above defends. A constant clause,
+    // not a bind: `urgent` is a stored 0/1 and the caller, not the query, decides whether to gate.
+    let urgent_gate = if urgent_only {
+        "\n          AND m.urgent = 1"
+    } else {
+        ""
+    };
     let mut narrowing = String::new();
     if let Some(from) = &filter.from {
         binds.push(from.clone().into());
@@ -754,7 +783,7 @@ fn select(
           -- on the retracting message. `ix_messages_supersedes` is what keeps that from being a
           -- scan per row on the hook path.
           AND (?4 IS NULL OR NOT EXISTS (
-                SELECT 1 FROM messages sup WHERE sup.supersedes = m.id)){narrowing}
+                SELECT 1 FROM messages sup WHERE sup.supersedes = m.id)){urgent_gate}{narrowing}
         ORDER BY m.id"
     );
     let mut stmt = conn
@@ -1107,7 +1136,7 @@ pub fn mark_read_all(conn: &mut Connection, me: &Identity) -> Result<Vec<i64>> {
     // `amb read --all` acknowledge a subset while saying it cleared everything — the shape D9
     // forbids most directly, since `read` is the only thing that marks mail read and a message
     // silently left unacknowledged is one the reader believes they have dealt with.
-    let ids: Vec<i64> = select(conn, me, true, None, &Filter::default())?
+    let ids: Vec<i64> = select(conn, me, true, None, false, &Filter::default())?
         .iter()
         .map(|m| m.id)
         .collect();
@@ -1237,6 +1266,7 @@ pub fn reply(
     msg_id: i64,
     body: &str,
     supersedes: Option<i64>,
+    urgent: bool,
 ) -> Result<i64> {
     let original = get(conn, msg_id)?;
     let thread = original
@@ -1268,6 +1298,7 @@ pub fn reply(
             thread: Some(&thread),
             ext_id: None,
             supersedes,
+            urgent,
         },
     )
 }
@@ -1493,6 +1524,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("send");
@@ -1536,6 +1568,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("send");
@@ -1576,11 +1609,12 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("root");
-        let r1 = reply(&mut conn, &bob, root, "because mutants", None).expect("first reply");
-        let r2 = reply(&mut conn, &alice, r1, "then clean it", None).expect("second reply");
+        let r1 = reply(&mut conn, &bob, root, "because mutants", None, false).expect("first reply");
+        let r2 = reply(&mut conn, &alice, r1, "then clean it", None, false).expect("second reply");
 
         // An unrelated message, so a query that over-selects is caught too.
         send(
@@ -1594,6 +1628,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("noise");
@@ -1646,6 +1681,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("send");
@@ -1680,6 +1716,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("first");
@@ -1695,6 +1732,7 @@ mod tests {
                 thread: Some(&first.to_string()),
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("named");
@@ -1731,6 +1769,7 @@ mod tests {
             thread: None,
             ext_id: None,
             supersedes: None,
+            urgent: false,
         };
 
         let err = send(&mut conn, &bob, &out).expect_err("a body past the cap must be refused");
@@ -1770,6 +1809,7 @@ mod tests {
             thread: None,
             ext_id: None,
             supersedes: None,
+            urgent: false,
         };
         let err = send(&mut conn, &bob, &out).expect_err("past the cap");
         assert!(
@@ -1819,6 +1859,7 @@ mod tests {
             thread: None,
             ext_id: None,
             supersedes: None,
+            urgent: false,
         };
         let first = send(&mut conn, &bob, &out).expect("send");
         let _second = send(
@@ -1879,6 +1920,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("carol broadcasts");
@@ -1956,6 +1998,7 @@ mod tests {
             thread: None,
             ext_id: None,
             supersedes: None,
+            urgent: false,
         };
         // Sized off the constant, so the cap can move without this row silently becoming a
         // valid kind (the reached-assertion audit: a fixture that drifts under a grown cap
@@ -2014,6 +2057,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
             },
         )
         .expect("send");
@@ -2044,6 +2088,27 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: None,
+                urgent: false,
+            },
+        )
+        .expect("send")
+    }
+
+    /// Like [`send_to`], but marks the message `--urgent` (D143) — so it reaches the mid-turn lane.
+    fn send_urgent_to(conn: &mut Connection, from: &Identity, to: &Address, subject: &str) -> i64 {
+        let r = resolve_recipient(conn, to, from).expect("resolve");
+        send(
+            conn,
+            from,
+            &Outgoing {
+                to: &r,
+                kind: "note",
+                subject,
+                body: "b",
+                thread: None,
+                ext_id: None,
+                supersedes: None,
+                urgent: true,
             },
         )
         .expect("send")
@@ -2096,6 +2161,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: Some(wrong),
+                urgent: false,
             },
         )
         .expect("the sender may retract their own message");
@@ -2157,6 +2223,7 @@ mod tests {
                 thread: None,
                 ext_id: None,
                 supersedes: Some(wrong),
+                urgent: false,
             },
         )
         .expect("retract");
@@ -2178,7 +2245,7 @@ mod tests {
             project: None,
         };
         let wrong = send_to(&mut conn, &alice, &to_bob, "wrong");
-        let fix = reply(&mut conn, &alice, wrong, "right", Some(wrong)).expect("retract");
+        let fix = reply(&mut conn, &alice, wrong, "right", Some(wrong), false).expect("retract");
 
         let by_id = |id: i64| get(&conn, id).expect("get");
         assert_eq!(
@@ -2235,6 +2302,7 @@ mod tests {
                     thread: None,
                     ext_id: None,
                     supersedes: Some(target),
+                    urgent: false,
                 },
             )
         };
@@ -2355,10 +2423,14 @@ mod tests {
     /// The second half is the other side of the same rule: `undelivered` is rationed because the
     /// hook spends context the agent did not ask to spend; `inbox` must not be, or a message
     /// ignored for a while becomes unrecoverable.
+    ///
+    /// **The message is `--urgent` (D143).** The rationing this pins lives on the mid-turn lane,
+    /// and since D143 only urgent mail reaches that lane — `send_urgent_to` is what puts a message
+    /// there at all. The non-urgent case is [`non_urgent_mail_waits_for_the_stop_sweep`].
     #[test]
     fn mid_turn_delivery_offers_a_message_once_and_an_explicit_read_is_not_rationed() {
         let (_d, mut conn, alice, bob, _carol) = board();
-        let id = send_to(
+        let id = send_urgent_to(
             &mut conn,
             &alice,
             &Address::Agent {
@@ -2382,6 +2454,42 @@ mod tests {
             ids(inbox(&conn, &bob, true).expect("inbox")),
             vec![id],
             "an explicit read is not rationed, or an ignored message becomes unrecoverable"
+        );
+    }
+
+    /// Non-urgent mail is withheld from the mid-turn lane and waits for the `Stop` sweep (D143).
+    ///
+    /// The core of the urgency gate, as a truth table across the three surfaces: a normal message
+    /// and an urgent one, to the same agent. Only the urgent one reaches `undelivered` (the
+    /// `PostToolUse` lane, so a normal message never interrupts the agent's visible process); both
+    /// reach `deliverable` (the `Stop` catch-up) and `inbox` (the explicit read). The two presence
+    /// rows are what stop it passing vacuously: gate *everything* mid-turn and the urgent row
+    /// fails; gate *nothing* and the mid-turn row over-returns.
+    #[test]
+    fn non_urgent_mail_waits_for_the_stop_sweep() {
+        let (_d, mut conn, alice, bob, _carol) = board();
+        let to_bob = Address::Agent {
+            name: "bob".into(),
+            project: None,
+        };
+        let normal = send_to(&mut conn, &alice, &to_bob, "normal");
+        let urgent = send_urgent_to(&mut conn, &alice, &to_bob, "urgent");
+        let ids = |ms: Vec<Message>| ms.iter().map(|m| m.id).collect::<Vec<_>>();
+
+        assert_eq!(
+            ids(undelivered(&conn, &bob).expect("mid-turn")),
+            vec![urgent],
+            "only urgent mail interrupts mid-turn; the normal message must wait for Stop"
+        );
+        assert_eq!(
+            ids(deliverable(&conn, &bob).expect("stop sweep")),
+            vec![normal, urgent],
+            "the Stop sweep delivers everything, so nothing is lost — only deferred"
+        );
+        assert_eq!(
+            ids(inbox(&conn, &bob, true).expect("inbox")),
+            vec![normal, urgent],
+            "an explicit inbox is never urgency-gated"
         );
     }
 
@@ -2768,6 +2876,7 @@ mod tests {
                     thread: None,
                     ext_id: None,
                     supersedes: None,
+                    urgent: false,
                 },
             )
             .expect("send");

@@ -419,7 +419,7 @@ pub const PRUNE_AT_BYTES: u64 = 50 * 1024 * 1024;
 ///
 /// Equal to `MIGRATIONS.len()`, asserted by a test rather than computed, so that bumping one
 /// without the other is caught rather than silently accepted.
-pub const SCHEMA_VERSION: i64 = 16;
+pub const SCHEMA_VERSION: i64 = 17;
 
 /// Migrations, applied in order from whatever version the board is already at.
 ///
@@ -869,6 +869,21 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE messages ADD COLUMN supersedes INTEGER REFERENCES messages(id);
      CREATE INDEX IF NOT EXISTS ix_messages_supersedes
          ON messages(supersedes) WHERE supersedes IS NOT NULL;",
+    // 16 -> 17 · a message can be marked urgent, so only urgent mail interrupts mid-turn and the
+    // rest waits for the turn boundary (D143). Amends D25: mid-turn delivery becomes urgency-gated
+    // rather than universal.
+    //
+    // **`DEFAULT 0` is the honest value, not a backfilled guess** — unlike D140's `supersedes`,
+    // where NULL meant "this was never recorded". Every message that exists is non-urgent *by
+    // definition*: urgency is a level, and the absence of a mark is the base level, so stamping 0
+    // states what was already true rather than inventing a fact (contrast D95).
+    //
+    // **No index, deliberately.** The mid-turn filter adds `AND urgent = 1` to a query already
+    // bounded by the unread, offer-count and addressing predicates, so it checks urgency on a
+    // handful of rows, not the table. An index on a column that is 1 for a rare minority earns
+    // nothing the existing selectivity does not already provide (contrast D140, whose `supersedes`
+    // lookup ran once per candidate row on the hot path).
+    "ALTER TABLE messages ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// Bring the board up to [`SCHEMA_VERSION`], or explain why it cannot be.
@@ -1716,6 +1731,10 @@ mod tests {
             "PRAGMA user_version = 8;
              DROP INDEX IF EXISTS ix_messages_supersedes;
              ALTER TABLE messages DROP COLUMN supersedes;
+             -- D143's column, dropped here for the same reason `supersedes` is: it was added to a
+             -- table that predates 8, so replaying 8->9 would hit `duplicate column name` without
+             -- this. No index to drop first — D143 deliberately added none.
+             ALTER TABLE messages DROP COLUMN urgent;
              DROP TABLE notes;
              DROP TABLE IF EXISTS note_paths;
              DROP TABLE IF EXISTS note_links;

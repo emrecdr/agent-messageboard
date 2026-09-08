@@ -1456,3 +1456,49 @@ fn a_missing_attachment_errors_and_sends_nothing() {
         "a failed --attach must leave no message behind: {inbox}"
     );
 }
+
+/// `--urgent` is the only mail that interrupts mid-turn; a normal message waits for the turn
+/// boundary (D143). Driven through the real binary, so the flag must parse, store, and gate the
+/// `PostToolUse` injection — not just the library query.
+#[test]
+fn only_urgent_mail_interrupts_mid_turn() {
+    let b = Board::new();
+    b.run("uuid-alice", &["register", "--name", "alice"]);
+    b.run("uuid-bob", &["register", "--name", "bob"]);
+    b.run(
+        "uuid-alice",
+        &["send", "bob", "--subject", "normal-news", "--body", "later"],
+    );
+    b.run(
+        "uuid-alice",
+        &[
+            "send",
+            "bob",
+            "--subject",
+            "urgent-stop",
+            "--body",
+            "now",
+            "--urgent",
+        ],
+    );
+
+    // bob's mid-turn PostToolUse hook injects only the urgent subject.
+    let post = r#"{"hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"/x.rs"}}"#;
+    let (code, mid) = b.hook("uuid-bob", "turn", post);
+    assert_eq!(code, 0, "a hook must always succeed (D9)");
+    assert!(
+        mid.contains("urgent-stop"),
+        "urgent mail must reach the mid-turn lane: {mid}"
+    );
+    assert!(
+        !mid.contains("normal-news"),
+        "a normal message must not interrupt the agent mid-turn: {mid}"
+    );
+
+    // Nothing was lost — the normal message is waiting on the explicit inbox, only deferred.
+    assert_eq!(
+        unread(&b, "uuid-bob"),
+        2,
+        "the normal message is still there, not dropped"
+    );
+}

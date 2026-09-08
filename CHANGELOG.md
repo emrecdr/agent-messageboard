@@ -32,6 +32,19 @@ and why the on-disk schema is deliberately not one of them.
 
 ### Added
 
+- **`--urgent` on `send` and `reply` — only urgent mail interrupts mid-turn** (D143). Schema 17.
+
+  Default off. A normal message is no longer delivered on `PostToolUse` (mid-task); it waits for the
+  `Stop` sweep, so it never interrupts the agent's visible process. Urgent mail still lands mid-turn,
+  as D25 intended — this amends D25 so the common case stops paying for the rare one. Nothing is
+  lost, only deferred: `amb inbox` and the `Stop` delivery show every message they always did.
+
+  Grounded in Apple's notification interruption levels (the default is non-interrupting;
+  time-sensitive is the sparing opt-in) and notification-batching practice (exclude high-priority,
+  defer the rest). `messages.urgent INTEGER DEFAULT 0` — the honest value, since every existing
+  message is non-urgent by definition. The rollout is machine-wide (D141): reinstall after the
+  migration lands.
+
 - **`--attach <path>` on `send` and `reply` — cite a file by a verifiable hash** (D142). Repeatable.
 
   Appends the path, exact size, and a **sha256** to the body; the file's bytes never touch the

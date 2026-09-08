@@ -8168,3 +8168,93 @@ docstring says in as many words that it is not.
   reader verifies with a tool they already have.
 - **A human-rounded size.** Exact bytes: a provenance record is precise, and `wc -c` is the check.
 - **A `hex` crate.** One dependency for `{:02x}` in a loop is the unused-surface the gate refuses.
+
+---
+
+## D143 · A message carries an urgency, and only urgent mail interrupts mid-turn
+
+**Decided 2026-09-08.** `amb send --urgent` (and `reply --urgent`) marks a message urgent; default
+off. The `PostToolUse` lane (`messages::undelivered`) now delivers **only** urgent mail, so a normal
+message no longer interrupts the agent mid-task — it waits for the `Stop` sweep (`deliverable`),
+which is unchanged and delivers everything. Schema 17 adds `messages.urgent`. This **amends D25**:
+mid-turn delivery was universal; it is now the urgency exception.
+
+### The complaint, and the shape the research gives it
+
+Raised by the user: amb's mid-turn output *"appears in the middle of a request output and messes up
+the response … agents should process when they are idle."* The `[amb]` delivery notice fires on
+`PostToolUse` — after every tool call — so a busy board injects into the visible process
+continuously. The notification literature names this exactly: *"a system that fires one alert per
+event turns useful information into a strobe."*
+
+The design is not invented; it is the settled shape of this problem in two references:
+
+- **Apple's `UNNotificationInterruptionLevel`.** The default is non-interrupting (`passive`/`active`);
+  `timeSensitive` is the opt-in that breaks through, and Apple warns it must be used *sparingly* "to
+  avoid user frustration and potential revocation of privileges." So the default is **not** to
+  interrupt, and interrupting is the rare exception — which is why `urgent` defaults to `false` and
+  the CLI help calls it time-critical-only.
+- **Notification batching.** The prescription is: exclude high-priority sources from the batch, and
+  defer the rest to a sensible delivery moment. amb's "sensible moment" is the turn boundary
+  (`Stop`), and "high-priority" is `--urgent`.
+
+Two levels are enough (`urgent` / not); amb needs no `critical` tier (there is no DND to bypass) and
+no `passive`/`active` split (both mean "defer" here). Binary, not a scale — YAGNI, and the same
+argument D131 made for its own bucket boundary.
+
+### Why a stored field, and why it amends rather than reverses D25
+
+Urgency is **orthogonal to `kind`** (D107) — a question can be urgent or not — so it cannot ride on
+that charset, and it must be queryable by the delivery filter, so it is a column, not a convention.
+`select` gains a `urgent_only` gate used by `undelivered` alone; `inbox`, `deliverable` and the F6
+filters are byte-identical to before, the property that lets the delivery paths share one query.
+
+D25 chose `PostToolUse` so *urgent* mail could reach a session mid-task; that value is **preserved**,
+not reversed — urgent mail still lands mid-turn. What changed is that the common case stopped paying
+for the rare one. Nothing is lost, only deferred: the `Stop` sweep delivers every message it always
+did.
+
+### The honest limit, stated because the user asked for the other thing
+
+The user's first instinct was *"process the message mid-turn but postpone the user-facing output."*
+That cannot be done, and the decision record should say why rather than quietly not doing it:
+**amb's only channel to a session is the model's context.** Injecting a message makes the agent see
+it and the transcript show it in the *same* event — there is no lever to feed the agent while hiding
+it from the user. So the achievable form is cadence, not display-splitting: non-urgent mail is
+withheld from the mid-turn lane entirely, which is silence rather than a hidden message.
+
+### Schema 17 is the cost, and the replay helper is the trap D140 already sprung
+
+The migration is `ALTER TABLE messages ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0`. `DEFAULT 0` is
+the honest value, not D95's backfilled guess: every existing message is non-urgent *by definition*,
+so the stamp states what was already true. No index — the mid-turn filter adds `AND urgent = 1` to a
+query already bounded by the unread, offer and addressing predicates, so it checks a handful of rows
+(contrast D140, whose `supersedes` lookup ran per candidate row on the hot path).
+
+**`stage_schema_8` had to learn the column too.** That test helper rewinds a board to the schema-8
+shape and drops "every table added after 8"; D140 found that rule silently incomplete for a *column*
+added to a table that predates 8, failing with `duplicate column name`. `urgent` is the second such
+column, so its `DROP COLUMN` is added there — no index to drop first, because there is none.
+
+The rollout is machine-wide (D141): the migration lands when `install.sh` runs, and every installed
+copy at schema 16 refuses the board until reinstalled. Peers were told before the commit and are
+told again before the install. The D141 dirty-migration guard keeps a dev build from migrating the
+real board early; tests use scratch boards.
+
+### What was rejected
+
+- **A multi-level urgency scale.** Apple has four levels; amb needs two. A scale is precision with no
+  consumer here (D82's argument).
+- **Urgency via `kind`.** Orthogonal (D107); a message is both a kind and an urgency, and one field
+  cannot carry both without the conflation D17 exists to prevent.
+- **A no-schema client convention** (a `[URGENT]` subject prefix the delivery path greps for). It
+  fights the schema D17 calls the central design, and puts sender-controlled text on the delivery
+  predicate. A column is the honest representation.
+- **A terse one-line mid-turn ping for urgent mail, deferred rather than refused.** Urgent mail
+  currently renders mid-turn in the normal capped form (D24/D137). A single-line "⚠ urgent — amb
+  inbox" with the detail at `Stop` would shrink the rare urgent footprint further; it is a rendering
+  refinement on top of the cadence gate, and the gate is the load-bearing change. Named here so the
+  next reader finds it where they would look.
+- **Making idle-only the default with no urgency field at all** (the user's simpler first option).
+  Rejected by the user in favour of this: an urgent message must still be able to interrupt, or a
+  peer's "stop, you are about to break the file I hold" arrives too late to matter.
