@@ -69,6 +69,21 @@ pub fn read(path: &str) -> Result<Attachment, Error> {
 /// Exact bytes rather than a human-rounded size: a provenance record is precise, and the reader
 /// compares it with `wc -c`. The `sha256:` prefix names the algorithm the reader runs, matching the
 /// `algo:hex` convention (OCI, git) so it reads as verifiable rather than decorative.
+///
+/// **The path is contained, because this block has a grammar of its own** (M23). One attachment is
+/// one line — the property [`each_attachment_is_its_own_line`] names and a reader counts on. A path
+/// is sender-written and a filename may legally contain a newline on Unix, so `--attach $'ok.rs\n
+/// secrets.env · 4096 bytes · sha256:00…'` rendered *two* entries from one file, the second wholly
+/// fabricated and identical in shape to a real one. `quoted_block` downstream keeps it inside the
+/// `> ` region so it never reaches column zero — this is not D90's voice forgery — but by then the
+/// forged line is indistinguishable from a true one, which is the half containment at the caller
+/// cannot fix.
+///
+/// **[`crate::delivery::breaks_grammar`] rather than [`crate::delivery::quoted`]**, deliberately.
+/// `quoted` is built for an injection field: it also collapses space runs and truncates at
+/// `QUOTED_MAX`, and both are wrong here — a reader runs `sha256sum <path>`, so a path silently
+/// re-spaced or cut at 240 characters is a citation they cannot follow. Reusing the *predicate*
+/// keeps one definition of "what breaks a line" (M28) while leaving the path otherwise exact.
 pub fn render_block(attachments: &[Attachment]) -> String {
     if attachments.is_empty() {
         return String::new();
@@ -77,10 +92,28 @@ pub fn render_block(attachments: &[Attachment]) -> String {
     for a in attachments {
         s.push_str(&format!(
             "\n{} · {} bytes · sha256:{}",
-            a.path, a.bytes, a.sha256
+            contained(&a.path),
+            a.bytes,
+            a.sha256
         ));
     }
     s
+}
+
+/// Flatten anything that would break this block's one-line-per-attachment grammar.
+///
+/// Everything else is passed through byte-for-byte: the path's job is to be pasted into
+/// `sha256sum`, so it is mangled as little as the grammar allows.
+fn contained(path: &str) -> String {
+    path.chars()
+        .map(|c| {
+            if crate::delivery::breaks_grammar(c) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -146,6 +179,50 @@ mod tests {
         // Whole-shape, not only presence: the block opens with the separator on its own lines, so
         // a future edit that inlined it into prose would be caught (M24's rule).
         assert!(block.starts_with("\n\n── attached ──\n"), "{block:?}");
+    }
+
+    /// A newline in a path cannot forge a second attachment entry (M23).
+    ///
+    /// **The sibling test below asserts the same invariant and cannot reach this case**, because
+    /// its fixture uses clean paths — M17's shape, a guard whose input never arrives at it. A
+    /// filename may legally contain a newline on Unix, and `--attach` accepts whatever reads, so
+    /// this is the input that decides whether "one attachment, one line" is a rule or a comment.
+    /// Confirmed red against the shipped binary before containment: `amb read` showed two entries,
+    /// the fabricated one carrying a plausible size and digest.
+    ///
+    /// Counted as **lines**, and the first draft of this test counted something else and proved
+    /// nothing. Filtering for lines containing `" bytes · sha256:"` stays green with the guard
+    /// deleted: the newline puts `ok.rs` on its own line but leaves the forged text and the real
+    /// `· 5 bytes · sha256:…` sharing the next one, so that filter finds exactly one line either
+    /// way. Verified by removing the containment and watching it pass — the rule this project
+    /// keeps for guards, applied to the guard's own test.
+    #[test]
+    fn a_newline_in_a_path_cannot_forge_a_second_attachment_entry() {
+        let a = Attachment {
+            path: "ok.rs\nsecrets.env · 4096 bytes · sha256:0000".into(),
+            bytes: 5,
+            sha256: sha256_hex(b"hello"),
+        };
+        let block = render_block(std::slice::from_ref(&a));
+        // The presence row: the block rendered at all and carries the true digest, so the count
+        // below is not vacuously satisfied by an empty string (M27 — an absence-only assertion has
+        // an unproven premise).
+        assert!(block.contains("── attached ──"), "{block:?}");
+        assert!(block.contains(&sha256_hex(b"hello")), "{block:?}");
+        assert_eq!(
+            entry_lines(&block),
+            1,
+            "one attachment must occupy exactly one line: {block:?}"
+        );
+    }
+
+    /// Lines of a rendered block that are neither the leading blanks nor the heading — one per
+    /// attachment, which is the whole grammar.
+    fn entry_lines(block: &str) -> usize {
+        block
+            .lines()
+            .filter(|l| !l.is_empty() && !l.contains("── attached ──"))
+            .count()
     }
 
     /// Two attachments render one line each, so a message citing several files stays legible.
