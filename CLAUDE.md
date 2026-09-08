@@ -192,6 +192,11 @@ destroy it; `a_project_broadcast_reaches_an_agent_that_registered_afterwards` gu
 lapses the departing session's claims, D109). `Stop` rather than
 `UserPromptSubmit` because the latter blocks the user's turn on a 30 s timeout.
 
+**`PostToolUse` delivers only `--urgent` mail since D143; normal mail waits for `Stop`** so it
+never interrupts a session mid-task — `messages::undelivered` is urgent-only, `deliverable` is the
+full `Stop` sweep. This amends D25's universal mid-turn delivery: urgent still arrives within a
+tool call, the default is quiet-until-idle.
+
 Two hard requirements on `hook_main` in `src/main.rs`:
 
 1. **It always exits 0**, whatever happens — a corrupt board, no identity, hostile stdin. Mail

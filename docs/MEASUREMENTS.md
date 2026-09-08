@@ -1021,7 +1021,7 @@ was a rule with no test touching it at all.
 | `Message::is_broadcast` / `is_global` | 5 | which of the four addressing modes `--json` reports |
 | `watch` | 3 | the blocking-read lane the `SessionStart` banner tells every agent to use |
 | `nearest`'s tie guard | 2 | D26: a clear winner among close candidates is still suggested |
-| `undelivered` | 1 | D25: mid-turn delivery |
+| `undelivered` | 1 | D25 mid-turn delivery, urgent-only since D143 |
 | `distance`'s first column | 1 | the edit metric `nearest` thresholds on |
 
 ### Every one is a silence

@@ -662,6 +662,8 @@ between commits, and scripts that scrape it get what they asked for.
 | `amb doctor` | What is wrong with this installation, especially what fails silently |
 | `amb status` | What the board is *doing*: offers versus injections, what died unread, declared versus observed claims. Takes no arguments — every filter it could grow computes a number over a narrower population than the sentence beside it (D123) |
 | `amb send ... --supersedes <id>` | Retract an earlier message **of your own**: it stops being auto-injected, `amb inbox` still lists it, and reading it says what withdrew it. Also on `amb reply`. Withheld, never erased — D98 refuses to alter stored content (D140) |
+| `amb send ... --attach <path>` | Cite a file by a verifiable reference instead of pasting it: appends its path, exact size, and a **sha256** the reader checks with `sha256sum`. The bytes never touch the board, so a stale citation is detectable. Repeatable; also on `amb reply` (D142) |
+| `amb send ... --urgent` | Deliver **mid-turn**, interrupting the recipient's current work. **Default off** — a normal message waits for the recipient's idle moment (the turn boundary) so it never breaks their visible process; only urgent mail interrupts. Also on `amb reply` (D143) |
 | `amb sent` | What happened to the mail **you** sent: handed over by a hook, fetched by the recipient, or never delivered at all. Direct mail gets a rate; a broadcast gets reach and no rate, because `@project` is a place rather than a subscriber list (D139) |
 | `amb claim <path> [--intent I] [--ttl T]` | Advisory claim; reports conflicts, never blocks |
 | `amb release <path>` | Drop a claim you hold |
@@ -711,13 +713,16 @@ Whether it earns anything more than this is the open question D61 exists to answ
 | `--mode` | Hooks installed | Latency | Use when |
 |---|---|---|---|
 | `session` | `SessionStart` | mail at startup only | You want the lightest possible touch |
-| `turn` | `+ Stop`, `PostToolUse`, `SessionEnd` | **next tool call** — mid-turn | **Default.** Almost always right. `SessionEnd` lapses the session's claims on exit (D109) |
+| `turn` | `+ Stop`, `PostToolUse`, `SessionEnd` | **urgent** mail next tool call; the rest at turn boundary | **Default.** Almost always right. `SessionEnd` lapses the session's claims on exit (D109) |
 | `monitor` | `+ blocking amb watch` | seconds | Sessions genuinely coordinate in real time |
 
-**`turn` mode delivers mid-turn, not only at turn boundaries.** `PostToolUse` fires after every
-tool call, and its output reaches the reading session's context — verified first-hand rather than
-taken from documentation ([`docs/DECISIONS.md`](docs/DECISIONS.md) D25). So a working session
-usually sees mail within one tool call, and `Stop` is the floor for a session that is only talking.
+**`turn` mode can deliver mid-turn, but only urgent mail does** (D143). `PostToolUse` fires after
+every tool call and its output reaches the reading session's context — verified first-hand rather
+than taken from documentation ([`docs/DECISIONS.md`](docs/DECISIONS.md) D25). Since D143 that lane
+carries only mail the sender marked `--urgent`, so a normal message never interrupts a session's
+work: it waits for `Stop`, the turn boundary, which is the floor for every message. Urgent mail
+still arrives within one tool call. The default is quiet — reserve `--urgent` for genuinely
+time-critical mail, the way a phone reserves its interrupting alert level.
 
 **Every mode above delivers the same set**, and a broadcast leaves that set 24 hours after it was
 sent (D96). Mode changes *when* mail arrives, never *what is eligible*. So a session started three

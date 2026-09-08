@@ -82,7 +82,13 @@ CREATE TABLE messages (
   kind       TEXT    NOT NULL,      -- a lowercase tag: note | question | proposal | ... (D107)
   subject    TEXT    NOT NULL,
   body       TEXT    NOT NULL,
-  thread_id  TEXT
+  thread_id  TEXT,
+  supersedes INTEGER REFERENCES messages(id),  -- an earlier message of the sender's own that this
+                                               -- one retracts; withheld from delivery, never
+                                               -- erased (D140). Schema 16.
+  urgent     INTEGER NOT NULL DEFAULT 0        -- 1 = interrupt mid-turn; 0 (the default) waits for
+                                               -- `Stop`, so a normal message never breaks a
+                                               -- session's work (D143). Schema 17.
   -- `attempts` and `failed_at` used to live here and were dropped in schema version 2. A message
   -- is offered *per recipient*, so counting per message would silence a broadcast for everyone
   -- because one agent ignored it (D23). The counter is in `reads`.
@@ -130,11 +136,17 @@ three code paths:
 SELECT m.* FROM messages m
 WHERE m.to_proj = :me_proj
   AND (m.to_agent = :me OR m.to_agent IS NULL)
-  AND m.failed_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM reads r
                   WHERE r.msg_id = m.id AND r.agent = :me AND r.read_at IS NOT NULL)
 ORDER BY m.id;
 ```
+
+This is the shape, not the current text: the real `select` in `src/messages.rs` has grown clauses
+since — the per-recipient back-off (D23, over `reads.attempts`), the broadcast horizon (D96), the
+retraction filter (D140), and the mid-turn **urgent** gate that makes `PostToolUse` deliver only
+urgent mail while `Stop` delivers everything (D143). All four addressing modes stay this one
+predicate; the delivery paths add conditions on top of it. (The old `failed_at IS NULL` here was a
+column dropped in schema 2 — D23 moved the counter into `reads`.)
 
 ---
 
@@ -199,7 +211,7 @@ Hooks trigger the read; the agent never has to remember (D9). Installed once per
 | `session` | `SessionStart` | unread at session start |
 | `turn` | `Stop` | new mail at each turn boundary |
 | `monitor` | `SessionStart` → `amb watch` under the agent's Monitor tool | blocking read, seconds |
-| *(all but `session`)* | `PostToolUse` | **mid-turn, per tool call** (D25) |
+| *(all but `session`)* | `PostToolUse` | **urgent mail mid-turn; the rest at `Stop`** (D25, gated by D143) |
 | *(all but `session`)* | `SessionEnd` | lapses the departing session's claims (D109) |
 
 `turn` and `monitor` also install `PostToolUse` and `SessionEnd` hooks — the second lapses the
@@ -207,9 +219,11 @@ departing session's live claims instead of running out their TTL, best-effort, w
 as the crash backstop (D109). `PostToolUse` does two jobs: it records the exact
 file of every `Edit`/`Write`, which is what makes claims **observed** rather than declared (D14),
 and — since its `additionalContext` *is* injected into the model's context, verified 2026-08-27 —
-it delivers mid-turn (D25). Both halves are restricted to new facts so the hook does not repeat
-itself after every tool call: mail that has never been offered, and a conflict only on an edit
-that took a claim rather than renewing one.
+it delivers mid-turn (D25). **Since D143 the mid-turn lane carries only `--urgent` mail**; a normal
+message waits for `Stop` so it never interrupts a session's work, and nothing is lost because
+`Stop` delivers everything. Both halves are restricted to new facts so the hook does not repeat
+itself after every tool call: urgent mail that has never been offered, and a conflict only on an
+edit that took a claim rather than renewing one.
 | `off` | — | nothing; `amb inbox` only |
 
 **`Stop`, not `UserPromptSubmit`** — the latter blocks the user's turn on a 30 s timeout, so a
@@ -236,9 +250,10 @@ you cannot re-read is not a log (D23).
 
 ```
 amb send    <to> --subject S (--body B | --body-file F|-) [--kind K] [--thread T] [--id EXT]
-amb inbox   [--unread] [--json]
+                 [--supersedes ID] [--attach PATH]… [--urgent]   # D140 retract, D142 cite, D143 urgent
+amb inbox   [--unread] [--from A] [--kind K] [--limit N] [WORDS…] [--json]   # filters, D133/D137
 amb read    <msg-id>... | --all          # the only thing that marks a message read
-amb reply   <msg-id> --body B
+amb reply   <msg-id> (--body B | --body-file F|-) [--supersedes ID] [--attach PATH]… [--urgent]
 amb watch   [--timeout S] [--poll MS]    # blocking read, for monitor mode
 amb agents  [--project P] [--live]       # the roster
 amb register [--name N]                  # optional; every command auto-registers
