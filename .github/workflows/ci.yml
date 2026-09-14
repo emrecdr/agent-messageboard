@@ -60,7 +60,7 @@ jobs:
       # the development machine, which has no rustup default. Naming a version here would let CI
       # and local builds drift, which is the thing the pin exists to prevent.
       # Caching (Swatinem/rust-cache) is on by default.
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
 
       # `--locked` mirrors the gate (D70): a resolve that disagrees with Cargo.lock fails
       # rather than silently updating it — the lockfile is the exposure bound against a
